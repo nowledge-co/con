@@ -110,25 +110,45 @@ GPUI's DirectComposition tree (called out in the 2026-04-26 PM); this
 fix is the right tactical bridge inside the existing staging-ring
 architecture and will be retired together with that swap-chain work.
 
-The original "no slideshow during burst" intent (`ls`, `dir`, `clear`)
-is largely preserved because such bursts are short — at most one or
-two intermediate frames are presented before the burst ends and the
-quiet-VT path returns the freshest frame as before.
+## How the fallback composes with `host_view`'s burst arming
+
+Every input event in `host_view.rs` arms `low_latency_burst_until` for
+`LOW_LATENCY_BURST_WINDOW = 750 ms`. While that window is active,
+`burst_low_latency_active()` returns true, so `prefer_latest` is true,
+so the fallback's `!prefer_latest` gate keeps it suppressed — the
+`block_drain` fast path owns the entire post-input window.
+
+The fallback only takes over once 750 ms have elapsed since the last
+input. That is exactly the regime issue #114 covered: codex / top /
+watch streaming with no further user activity. The two systems split
+the timeline cleanly, with no overlap and no shared state to
+synchronise.
 
 macOS and Linux are unaffected: this code is gated by
 `#[cfg(target_os = "windows")]` and the macOS path uses the embedded
-libghostty NSView with its own Metal compositor.
+libghostty NSView with its own Metal compositor. Linux's preview
+renderer paints rows directly through GPUI `StyledText` and has no
+staging ring, so the freeze condition cannot arise there in the
+current architecture.
 
 ## What we learned
 
-- Mailbox semantics need a forward-progress invariant. "Skip draining
-  an older slot when a fresher one exists" only terminates if the
-  fresher slot eventually drains; under a busy producer it never does.
-- For interactive UIs, presenting a one-frame-old image is strictly
-  better than freezing on the assumption that "the next frame will be
-  fresher." Falling back to drain-on-submit gives us that floor without
-  giving up the newest-wins preference for quiet-VT cases.
-- Bug reports framed as "needs a click to refresh" almost always point
-  at a redraw scheduler that's gated on input events; on Windows here
-  the gate was the `prefer_latest` block_drain path, not the
-  `cx.notify()` plumbing.
+- The original mailbox conflated two distinct concerns under one
+  rule: "newest-wins" (correct) and "wait for the next prepaint to
+  drain" (broken under continuous load). Decoupling presentation
+  *rate* from VT update *rate* separates them cleanly — one rule,
+  capped at the GPUI/vsync ceiling, covers both bursts and
+  streaming.
+- Mailbox semantics need a forward-progress invariant. "Skip
+  draining an older slot when a fresher one exists" only terminates
+  if the fresher slot eventually drains; under a busy producer it
+  never does. The cap-paced fallback is what guarantees forward
+  progress without sacrificing newest-wins for quiet-VT cases.
+- The most expensive thing in this pipeline is the full-frame
+  CPU↔GPU↔GPUI handoff, not the GPU draw. The cap exists because
+  presenting faster than vsync would do that handoff for a frame
+  the compositor will never paint.
+- Bug reports framed as "needs a click to refresh" almost always
+  point at a redraw scheduler gated on input events; on Windows
+  here the gate was the `prefer_latest` `block_drain` path, not
+  the `cx.notify()` plumbing.

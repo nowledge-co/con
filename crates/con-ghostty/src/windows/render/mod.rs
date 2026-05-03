@@ -352,27 +352,72 @@ impl Renderer {
         Ok(())
     }
 
-    /// Render one frame and return a BGRA byte buffer sized to the
-    /// current render target.
+    /// Render one frame and return BGRA bytes (full or row-patched)
+    /// for the caller to publish through GPUI.
     ///
-    /// `prefer_latest` is set by the view/session for user-driven
-    /// interactions (typing, paste, mouse actions). In that mode we
-    /// prefer the freshly submitted slot over any older already-drained
-    /// frame so the caller paints the newest state now, but only while
-    /// the staging ring is otherwise clear. Once the GPU is already
-    /// behind (for example after a fullscreen resize), unread staging
-    /// slots are treated as disposable and we stay non-blocking.
+    /// # State machine
     ///
-    /// Non-interactive work like resize/fullscreen keeps the old
-    /// non-blocking behavior: if the ring has nothing older to drain,
-    /// we return `Pending` and let the next prepaint pick up the fresh
-    /// slot once the GPU copy has finished.
+    /// Inputs read each call:
+    /// * `snapshot.generation`, `selection`, viewport geometry —
+    ///   combined into a fingerprint that decides `needs_draw`.
+    /// * Staging ring's `oldest_in_flight()` — the GPU copy queued by
+    ///   a prior call that may now have completed.
+    /// * `prefer_latest` — set by `host_view` when the user is
+    ///   actively waiting on a specific frame (mouse / key / paste /
+    ///   `low_latency_generation_target`).
     ///
-    /// The ring behaves like a mailbox, not a must-deliver queue:
-    /// unread readback slots are only cached copies of older terminal
-    /// frames, and the VT snapshot remains the source of truth. When we
-    /// run out of clean slots we reclaim the oldest unread one instead
-    /// of blocking the UI thread to preserve stale pixels.
+    /// Outputs:
+    /// * `Rendered(frame)` — fresh BGRA bytes; caller publishes.
+    ///   Stamps `last_presented_at` so `presentation_due` reflects the
+    ///   actual on-screen update cadence.
+    /// * `Pending` — GPU work was submitted (or is still in flight)
+    ///   but no frame is presentable on this call. Caller must
+    ///   schedule another prepaint (`cx.notify()`).
+    /// * `Unchanged` — nothing to draw and nothing in flight; caller
+    ///   keeps the previous image.
+    ///
+    /// Decisions, in priority order:
+    ///
+    /// 1. **User-driven fast path.** When `prefer_latest && needs_draw`
+    ///    and `can_block_for_latest` is satisfied, `block_drain` waits
+    ///    for the freshly submitted slot and returns `Rendered` with
+    ///    the freshest possible bytes. This is what makes key echo,
+    ///    paste, and `low_latency_generation_target` deterministic.
+    ///
+    /// 2. **Continuous-output fallback.** When `needs_draw` is true
+    ///    but the user is not waiting on a target, present the prior
+    ///    submit's already-completed readback (gated on
+    ///    `presentation_due`). Without this, TUIs that never let the
+    ///    VT quiesce (codex spinner, watch, top, btop) leave
+    ///    `needs_draw=true` on every prepaint, the just-submitted
+    ///    copy never gets a chance to drain, and the on-screen image
+    ///    freezes until a click flips `prefer_latest=true` (issue
+    ///    #114). Capping the fallback at `MIN_FALLBACK_PRESENT_INTERVAL`
+    ///    preserves the established mailbox snap-to-final behavior
+    ///    for short bursts (`ls`, `dir`, `clear`) — they finish under
+    ///    one cap interval, so the fallback never fires for them.
+    ///
+    /// 3. **Quiet-VT catch-up.** When `!needs_draw` and a prior
+    ///    submit's readback is ready, present it. This is the path
+    ///    that lands the final frame after a burst.
+    ///
+    /// 4. **Pure pending.** When something is still in flight and
+    ///    nothing else is presentable, return `Pending` so the caller
+    ///    schedules another prepaint.
+    ///
+    /// 5. **Idle.** Nothing to do.
+    ///
+    /// # Mailbox semantics
+    ///
+    /// The ring is a mailbox at the *submit* level: when both slots
+    /// are in flight, a fresh submit reuses the oldest, evicting its
+    /// pending readback. The drain side prefers the oldest in-flight
+    /// slot because it is the most likely to be GPU-ready (it has
+    /// had the longest time to complete). The discard step that
+    /// drops the oldest in-flight readback before draining only runs
+    /// when `!needs_draw`; under continuous output the oldest slot
+    /// is the only ready one, and discarding it would force the
+    /// drain onto the in-flight newer slot and re-create the freeze.
     pub fn render(
         &self,
         snapshot: &ScreenSnapshot,
