@@ -49,38 +49,66 @@ including the cursor row.
 
 ## Fix
 
+The elegant move is to **decouple presentation rate from VT update
+rate**, so mailbox-for-bursts and forward-progress-for-streaming fall
+out of one rule rather than two competing modes.
+
 `crates/con-ghostty/src/windows/render/mod.rs::Renderer::render`:
 
-- Always compute `drain_target = ring.oldest_in_flight()` regardless of
-  `needs_draw`. Try-draining the older slot is non-blocking and cheap.
-- After submitting the fresh copy, if `drained` is `Some` *and*
-  `prefer_latest` is false, return `RenderOutcome::Rendered(...)` from
-  that prior readback instead of `Pending`.
+1. Always compute `drain_target = ring.oldest_in_flight()` regardless
+   of `needs_draw`. Try-draining is non-blocking and cheap.
+2. After submitting the fresh copy, if `drained` is `Some` AND
+   `prefer_latest` is false AND `presentation_due()` returns true,
+   return `RenderOutcome::Rendered(...)` from that prior readback
+   instead of `Pending`.
+3. Every `Rendered` exit point stamps `last_presented_at = Some(now)`.
+   `presentation_due()` is gated on `MIN_FALLBACK_PRESENT_INTERVAL`
+   (one 60 Hz vsync = 16 ms).
 
-Two important guards keep the original behavior intact in cases the
-naive ungate would break:
+Three guards keep the established perf wins from the 2026-04-26
+postmortem (`windows-command-render-latency.md`) intact:
 
-- `discard_oldest_in_flight()` stays gated on `!needs_draw`. Under
+- **`discard_oldest_in_flight()` stays gated on `!needs_draw`.** Under
   `needs_draw=true` the oldest slot is the most likely to be GPU-
   ready; discarding it would force the drain onto the newer (still
   in-flight) slot. On GPUs where copies take more than one prepaint
   cycle, that loop reproduces the very freeze this fix is meant to
-  remove (cursor / Bugbot review on PR #116).
-- The drained-during-submit shortcut is gated on `!prefer_latest`.
+  remove (Bugbot review on PR #116).
+- **The drained-during-submit shortcut is gated on `!prefer_latest`.**
   With `prefer_latest` set, the user is waiting on a specific fresh
-  frame — a mouse/key event, paste echo, or a `low_latency_generation_target`
-  set by `host_view` — and the `block_drain` branch above already
-  tried to deliver it. Returning a stale readback would prematurely
-  satisfy `host_view`'s "non-Pending → clear target" rule and drop
-  the generation target before the user-targeted frame is ever
-  presented (CodeRabbit review on PR #116).
+  frame — a mouse/key event, paste echo, or a
+  `low_latency_generation_target` set by `host_view` — and the
+  `block_drain` branch above already tried to deliver it. Returning a
+  stale readback would prematurely satisfy `host_view`'s "non-Pending
+  → clear target" rule and drop the generation target before the
+  user-targeted frame is ever presented (CodeRabbit review on PR
+  #116).
+- **The shortcut is gated on `presentation_due()`.** Short bursts
+  (`ls`, `dir`, `clear`) finish under one cap interval, so the
+  fallback never fires for them and the established mailbox snap-to-
+  final behavior is preserved exactly. Sustained TUIs hit the cap
+  and update at 60 Hz, which is the GPUI/vsync ceiling — presenting
+  faster is wasted work because GPUI only paints once per refresh,
+  and each present pays a full-frame Map + memcpy +
+  `bgra_frame_to_image` + sprite-atlas upload.
 
-Effect: with continuous output the screen now lags the live VT by at
-most one frame per prepaint instead of freezing indefinitely. The
-just-submitted copy is still in flight and will be picked up by the
-next prepaint, so the pipeline depth is unchanged. User-driven
-interactive frames keep their fast-path through `block_drain` and
-their generation-target handshake intact.
+Effect:
+
+- Continuous-output TUIs (codex, top, watch, btop): screen updates
+  at 60 Hz with bounded image-handoff cost — no freeze, no churn
+  beyond what GPUI would composite anyway.
+- Burst commands (`ls`, `dir`, `clear`): unchanged from the
+  04-26 mailbox tuning — snap-to-final, no slideshow.
+- User-driven echo / paste / click: unchanged — `block_drain`
+  fast path still wins and generation-target handshake stays
+  honest.
+- Resize drag: capped at 60 Hz feedback (was unbounded before the
+  cap), reducing image churn during interactive resize.
+
+The wider long-term answer remains direct swap-chain composition into
+GPUI's DirectComposition tree (called out in the 2026-04-26 PM); this
+fix is the right tactical bridge inside the existing staging-ring
+architecture and will be retired together with that swap-chain work.
 
 The original "no slideshow during burst" intent (`ls`, `dir`, `clear`)
 is largely preserved because such bursts are short — at most one or

@@ -28,7 +28,7 @@ mod font_loader;
 mod pipeline;
 
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use windows::Win32::Graphics::Direct3D::{
@@ -125,10 +125,30 @@ pub struct Renderer {
     /// show before the shell has printed anything.
     last_generation: Mutex<u64>,
     selection: Mutex<Option<Selection>>,
+    /// Wall-clock time of the last `Rendered` outcome. Drives the
+    /// `MIN_FALLBACK_PRESENT_INTERVAL` cap that decouples presentation
+    /// rate from the VT update rate, so continuous-output TUIs (issue
+    /// #114) don't churn one full-frame image-handoff per prepaint.
+    /// `None` until the first frame is presented.
+    last_presented_at: Mutex<Option<Instant>>,
 
     width_px: u32,
     height_px: u32,
 }
+
+/// Minimum wall-clock spacing between two `Rendered` outcomes from the
+/// continuous-output fallback path. Set to one 60 Hz vsync interval —
+/// presenting faster than this is wasted work because GPUI only paints
+/// once per refresh, and each present pays a full-frame Map + memcpy
+/// + `bgra_frame_to_image` + sprite-atlas upload.
+///
+/// Short bursts (`ls`, `dir`, `clear`) finish well under one interval,
+/// so the fallback never fires for them and the established mailbox
+/// "snap to final" behavior is preserved exactly. Sustained TUIs
+/// (codex, watch, top) hit the cap and update at 60 Hz instead of
+/// freezing. User-driven paths (mouse / key / paste / generation
+/// target) bypass the cap via the `block_drain` branch.
+const MIN_FALLBACK_PRESENT_INTERVAL: Duration = Duration::from_millis(16);
 
 /// Freshly rendered BGRA patch. Coordinates and sizes are physical pixels.
 pub struct FramePatchBgra {
@@ -246,6 +266,7 @@ impl Renderer {
             has_full_frame: Mutex::new(false),
             last_generation: Mutex::new(u64::MAX),
             selection: Mutex::new(None),
+            last_presented_at: Mutex::new(None),
             width_px: width,
             height_px: height,
         })
@@ -500,6 +521,7 @@ impl Renderer {
             }
         {
             let outcome = RenderOutcome::Rendered(frame);
+            self.mark_presented();
             log_render_profile(
                 prof_started,
                 snapshot,
@@ -522,26 +544,43 @@ impl Renderer {
 
         if needs_draw {
             // Continuous-output fallback: if a prior submit's readback
-            // is ready right now, present it instead of stalling on
-            // `Pending`. Without this, TUIs that never let the VT
-            // quiesce (codex, watch, top) leave `needs_draw=true` on
-            // every prepaint, the just-submitted copy never gets a
-            // chance to drain, and the on-screen image freezes until
-            // a click flips `prefer_latest=true` (issue #114). The
-            // freshly submitted frame is still in flight and will be
-            // picked up by the next prepaint, so we lag the VT by at
-            // most one frame instead of indefinitely.
+            // is ready right now AND we haven't presented within the
+            // last `MIN_FALLBACK_PRESENT_INTERVAL`, present it instead
+            // of stalling on `Pending`. Without this, TUIs that never
+            // let the VT quiesce (codex, watch, top) leave
+            // `needs_draw=true` on every prepaint, the just-submitted
+            // copy never gets a chance to drain, and the on-screen
+            // image freezes until a click flips `prefer_latest=true`
+            // (issue #114). The freshly submitted frame is still in
+            // flight and will be picked up by the next prepaint, so
+            // we lag the VT by at most one frame instead of
+            // indefinitely.
             //
-            // Skip this shortcut when `prefer_latest` is set. The
-            // user is waiting on a specific fresh frame (mouse/key
-            // input, paste echo, low-latency generation target), and
-            // the `block_drain` branch above already tried to deliver
-            // it; if it didn't fire (backlog or replaced slot),
-            // returning a stale readback would prematurely satisfy
-            // `host_view`'s low-latency target tracking and clear
-            // the target generation without ever presenting it.
-            if !prefer_latest && let Some(readback) = drained {
+            // Two gates keep this from regressing the perf work in
+            // postmortem 2026-04-26-windows-command-render-latency:
+            //
+            // - `!prefer_latest`: the user is waiting on a specific
+            //   fresh frame (mouse/key input, paste echo, low-latency
+            //   generation target). The `block_drain` branch above
+            //   already tried; if it didn't fire (backlog or replaced
+            //   slot), returning a stale readback would prematurely
+            //   satisfy `host_view`'s low-latency target tracking and
+            //   clear the target generation without ever presenting
+            //   the targeted frame.
+            //
+            // - `presentation_due()`: caps presentation rate to one
+            //   60 Hz vsync. Short bursts (`ls`, `dir`, `clear`)
+            //   finish under one interval, so the fallback never
+            //   fires for them and the established mailbox snap-to-
+            //   final behavior is preserved exactly. Sustained TUIs
+            //   hit the cap and update at 60 Hz with bounded image-
+            //   handoff cost.
+            if !prefer_latest
+                && self.presentation_due()
+                && let Some(readback) = drained
+            {
                 let outcome = RenderOutcome::Rendered(self.frame_from_readback(readback));
+                self.mark_presented();
                 log_render_profile(
                     prof_started,
                     snapshot,
@@ -588,6 +627,7 @@ impl Renderer {
 
         if let Some(readback) = drained {
             let outcome = RenderOutcome::Rendered(self.frame_from_readback(readback));
+            self.mark_presented();
             log_render_profile(
                 prof_started,
                 snapshot,
@@ -693,6 +733,33 @@ impl Renderer {
         } else {
             regions
         }
+    }
+
+    /// Returns true when the continuous-output fallback in `render`
+    /// is allowed to publish a fresh image. Always true on the very
+    /// first frame (no prior present) and otherwise gated on
+    /// `MIN_FALLBACK_PRESENT_INTERVAL` since the last `Rendered`
+    /// outcome.
+    fn presentation_due(&self) -> bool {
+        let last = self
+            .last_presented_at
+            .lock()
+            .expect("last_presented_at mutex poisoned in presentation_due()");
+        match *last {
+            None => true,
+            Some(t) => t.elapsed() >= MIN_FALLBACK_PRESENT_INTERVAL,
+        }
+    }
+
+    /// Stamp the wall-clock time of a fresh present. Called from every
+    /// `Rendered` exit point in `render` so `presentation_due` reflects
+    /// the true on-screen update cadence — including user-driven
+    /// `block_drain` presents — rather than just fallback presents.
+    fn mark_presented(&self) {
+        *self
+            .last_presented_at
+            .lock()
+            .expect("last_presented_at mutex poisoned in mark_presented()") = Some(Instant::now());
     }
 
     fn frame_from_readback(&self, mut readback: Readback) -> FrameBgra {
