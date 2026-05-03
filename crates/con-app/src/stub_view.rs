@@ -37,7 +37,6 @@ pub struct GhosttyView {
     app: Arc<GhosttyApp>,
     terminal: Option<Arc<GhosttyTerminal>>,
     focus_handle: FocusHandle,
-    #[allow(dead_code)]
     initial_cwd: Option<String>,
     #[allow(dead_code)]
     initial_font_size: f32,
@@ -77,7 +76,7 @@ impl GhosttyView {
     }
 
     pub fn current_dir(&self) -> Option<String> {
-        None
+        self.initial_cwd.clone()
     }
 
     pub fn is_alive(&self) -> bool {

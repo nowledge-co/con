@@ -346,7 +346,10 @@ impl GhosttyView {
     }
 
     pub fn current_dir(&self) -> Option<String> {
-        self.terminal.as_ref().and_then(|t| t.current_dir())
+        self.terminal
+            .as_ref()
+            .and_then(|t| t.current_dir())
+            .or_else(|| self.initial_cwd.clone())
     }
 
     pub fn is_alive(&self) -> bool {
