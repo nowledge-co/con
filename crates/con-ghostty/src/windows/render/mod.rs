@@ -404,10 +404,13 @@ impl Renderer {
         // `try_drain` is cheap, and presenting one-frame-old pixels is
         // strictly better than freezing.
         //
-        // When more than one slot is still in flight, drop the oldest
-        // first so command bursts present the newest completed frame
-        // instead of replaying intermediate snapshots.
-        if in_flight_before_submit > 1 {
+        // Discarding the oldest in-flight slot stays gated on
+        // `!needs_draw`. Under `needs_draw` the oldest slot is the
+        // most likely to be GPU-ready, and discarding it would force
+        // the drain onto the newer (less likely ready) slot — on
+        // GPUs where copies take more than one prepaint that re-
+        // creates the freeze this fix is meant to remove.
+        if !needs_draw && in_flight_before_submit > 1 {
             ring.discard_oldest_in_flight();
         }
         let drain_target = ring.oldest_in_flight();
@@ -528,7 +531,16 @@ impl Renderer {
             // freshly submitted frame is still in flight and will be
             // picked up by the next prepaint, so we lag the VT by at
             // most one frame instead of indefinitely.
-            if let Some(readback) = drained {
+            //
+            // Skip this shortcut when `prefer_latest` is set. The
+            // user is waiting on a specific fresh frame (mouse/key
+            // input, paste echo, low-latency generation target), and
+            // the `block_drain` branch above already tried to deliver
+            // it; if it didn't fire (backlog or replaced slot),
+            // returning a stale readback would prematurely satisfy
+            // `host_view`'s low-latency target tracking and clear
+            // the target generation without ever presenting it.
+            if !prefer_latest && let Some(readback) = drained {
                 let outcome = RenderOutcome::Rendered(self.frame_from_readback(readback));
                 log_render_profile(
                     prof_started,

@@ -53,14 +53,34 @@ including the cursor row.
 
 - Always compute `drain_target = ring.oldest_in_flight()` regardless of
   `needs_draw`. Try-draining the older slot is non-blocking and cheap.
-- After submitting the fresh copy, if `drained` is `Some`, return
-  `RenderOutcome::Rendered(...)` from that prior readback instead of
-  `Pending`.
+- After submitting the fresh copy, if `drained` is `Some` *and*
+  `prefer_latest` is false, return `RenderOutcome::Rendered(...)` from
+  that prior readback instead of `Pending`.
+
+Two important guards keep the original behavior intact in cases the
+naive ungate would break:
+
+- `discard_oldest_in_flight()` stays gated on `!needs_draw`. Under
+  `needs_draw=true` the oldest slot is the most likely to be GPU-
+  ready; discarding it would force the drain onto the newer (still
+  in-flight) slot. On GPUs where copies take more than one prepaint
+  cycle, that loop reproduces the very freeze this fix is meant to
+  remove (cursor / Bugbot review on PR #116).
+- The drained-during-submit shortcut is gated on `!prefer_latest`.
+  With `prefer_latest` set, the user is waiting on a specific fresh
+  frame — a mouse/key event, paste echo, or a `low_latency_generation_target`
+  set by `host_view` — and the `block_drain` branch above already
+  tried to deliver it. Returning a stale readback would prematurely
+  satisfy `host_view`'s "non-Pending → clear target" rule and drop
+  the generation target before the user-targeted frame is ever
+  presented (CodeRabbit review on PR #116).
 
 Effect: with continuous output the screen now lags the live VT by at
 most one frame per prepaint instead of freezing indefinitely. The
 just-submitted copy is still in flight and will be picked up by the
-next prepaint, so the pipeline depth is unchanged.
+next prepaint, so the pipeline depth is unchanged. User-driven
+interactive frames keep their fast-path through `block_drain` and
+their generation-target handshake intact.
 
 The original "no slideshow during burst" intent (`ls`, `dir`, `clear`)
 is largely preserved because such bursts are short — at most one or
