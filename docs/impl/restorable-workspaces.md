@@ -68,8 +68,9 @@ Required qualities:
 - **No trust surprise.** Layout profiles never run commands, replay history,
   restore conversations, or embed terminal text.
 - **Privacy control exists before data accumulates.** Terminal text continuity
-  is default-on, but Settings exposes an opt-out and Command Palette exposes a
-  clear-and-disable action.
+  is default-on for new installs, but existing config files that predate the
+  setting stay off until the user enables it. Settings exposes an opt-out and
+  Command Palette exposes a clear-and-disable action.
 - **One mental model.** The same path resolver powers `con <project-folder>`,
   `con <workspace.toml>`, Add Tabs from Layout Profile, and Open Layout Profile in
   New Window.

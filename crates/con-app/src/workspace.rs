@@ -6778,11 +6778,11 @@ impl ConWorkspace {
         }
 
         self.settings_panel.update(cx, |panel, cx| {
-            panel.set_restore_terminal_text(false, cx);
+            panel.set_persisted_restore_terminal_text(false, cx);
         });
         if let Some(panel) = self.settings_window_panel.clone() {
             panel.update(cx, |panel, cx| {
-                panel.set_restore_terminal_text(false, cx);
+                panel.set_persisted_restore_terminal_text(false, cx);
             });
         }
 
@@ -6886,9 +6886,15 @@ impl ConWorkspace {
     ) -> Tab {
         let ghostty_app = self.ghostty_app.clone();
         let font_size = self.font_size;
+        let restore_terminal_text = self.config.appearance.restore_terminal_text;
         let pane_tree = if let Some(layout) = &tab_state.layout {
             let mut restore_terminal =
                 |restore_cwd: Option<&str>, restored_screen_text: Option<&[String]>| {
+                    let restored_screen_text = if restore_terminal_text {
+                        restored_screen_text
+                    } else {
+                        None
+                    };
                     make_ghostty_terminal(
                         &ghostty_app,
                         restore_cwd,
@@ -6964,8 +6970,15 @@ impl ConWorkspace {
             .update(cx, |panel, cx| panel.swap_state(incoming, cx));
         if old_active < self.tabs.len() {
             self.tabs[old_active].panel_state = outgoing;
-            for terminal in self.tabs[old_active].pane_tree.all_surface_terminals() {
+        }
+
+        for (tab_idx, tab) in self.tabs.iter().enumerate() {
+            if tab_idx == self.active_tab {
+                continue;
+            }
+            for terminal in tab.pane_tree.all_surface_terminals() {
                 terminal.set_focus_state(false, cx);
+                terminal.set_native_view_visible(false, cx);
             }
         }
 

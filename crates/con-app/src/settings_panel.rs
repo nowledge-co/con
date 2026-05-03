@@ -2222,7 +2222,19 @@ impl SettingsPanel {
         }
     }
 
+    /// Updates the settings draft only. Normal Settings edits persist through
+    /// the Save button; callers that already persisted this value should use
+    /// `set_persisted_restore_terminal_text` to keep close/revert semantics
+    /// aligned with disk.
     pub fn set_restore_terminal_text(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.preview_snapshot.is_none() {
+            self.preview_snapshot = Some(self.config.clone());
+        }
+        self.config.appearance.restore_terminal_text = enabled;
+        cx.notify();
+    }
+
+    pub fn set_persisted_restore_terminal_text(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.config.appearance.restore_terminal_text = enabled;
         if let Some(snapshot) = &mut self.preview_snapshot {
             snapshot.appearance.restore_terminal_text = enabled;

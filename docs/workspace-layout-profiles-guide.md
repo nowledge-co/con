@@ -49,6 +49,8 @@ typed, what the agent said, or what processes were running.
 Private terminal text restore can be disabled in **Settings -> General ->
 Continuity**. Use **Clear Restored Terminal History** from Command Palette when
 you want to turn it off and wipe the saved terminal text already stored by Con.
+New installs enable continuity by default; existing config files created before
+this setting existed stay off until you turn it on.
 
 ## Save A Profile
 

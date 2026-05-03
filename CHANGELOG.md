@@ -37,6 +37,8 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Fixed cross-platform layout export so repo-relative `cwd` values are written with stable slash-separated paths on Windows, macOS, and Linux.
 - Avoided capturing terminal text when exporting layout profiles, since exported profiles deliberately exclude runtime text history.
+- Honored the **Restore Terminal Text** privacy setting when adding tabs from an imported layout profile, and prevented imported inactive native terminal views from staying visible behind the active tab.
+- Existing config files that predate **Restore Terminal Text** no longer silently opt into terminal-text retention on upgrade. New installs still enable continuity by default, and existing users can turn it on from Settings -> General -> Continuity.
 
 **Terminal, Windows and Linux Backends**
 
