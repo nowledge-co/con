@@ -95,11 +95,13 @@ pub struct GhosttyTitleChanged(pub Option<String>);
 pub struct GhosttyProcessExited;
 pub struct GhosttyFocusChanged;
 pub struct GhosttySplitRequested(pub GhosttySplitDirection);
+pub struct GhosttyCwdChanged(pub Option<String>);
 
 impl EventEmitter<GhosttyTitleChanged> for GhosttyView {}
 impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
 impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
+impl EventEmitter<GhosttyCwdChanged> for GhosttyView {}
 
 pub struct GhosttyView {
     app: Arc<GhosttyApp>,
@@ -115,6 +117,7 @@ pub struct GhosttyView {
     init_failed: bool,
     /// Emit `GhosttyProcessExited` exactly once on shell death.
     process_exit_emitted: bool,
+    last_cwd: Option<String>,
     /// Pane bounds in logical window pixels, captured during prepaint.
     pane_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
@@ -212,6 +215,7 @@ impl GhosttyView {
             initialized: false,
             init_failed: false,
             process_exit_emitted: false,
+            last_cwd: None,
             pane_bounds: None,
             scale_factor: 1.0,
             ime_marked_text: None,
@@ -252,7 +256,10 @@ impl GhosttyView {
     }
 
     pub fn current_dir(&self) -> Option<String> {
-        self.terminal.as_ref().and_then(|t| t.current_dir())
+        self.terminal
+            .as_ref()
+            .and_then(|t| t.current_dir())
+            .or_else(|| self.initial_cwd.clone())
     }
 
     pub fn is_alive(&self) -> bool {
@@ -342,24 +349,43 @@ impl GhosttyView {
     pub fn drain_surface_state(
         &mut self,
         _sync_native_scroll: bool,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> bool {
-        false
+        self.poll_terminal_state(cx)
     }
 
     pub fn pump_deferred_work(&mut self, cx: &mut Context<Self>) -> bool {
+        self.poll_terminal_state(cx)
+    }
+
+    fn poll_terminal_state(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.initialized {
+            return false;
+        }
+
+        let Some(terminal) = self.terminal.as_ref() else {
+            return false;
+        };
+
+        let mut changed = false;
+
+        let cwd = terminal.current_dir();
+        if cwd != self.last_cwd {
+            self.last_cwd = cwd.clone();
+            changed = true;
+            cx.emit(GhosttyCwdChanged(cwd));
+        }
+
         // No action-callback channel on Windows (cf. macOS's
         // `wake_generation`). Poll `is_alive` so workspace's
         // `on_terminal_process_exited` runs when the child shell exits.
-        if self.initialized
-            && !self.process_exit_emitted
-            && self.terminal.as_ref().is_some_and(|t| !t.is_alive())
-        {
+        if !self.process_exit_emitted && !terminal.is_alive() {
             self.process_exit_emitted = true;
+            changed = true;
             cx.emit(GhosttyProcessExited);
-            return true;
         }
-        false
+
+        changed
     }
 
     fn ensure_session(&mut self, width_px: u32, height_px: u32, dpi: u32) {
@@ -401,6 +427,7 @@ impl GhosttyView {
                 }
                 self.restored_screen_text = None;
                 self.initialized = true;
+                self.last_cwd = self.terminal.as_ref().and_then(|t| t.current_dir());
                 self.last_physical_size = Some((width_px, height_px));
                 self.last_scale_factor = dpi as f32 / 96.0;
                 self.scrollbar_cache = None;

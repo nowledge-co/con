@@ -40,9 +40,16 @@ For the full breakdown, see `docs/impl/agent-harness.md`.
 
 - Rust (stable, edition 2024)
 - `cmake`
-- **macOS**: Zig 0.15.2+ (ghostty's `build.zig.zon` pins `minimum_zig_version = "0.15.2"`)
-- **Windows**: Zig 0.15.2+ (same reason), Visual Studio 2022 Build Tools with the Windows 10/11 SDK. Run the build from a _Developer Command Prompt for VS 2022_ so `rc.exe` is on `PATH`. If Windows Defender is on, either add an exclusion for the repo dir or disable real-time scanning — zig's sub-build exes get briefly locked by MpEngine and spawn with `FileNotFound`.
-- **Linux**: Zig 0.15.2+ (con-ghostty builds `libghostty-vt` for the Linux backend the same way it does for Windows), plus the GPUI runtime apt deps the CI job already installs:
+- **Zig**: use **Zig 0.15.2 exactly** for full terminal builds.
+  Do not read this as `0.15.2+`: Zig `0.16.0` changes build APIs
+  that the pinned Ghostty revision does not support yet, and
+  `con-ghostty` will fail while compiling libghostty. If your package
+  manager only offers a newer Zig, install the official 0.15.2 archive
+  from `https://ziglang.org/download/0.15.2/` and either put that
+  directory first on `PATH` or set `CON_ZIG_BIN=/path/to/zig`.
+- **macOS**: `cmake` plus Zig 0.15.2. The macOS release workflow installs Zig 0.15.2 explicitly before building embedded libghostty.
+- **Windows**: Zig 0.15.2, Visual Studio 2022 Build Tools with the Windows 10/11 SDK. Run full builds from a _Developer Command Prompt for VS 2022_ so `rc.exe` is on `PATH`. If Windows Defender is on, either add an exclusion for the repo dir or disable real-time scanning — Zig's sub-build exes get briefly locked by MpEngine and spawn with `FileNotFound`.
+- **Linux**: Zig 0.15.2, plus the GPUI runtime apt deps the CI job already installs:
   ```sh
   sudo apt-get install -y --no-install-recommends \
     libxcb-composite0-dev libxcb-dri2-0-dev libxcb-glx0-dev \
@@ -51,6 +58,11 @@ For the full breakdown, see `docs/impl/agent-harness.md`.
     mesa-vulkan-drivers
   ```
   The `mesa-vulkan-drivers` line gives you a software ICD (llvmpipe) as a fallback for headless / VM environments; on a real desktop with a hardware GPU you can skip it.
+
+CI mirrors this deliberately:
+- `release-macos.yml`, `release-linux.yml`, and `release-windows.yml` install Zig 0.15.2 before release builds.
+- The Linux PR smoke check in `ci-portable.yml` also installs Zig 0.15.2 because it type-checks `con-ghostty` with `libghostty-vt`.
+- The Windows PR smoke check sets `CON_SKIP_GHOSTTY_VT=1` because `cargo check` does not link and GitHub's Windows image does not ship our required Zig. That keeps PR checks fast, but it is not a substitute for a full Windows release build.
 
 ## Build
 
@@ -74,8 +86,9 @@ cargo run -p con
 
 # Windows
 cargo wrun -p con
+```
 
-> With optional arguments:
+With optional arguments:
 
 ```bash
 RUST_LOG=con_agent::flow=info,con_agent=warn,con_core=warn,con::suggestions=debug,con_core::suggestions=debug cargo run -p con

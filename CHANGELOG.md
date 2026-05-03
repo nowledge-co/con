@@ -39,8 +39,10 @@ con is still pre-release, so entries may group related beta work while the produ
 - Fixed cross-platform layout export so repo-relative `cwd` values are written with stable slash-separated paths on Windows, macOS, and Linux.
 - Avoided capturing terminal text when exporting layout profiles, since exported profiles deliberately exclude runtime text history.
 - Honored the **Restore Terminal Text** privacy setting when adding tabs from an imported layout profile, and prevented imported inactive native terminal views from staying visible behind the active tab.
-- Existing config files that predate **Restore Terminal Text** no longer silently opt into terminal-text retention on upgrade. New installs still enable continuity by default, and existing users can turn it on from Settings -> General -> Continuity.
+- Kept terminal-text continuity default-on for existing beta users as well as new installs, while preserving the explicit Settings opt-out and **Clear Restored Terminal History** wipe action.
 - Rejected edited layout profiles that define multiple panes without a layout tree, and made Con synthesize a safe split tree when exporting legacy private sessions that still have panes without layout metadata.
+- Persisted shell cwd changes as soon as Ghostty reports OSC 7/PWD, so restored tabs, panes, and surfaces come back in the last reported directory instead of depending on a later unrelated save or graceful quit.
+- Kept restored terminal text out of cwd decisions. Con now treats Ghostty's reported PWD as the authoritative path, avoiding stale restored prompt text overriding the live shell directory.
 
 **Terminal, Windows and Linux Backends**
 
@@ -50,6 +52,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Terminal, macOS**
 
 - Made the embedded Ghostty initial-output restore hook fail soft for local best-effort builds while keeping macOS release packaging fail-hard, so upstream anchor drift blocks a release instead of silently shipping without terminal text seeding.
+- Fixed cwd restore for macOS privacy-protected directories such as Documents and Downloads. Con's embedded Ghostty path now trusts the shell-integration cwd passed by the app instead of rejecting it during directory open/stat preflight, which macOS may deny even when the shell can `cd` there.
 
 ## `v0.1.0-beta.54` - 2026-05-02
 

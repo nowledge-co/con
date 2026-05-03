@@ -268,6 +268,7 @@ pub enum GhosttySplitDirection {
 pub enum GhosttySurfaceEvent {
     SplitRequest(GhosttySplitDirection),
     OpenUrl(String),
+    PwdChanged(String),
 }
 
 /// Terminal state received via ghostty action callbacks.
@@ -1342,7 +1343,13 @@ unsafe extern "C" fn action_callback(
                 let pwd_ptr = action.action.pwd.pwd;
                 if !pwd_ptr.is_null() {
                     let pwd = CStr::from_ptr(pwd_ptr).to_string_lossy().into_owned();
-                    state.lock().pwd = Some(pwd);
+                    let mut state = state.lock();
+                    if state.pwd.as_deref() != Some(pwd.as_str()) {
+                        state
+                            .pending_events
+                            .push_back(GhosttySurfaceEvent::PwdChanged(pwd.clone()));
+                    }
+                    state.pwd = Some(pwd);
                 }
                 true
             }

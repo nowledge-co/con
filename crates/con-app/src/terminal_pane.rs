@@ -336,6 +336,8 @@ pub fn subscribe_terminal_pane(
         ConWorkspace::on_terminal_title_changed,
     )
     .detach();
+    cx.subscribe_in(&pane.entity, window, ConWorkspace::on_terminal_cwd_changed)
+        .detach();
     cx.subscribe_in(
         &pane.entity,
         window,

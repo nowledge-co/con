@@ -37,6 +37,10 @@ Implemented in the first issue #111 PR:
   GPUI overlay
 - each pane stores its active surface id
 - old session files that only stored a leaf cwd still load correctly
+- cwd restore is grounded in terminal protocol state (OSC 7/PWD), not restored
+  prompt text. On macOS, Con's embedded Ghostty patch trusts the app-captured
+  cwd for privacy-protected folders such as Documents/Downloads instead of
+  rejecting it during directory open/stat preflight.
 - New Window uses a fresh session seeded with global history, not a clone of
   the restored layout
 - a second process that detects a live control endpoint opens a fresh
@@ -68,8 +72,8 @@ Required qualities:
 - **No trust surprise.** Layout profiles never run commands, replay history,
   restore conversations, or embed terminal text.
 - **Privacy control exists before data accumulates.** Terminal text continuity
-  is default-on for new installs, but existing config files that predate the
-  setting stay off until the user enables it. Settings exposes an opt-out and
+  is default-on for new installs and existing beta users because workspace
+  continuity is the default product promise. Settings exposes an opt-out and
   Command Palette exposes a clear-and-disable action.
 - **One mental model.** The same path resolver powers `con <project-folder>`,
   `con <workspace.toml>`, Add Tabs from Layout Profile, and Open Layout Profile in
