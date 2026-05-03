@@ -620,7 +620,9 @@ fn workspace_path_error_session(path: &std::path::Path, err: &anyhow::Error) -> 
             surfaces: vec![SurfaceState {
                 surface_id: 0,
                 title: Some("Shell".to_string()),
-                owner: Some("con".to_string()),
+                // Synthetic Con-owned diagnostic surface. Keep it out of
+                // human/subagent owner namespaces used by the orchestrator.
+                owner: Some("con:workspace-error".to_string()),
                 cwd,
                 close_pane_when_last: false,
                 screen_text,
