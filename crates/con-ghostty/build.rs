@@ -21,6 +21,7 @@ const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
 /// — that's known-good on macOS.
 const GHOSTTY_REV: &str = "ca7516bea60190ee2e9a4f9182b61d318d107c6e";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
+const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_VT_TARGET_ENV: &str = "CON_GHOSTTY_VT_TARGET";
 
 fn main() {
@@ -30,6 +31,7 @@ fn main() {
     // until something unrelated invalidated the cache.
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     println!("cargo:rerun-if-env-changed={GHOSTTY_ENV}");
+    println!("cargo:rerun-if-env-changed={GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV}");
     println!("cargo:rerun-if-env-changed=CON_STUB_GHOSTTY_VT");
     println!("cargo:rerun-if-env-changed=CON_SKIP_GHOSTTY_VT");
     println!("cargo:rerun-if-env-changed=CON_GHOSTTY_VT_SIMD");
@@ -128,6 +130,13 @@ fn build_macos() {
 
 fn ghostty_optimize() -> String {
     env::var("CON_GHOSTTY_OPTIMIZE").unwrap_or_else(|_| "ReleaseFast".to_string())
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    env::var_os(name).is_some_and(|value| {
+        let value = value.to_string_lossy();
+        !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+    })
 }
 
 // ── Windows ───────────────────────────────────────────────────────────
@@ -580,6 +589,13 @@ fn copy_dir_filtered(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 fn apply_embedded_initial_output_patch(ghostty_dir: &Path) -> bool {
     if let Err(err) = try_apply_embedded_initial_output_patch(ghostty_dir) {
+        if env_flag_enabled(GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV) {
+            panic!(
+                "con-ghostty: embedded initial_output restore hook is required but could not be applied: {err}\n\
+                 Rebase Con's Ghostty embedding patch against GHOSTTY_REV={GHOSTTY_REV}, or unset \
+                 {GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV} for a local best-effort build."
+            );
+        }
         println!("cargo:warning=con-ghostty: embedded initial_output restore hook disabled: {err}");
         return false;
     }

@@ -44,7 +44,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **Terminal, macOS**
 
-- Made the embedded Ghostty initial-output restore hook fail soft at build time. If upstream Ghostty patch anchors drift, Con now builds without terminal text seeding instead of failing the entire build.
+- Made the embedded Ghostty initial-output restore hook fail soft for local best-effort builds while keeping macOS release packaging fail-hard, so upstream anchor drift blocks a release instead of silently shipping without terminal text seeding.
 
 ## `v0.1.0-beta.54` - 2026-05-02
 

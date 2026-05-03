@@ -17,7 +17,11 @@ require_cmd mkdir
 mkdir -p "$CON_DIST_ROOT"
 
 log "Building con for $CON_RUST_TARGET"
-(cd "$REPO_ROOT" && cargo build --locked --release --target "$CON_RUST_TARGET" -p con)
+(
+  cd "$REPO_ROOT"
+  CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT="${CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT:-1}" \
+    cargo build --locked --release --target "$CON_RUST_TARGET" -p con
+)
 
 app_root="$CON_APP_BUNDLE_PATH"
 contents_dir="$app_root/Contents"
