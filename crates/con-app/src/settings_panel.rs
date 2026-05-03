@@ -2224,6 +2224,11 @@ impl SettingsPanel {
 
     pub fn set_restore_terminal_text(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.config.appearance.restore_terminal_text = enabled;
+        if let Some(snapshot) = &mut self.preview_snapshot {
+            snapshot.appearance.restore_terminal_text = enabled;
+        } else {
+            self.preview_snapshot = Some(self.config.clone());
+        }
         cx.notify();
     }
 

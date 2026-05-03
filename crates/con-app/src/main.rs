@@ -590,7 +590,12 @@ fn fallback_cwd_for_workspace_path(path: &std::path::Path) -> Option<std::path::
     }
     path.parent()
         .filter(|parent| !parent.as_os_str().is_empty())
-        .map(std::path::Path::to_path_buf)
+        .and_then(|parent| {
+            parent
+                .ancestors()
+                .find(|ancestor| !ancestor.as_os_str().is_empty() && ancestor.is_dir())
+                .map(std::path::Path::to_path_buf)
+        })
 }
 
 fn workspace_path_error_session(path: &std::path::Path, err: &anyhow::Error) -> Session {

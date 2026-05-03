@@ -94,7 +94,7 @@ fn trim_restored_screen_text(lines: Vec<String>) -> Vec<String> {
     for line in trimmed.into_iter().rev() {
         let line_bytes = line.len().saturating_add(2);
         if line_bytes > RESTORED_SCREEN_TEXT_MAX_BYTES {
-            continue;
+            break;
         }
         if total.saturating_add(line_bytes) > RESTORED_SCREEN_TEXT_MAX_BYTES {
             break;

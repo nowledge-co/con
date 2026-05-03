@@ -455,7 +455,16 @@ impl WorkspaceLayout {
             }
 
             if let Some(layout) = tab.layout.as_ref() {
-                validate_layout_node(layout, &pane_ids, &tab.id)?;
+                let mut placed_panes = std::collections::HashSet::new();
+                validate_layout_node(layout, &pane_ids, &mut placed_panes, &tab.id)?;
+                anyhow::ensure!(
+                    placed_panes.len() == pane_ids.len()
+                        && pane_ids
+                            .iter()
+                            .all(|pane_id| placed_panes.contains(*pane_id)),
+                    "layout in tab {:?} must reference each pane exactly once",
+                    tab.id
+                );
             }
         }
 
@@ -865,6 +874,7 @@ fn unique_id(base: &str, used: &mut HashSet<String>) -> String {
 fn validate_layout_node(
     node: &WorkspaceLayoutNode,
     pane_ids: &std::collections::HashSet<&str>,
+    placed_panes: &mut std::collections::HashSet<String>,
     tab_id: &str,
 ) -> anyhow::Result<()> {
     match node {
@@ -872,6 +882,12 @@ fn validate_layout_node(
             anyhow::ensure!(
                 pane_ids.contains(id.as_str()),
                 "layout references undefined pane {:?} in tab {:?}",
+                id,
+                tab_id
+            );
+            anyhow::ensure!(
+                placed_panes.insert(id.clone()),
+                "layout references pane {:?} more than once in tab {:?}",
                 id,
                 tab_id
             );
@@ -888,8 +904,8 @@ fn validate_layout_node(
                 ratio,
                 tab_id
             );
-            validate_layout_node(first, pane_ids, tab_id)?;
-            validate_layout_node(second, pane_ids, tab_id)?;
+            validate_layout_node(first, pane_ids, placed_panes, tab_id)?;
+            validate_layout_node(second, pane_ids, placed_panes, tab_id)?;
         }
     }
     Ok(())
@@ -901,6 +917,62 @@ mod tests {
 
     fn expected_resolved_cwd(root: &str, relative: &str) -> String {
         Path::new(root).join(relative).to_string_lossy().to_string()
+    }
+
+    fn two_pane_layout() -> WorkspaceLayout {
+        WorkspaceLayout {
+            format: WORKSPACE_LAYOUT_FORMAT.to_string(),
+            version: 1,
+            name: None,
+            root: ".".to_string(),
+            active_tab: Some("dev".to_string()),
+            defaults: WorkspaceDefaults::default(),
+            tabs: vec![WorkspaceTab {
+                id: "dev".to_string(),
+                title: None,
+                cwd: Some(".".to_string()),
+                active_pane: Some("a".to_string()),
+                agent: WorkspaceTabAgent::default(),
+                layout: Some(WorkspaceLayoutNode::Split {
+                    direction: WorkspaceSplitDirection::Horizontal,
+                    ratio: 0.5,
+                    first: Box::new(WorkspaceLayoutNode::Pane {
+                        id: "a".to_string(),
+                    }),
+                    second: Box::new(WorkspaceLayoutNode::Pane {
+                        id: "b".to_string(),
+                    }),
+                }),
+                panes: vec![
+                    WorkspacePane {
+                        id: "a".to_string(),
+                        title: None,
+                        cwd: Some(".".to_string()),
+                        active_surface: Some("shell".to_string()),
+                        surfaces: vec![WorkspaceSurface {
+                            id: "shell".to_string(),
+                            title: None,
+                            owner: None,
+                            cwd: Some(".".to_string()),
+                            close_pane_when_last: false,
+                        }],
+                    },
+                    WorkspacePane {
+                        id: "b".to_string(),
+                        title: None,
+                        cwd: Some(".".to_string()),
+                        active_surface: Some("shell".to_string()),
+                        surfaces: vec![WorkspaceSurface {
+                            id: "shell".to_string(),
+                            title: None,
+                            owner: None,
+                            cwd: Some(".".to_string()),
+                            close_pane_when_last: false,
+                        }],
+                    },
+                ],
+            }],
+        }
     }
 
     #[test]
@@ -1162,6 +1234,35 @@ panes = []
 
         let err = WorkspaceLayout::from_toml_str(toml).unwrap_err();
         assert!(err.to_string().contains("undefined pane"));
+    }
+
+    #[test]
+    fn workspace_layout_rejects_duplicate_layout_pane_refs() {
+        let mut layout = two_pane_layout();
+        layout.tabs[0].layout = Some(WorkspaceLayoutNode::Split {
+            direction: WorkspaceSplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(WorkspaceLayoutNode::Pane {
+                id: "a".to_string(),
+            }),
+            second: Box::new(WorkspaceLayoutNode::Pane {
+                id: "a".to_string(),
+            }),
+        });
+
+        let err = layout.validate().unwrap_err();
+        assert!(err.to_string().contains("more than once"));
+    }
+
+    #[test]
+    fn workspace_layout_rejects_layout_that_omits_panes() {
+        let mut layout = two_pane_layout();
+        layout.tabs[0].layout = Some(WorkspaceLayoutNode::Pane {
+            id: "a".to_string(),
+        });
+
+        let err = layout.validate().unwrap_err();
+        assert!(err.to_string().contains("exactly once"));
     }
 
     #[test]
