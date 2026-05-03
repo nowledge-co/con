@@ -606,11 +606,14 @@ impl GhosttyApp {
             config.working_directory = s.as_ptr();
         }
 
+        #[cfg(con_ghostty_embedded_initial_output)]
         let restored_output = restored_screen_text.and_then(restored_terminal_output);
         #[cfg(con_ghostty_embedded_initial_output)]
         if let Some(ref output) = restored_output {
             config.initial_output = output.as_ptr();
         }
+        #[cfg(not(con_ghostty_embedded_initial_output))]
+        let _ = restored_screen_text;
 
         let surface = unsafe { ffi::ghostty_surface_new(self.app, &config as *const _) };
         if surface.is_null() {
@@ -635,6 +638,7 @@ impl GhosttyApp {
     }
 }
 
+#[cfg(con_ghostty_embedded_initial_output)]
 fn restored_terminal_output(lines: &[String]) -> Option<CString> {
     CString::new(crate::restored_terminal_output_text(lines)?).ok()
 }

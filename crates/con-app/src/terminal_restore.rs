@@ -18,7 +18,9 @@ pub(crate) fn key_down_may_write_terminal(event: &KeyDownEvent, special_key_writ
         return true;
     }
 
+    let single_character_key = keystroke.key.chars().count() == 1;
+
     special_key_writes
+        || single_character_key
         || (keystroke.modifiers.alt && !keystroke.modifiers.control)
-        || (keystroke.key.len() == 1 && (keystroke.modifiers.control || keystroke.modifiers.alt))
 }
