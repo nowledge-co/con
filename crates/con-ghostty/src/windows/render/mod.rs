@@ -390,17 +390,27 @@ impl Renderer {
 
         let in_flight_before_submit = ring.in_flight_count();
 
-        // A completed readback is only useful when we have no fresher VT
-        // snapshot to submit. If `needs_draw` is true, mapping the older
-        // slot just burns UI-thread time and cannot be presented because
-        // it would regress the pane to stale pixels. If no new draw is
-        // needed but more than one slot is still in flight, discard the
-        // oldest cache entry first so command bursts present the newest
-        // completed frame instead of replaying intermediate snapshots.
-        if !needs_draw && in_flight_before_submit > 1 {
+        // A completed readback from an earlier submit is the freshest
+        // pixels we can currently put on screen. If `needs_draw` is
+        // false, draining is the only way to advance the displayed
+        // image at all. If `needs_draw` is true, the just-submitted
+        // copy is even fresher but isn't ready yet — and refusing to
+        // drain the older slot here strands the on-screen image on
+        // whatever frame was last presented. With continuous-output
+        // TUIs (codex spinner / streaming, watch, top, btop), every
+        // prepaint sees a new VT generation, so `needs_draw` stays
+        // true forever and the screen freezes until a click flips
+        // `prefer_latest=true`. Drain in both cases; the non-blocking
+        // `try_drain` is cheap, and presenting one-frame-old pixels is
+        // strictly better than freezing.
+        //
+        // When more than one slot is still in flight, drop the oldest
+        // first so command bursts present the newest completed frame
+        // instead of replaying intermediate snapshots.
+        if in_flight_before_submit > 1 {
             ring.discard_oldest_in_flight();
         }
-        let drain_target = (!needs_draw).then(|| ring.oldest_in_flight()).flatten();
+        let drain_target = ring.oldest_in_flight();
 
         let drain_started = perf_trace_enabled().then(Instant::now);
         let drained: Option<Readback> = if let Some(idx) = drain_target {
@@ -508,14 +518,41 @@ impl Renderer {
         }
 
         if needs_draw {
-            // Mailbox semantics: once we've submitted a fresher frame
-            // for the current VT snapshot, do not regress to an older
-            // already-drained readback just because it happens to be
-            // ready first. Returning that stale frame is what makes
-            // bursty command output (`ls`, `dir`, `clear`) feel like a
-            // slideshow of historical snapshots. Keep the previous
-            // on-screen image and let the next prepaint pick up the
-            // freshest completed frame instead.
+            // Continuous-output fallback: if a prior submit's readback
+            // is ready right now, present it instead of stalling on
+            // `Pending`. Without this, TUIs that never let the VT
+            // quiesce (codex, watch, top) leave `needs_draw=true` on
+            // every prepaint, the just-submitted copy never gets a
+            // chance to drain, and the on-screen image freezes until
+            // a click flips `prefer_latest=true` (issue #114). The
+            // freshly submitted frame is still in flight and will be
+            // picked up by the next prepaint, so we lag the VT by at
+            // most one frame instead of indefinitely.
+            if let Some(readback) = drained {
+                let outcome = RenderOutcome::Rendered(self.frame_from_readback(readback));
+                log_render_profile(
+                    prof_started,
+                    snapshot,
+                    prefer_latest,
+                    needs_draw,
+                    in_flight_before_submit,
+                    drain_target,
+                    true,
+                    backlog,
+                    submitted,
+                    draw_ms,
+                    submit_ms,
+                    drain_ms,
+                    block_drain_ms,
+                    "rendered",
+                    "drained_during_submit",
+                );
+                return Ok(outcome);
+            }
+
+            // No prior readback ready yet — wait for the just-submitted
+            // copy. The next prepaint (driven by the `Pending`
+            // `cx.notify()` in `GhosttyView::render`) will pick it up.
             let outcome = RenderOutcome::Pending;
             log_render_profile(
                 prof_started,
