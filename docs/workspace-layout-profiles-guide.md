@@ -5,8 +5,8 @@ for that. After rebooting, upgrading, or relaunching Con, your windows, tabs,
 panes, surfaces, working directories, and private terminal text history should
 come back as continuity.
 
-This guide is for the explicit workflow: saving a reusable layout profile for a
-project.
+This guide is for the explicit workflow: saving or opening a reusable layout
+profile for a project.
 
 ## What A Layout Profile Is
 
@@ -34,14 +34,13 @@ session backup.
 
 ## Export A Profile
 
-Production target:
-
 1. Open a project in Con.
 2. Arrange tabs, panes, and surfaces visually.
 3. Rename tabs, panes, and surfaces so the layout is understandable.
-4. Choose Export Current Layout.
-5. Review the generated `.con/workspace.toml`.
-6. Commit it only if the layout is useful to the project.
+4. Choose **Export Current Layout** from Command Palette or the File menu.
+5. Save as `.con/workspace.toml` under the project root.
+6. Review the generated file.
+7. Commit it only if the layout is useful to the project.
 
 Example:
 
@@ -61,24 +60,34 @@ to be running inside it.
 
 ## Open A Project Profile
 
-Production target:
-
-```sh
-cd ~/dev/app
-con
-```
-
-or:
+Open a project profile explicitly:
 
 ```sh
 con ~/dev/app
 ```
 
-Con should detect the project profile, open the layout under that project root,
-and apply your private local memory on top when available.
+Con opens `~/dev/app/.con/workspace.toml` when it exists. If no profile exists,
+Con opens a fresh shell rooted at `~/dev/app`.
 
-If no profile exists, Con opens a normal fresh project shell and can later offer
-to export the current layout.
+Open a profile file directly:
+
+```sh
+con ~/dev/app/.con/workspace.toml
+```
+
+Inside the app, use:
+
+- **Add Layout Profile Tabs** to add the profile's tabs to the current window.
+- **Open Layout Profile in New Window** to open the profile separately.
+
+Plain `con` without a path still favors private session restore. That keeps
+normal relaunch behavior predictable: quitting, upgrading, or rebooting should
+bring back the last private workspace, not silently replace it with a project
+profile because the process happened to start from a repo directory.
+
+The more aggressive `cd ~/dev/app && con` project-detection flow is deferred
+until Con has full single-instance forwarding and project-memory state. At that
+point Con can distinguish "open this project" from "restore my last app".
 
 ## Share A Profile
 
@@ -99,6 +108,21 @@ Bad shared profile content:
 - secrets
 - commands that run automatically
 - private agent conversations
+
+## New Tab, New Window, And Defaults
+
+Use these rules:
+
+- **New Tab** stays scratch by default. It should not surprise you by expanding
+  into a multi-pane project layout.
+- **Add Layout Profile Tabs** is the explicit "new tab(s) from this profile"
+  flow. If the profile contains one tab, it behaves like a new tab. If it
+  contains several tabs, Con adds all of them.
+- **Open Layout Profile in New Window** is the explicit "new window from this
+  profile" flow.
+- **New Window** stays scratch by default. A global "default new-window layout"
+  setting is intentionally deferred because it can fight with private restore
+  and project memory.
 
 ## Process Continuity
 

@@ -41,6 +41,10 @@ Implemented in the first issue #111 PR:
   the restored layout
 - a second process that detects a live control endpoint opens a fresh
   history-backed session instead of restoring the same saved layout again
+- the layout-only schema now has a closed import/export loop: users can export
+  the current window, add a profile's tabs to an existing window, open a profile
+  in a new window, or launch `con <project-folder>` / `con <workspace.toml>`
+  explicitly
 
 This slice is production-safe because it improves private restore fidelity and
 introduces only a layout-only schema. It does not introduce command replay or a
@@ -149,20 +153,28 @@ Current mitigation:
 The mitigation is safe, but not final. Single-instance forwarding is the
 production target.
 
-### Flow 4: Open Folder
+### Flow 4: Open Folder / Open Profile
 
-The user runs:
+The user explicitly runs:
 
 ```sh
 con ~/dev/con
 ```
 
-Production target:
+Current behavior:
 
-- Con canonicalizes `~/dev/con`
-- if local project memory exists, it restores that folder's last Con shape
-- otherwise, it opens one fresh shell rooted at `~/dev/con`
-- project memory remains in app data, not in the repo
+- if `~/dev/con/.con/workspace.toml` exists, Con opens that layout profile
+- otherwise, Con opens one fresh shell rooted at `~/dev/con`
+- profile import includes layout intent only; private history is shared from
+  app data, and no commands run automatically
+
+Production target after AppState/project memory:
+
+- Con canonicalizes the project root
+- if local project memory exists, it restores that folder's last private Con
+  shape
+- otherwise, it opens the shared layout profile if present
+- if neither exists, it opens one fresh shell rooted at the project
 
 Suggested private storage:
 
@@ -372,12 +384,11 @@ Near-term additive APIs:
 
 Deferred APIs:
 
-- `workspaces.export_layout`
-- `workspaces.import_layout`
 - `workspaces.validate_layout`
 
-The schema exists now, but these APIs should wait until the product has a real
-import/export UI and manual review flow.
+The UI import/export loop exists now. Control-plane APIs for layout export and
+import should be added only when external automation needs them; they should
+reuse the same conversion path and must keep exported files layout-only.
 
 ## Implementation Roadmap
 
@@ -424,10 +435,14 @@ Status: after AppState.
 
 ### Phase 5: Shared Tasks and Layouts
 
-Status: schema foundation exists; UI and task files are deferred.
+Status: layout import/export is implemented; task files remain deferred.
 
-- Wire "Export Current Layout" only after AppState and project memory are solid.
-- Export from the live workspace instead of asking users to hand-write the file.
+- Export Current Layout writes a generated `.con/workspace.toml` from the live
+  window.
+- Add Layout Profile Tabs imports a profile into the current window.
+- Open Layout Profile in New Window imports a profile into a separate window.
+- `con <project-folder>` opens the project profile when present; plain `con`
+  remains private restore.
 - Start with `.con/tasks.toml` for named commands.
 - Keep `.con/workspace.toml` layout-only.
 - Never store secrets, conversations, command history, scrollback, active focus,
