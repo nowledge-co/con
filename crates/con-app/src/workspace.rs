@@ -255,11 +255,11 @@ use crate::ghostty_view::{
     GhosttyView,
 };
 use crate::{
-    AddWorkspaceLayoutTabs, ClearTerminal, ClosePane, CloseSurface, CloseTab, CycleInputMode,
-    ExportWorkspaceLayout, FocusInput, NewSurface, NewSurfaceSplitDown, NewSurfaceSplitRight,
-    NewTab, NextSurface, NextTab, OpenWorkspaceLayoutWindow, PreviousSurface, PreviousTab, Quit,
-    RenameSurface, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6,
-    SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp,
+    AddWorkspaceLayoutTabs, ClearRestoredTerminalHistory, ClearTerminal, ClosePane, CloseSurface,
+    CloseTab, CycleInputMode, ExportWorkspaceLayout, FocusInput, NewSurface, NewSurfaceSplitDown,
+    NewSurfaceSplitRight, NewTab, NextSurface, NextTab, OpenWorkspaceLayoutWindow, PreviousSurface,
+    PreviousTab, Quit, RenameSurface, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5,
+    SelectTab6, SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp,
     ToggleAgentPanel, TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs,
 };
 use con_agent::{
@@ -929,11 +929,17 @@ impl ConWorkspace {
             });
         }
 
+        let restore_terminal_text = config.appearance.restore_terminal_text;
         let make_terminal = |cwd: Option<&str>,
                              restored_screen_text: Option<&[String]>,
                              window: &mut Window,
                              cx: &mut Context<Self>|
          -> TerminalPane {
+            let restored_screen_text = if restore_terminal_text {
+                restored_screen_text
+            } else {
+                None
+            };
             make_ghostty_terminal(
                 &ghostty_app,
                 cwd,
@@ -3965,6 +3971,10 @@ impl ConWorkspace {
     }
 
     fn snapshot_session(&self, cx: &App) -> Session {
+        self.snapshot_session_with_options(cx, self.config.appearance.restore_terminal_text)
+    }
+
+    fn snapshot_session_with_options(&self, cx: &App, capture_screen_text: bool) -> Session {
         let tabs: Vec<con_core::session::TabState> = self
             .tabs
             .iter()
@@ -3972,7 +3982,7 @@ impl ConWorkspace {
                 let terminal = tab.pane_tree.focused_terminal();
                 let cwd = terminal.current_dir(cx);
                 let title = terminal.title(cx).unwrap_or_else(|| tab.title.clone());
-                let pane_layout = tab.pane_tree.to_state(cx);
+                let pane_layout = tab.pane_tree.to_state(cx, capture_screen_text);
                 let pane_states = tab
                     .pane_tree
                     .pane_terminals()
@@ -4909,6 +4919,9 @@ impl ConWorkspace {
                     self.active_terminal().clear_scrollback(cx);
                 }
             }
+            "clear-restored-terminal-history" => {
+                self.clear_restored_terminal_history(window, cx);
+            }
             "focus-terminal" => {
                 if self.has_active_tab() {
                     self.active_terminal().focus(window, cx);
@@ -4965,6 +4978,7 @@ impl ConWorkspace {
         restore_focus: bool,
     ) {
         let full_config = settings.read(cx).config().clone();
+        let restore_terminal_text_was_enabled = self.config.appearance.restore_terminal_text;
         self.config = full_config.clone();
         let new_agent_config = full_config.agent.clone();
         let auto_approve = new_agent_config.auto_approve_tools;
@@ -5022,6 +5036,9 @@ impl ConWorkspace {
         let term_config = full_config.terminal.clone();
         let appearance_config = full_config.appearance.clone();
         self.apply_terminal_and_ui_appearance(&term_config, &appearance_config, window, cx);
+        if restore_terminal_text_was_enabled && !appearance_config.restore_terminal_text {
+            self.save_session(cx);
+        }
 
         // Re-apply keybindings at runtime so changes take effect immediately
         let kb = full_config.keybindings.clone();
@@ -6745,7 +6762,38 @@ impl ConWorkspace {
     }
 
     fn active_pane_layout(&self, cx: &App) -> PaneLayoutState {
-        self.tabs[self.active_tab].pane_tree.to_state(cx)
+        self.tabs[self.active_tab].pane_tree.to_state(cx, false)
+    }
+
+    fn clear_restored_terminal_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.config.appearance.restore_terminal_text = false;
+        if let Err(err) = self.config.save() {
+            Self::show_layout_profile_error(
+                window,
+                cx,
+                "Could not clear restored terminal history",
+                err,
+            );
+            return;
+        }
+
+        self.settings_panel.update(cx, |panel, cx| {
+            panel.set_restore_terminal_text(false, cx);
+        });
+        if let Some(panel) = self.settings_window_panel.clone() {
+            panel.update(cx, |panel, cx| {
+                panel.set_restore_terminal_text(false, cx);
+            });
+        }
+
+        self.flush_session_save(cx);
+        Self::show_layout_profile_info(
+            window,
+            cx,
+            "Restored terminal history cleared",
+            "Terminal text restore is now off. Re-enable it in Settings > General > Continuity."
+                .to_string(),
+        );
     }
 
     fn layout_profile_export_root(&self, cx: &App) -> std::path::PathBuf {
@@ -6786,7 +6834,7 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         let root = crate::workspace_layout_root_for_file(&path);
-        let session = self.snapshot_session(cx);
+        let session = self.snapshot_session_with_options(cx, false);
         let layout = WorkspaceLayout::from_session(&session, &root);
 
         if let Err(err) = layout.save(&path) {
@@ -8945,6 +8993,15 @@ impl ConWorkspace {
         }
     }
 
+    fn clear_restored_terminal_history_action(
+        &mut self,
+        _: &ClearRestoredTerminalHistory,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.clear_restored_terminal_history(window, cx);
+    }
+
     fn new_surface(&mut self, _: &NewSurface, window: &mut Window, cx: &mut Context<Self>) {
         self.create_surface_in_focused_pane(window, cx);
     }
@@ -10708,6 +10765,7 @@ impl Render for ConWorkspace {
                 .on_action(cx.listener(Self::split_left))
                 .on_action(cx.listener(Self::split_up))
                 .on_action(cx.listener(Self::clear_terminal))
+                .on_action(cx.listener(Self::clear_restored_terminal_history_action))
                 .on_action(cx.listener(Self::export_workspace_layout))
                 .on_action(cx.listener(Self::add_workspace_layout_tabs))
                 .on_action(cx.listener(Self::open_workspace_layout_window))

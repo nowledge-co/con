@@ -46,6 +46,10 @@ session backup. It is safe to review because it describes shape, not activity.
 The profile captures the workspace you designed. It does not capture what you
 typed, what the agent said, or what processes were running.
 
+Private terminal text restore can be disabled in **Settings -> General ->
+Continuity**. Use **Clear Restored Terminal History** from Command Palette when
+you want to turn it off and wipe the saved terminal text already stored by Con.
+
 ## Export A Profile
 
 1. Open a project in Con.

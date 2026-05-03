@@ -67,6 +67,9 @@ Required qualities:
   every OS, so Windows/macOS/Linux do not churn diffs.
 - **No trust surprise.** Layout profiles never run commands, replay history,
   restore conversations, or embed terminal text.
+- **Privacy control exists before data accumulates.** Terminal text continuity
+  is default-on, but Settings exposes an opt-out and Command Palette exposes a
+  clear-and-disable action.
 - **One mental model.** The same path resolver powers `con <project-folder>`,
   `con <workspace.toml>`, Add Layout Profile Tabs, and Open Layout Profile in
   New Window.
@@ -485,6 +488,11 @@ On Windows and Linux, Con feeds the same sanitized snapshot into the
 restored text selectable, scrollable, and clipped by the terminal renderer
 instead of rendering a separate UI layer. Deeper native scrollback integration
 remains future work.
+
+If Ghostty's upstream source shape drifts and the macOS embedding patch cannot
+be applied, the build disables the hook and emits a Cargo warning instead of
+failing the whole app build. That makes terminal text restore an enhancement,
+not a build-time dependency.
 
 - Add bounded transcript capture per pane/surface.
 - Persist private scrollback snapshots with AppState/project memory.

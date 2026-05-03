@@ -63,7 +63,14 @@ impl PaneSurface {
     }
 }
 
-fn restored_screen_text_for_surface(terminal: &TerminalPane, cx: &App) -> Vec<String> {
+fn restored_screen_text_for_surface(
+    terminal: &TerminalPane,
+    capture_screen_text: bool,
+    cx: &App,
+) -> Vec<String> {
+    if !capture_screen_text {
+        return Vec::new();
+    }
     trim_restored_screen_text(terminal.recent_lines(RESTORED_SCREEN_TEXT_MAX_LINES, cx))
 }
 
@@ -236,8 +243,8 @@ impl PaneTree {
         }
     }
 
-    pub fn to_state(&self, cx: &App) -> PaneLayoutState {
-        Self::node_to_state(&self.root, cx)
+    pub fn to_state(&self, cx: &App, capture_screen_text: bool) -> PaneLayoutState {
+        Self::node_to_state(&self.root, cx, capture_screen_text)
     }
 
     /// Get the focused terminal
@@ -1741,7 +1748,7 @@ impl PaneTree {
             .or_else(|| surfaces.first())
     }
 
-    fn node_to_state(node: &PaneNode, cx: &App) -> PaneLayoutState {
+    fn node_to_state(node: &PaneNode, cx: &App, capture_screen_text: bool) -> PaneLayoutState {
         match node {
             PaneNode::Leaf {
                 id,
@@ -1758,7 +1765,11 @@ impl PaneTree {
                         owner: surface.owner.clone(),
                         cwd: surface.terminal.current_dir(cx),
                         close_pane_when_last: surface.close_pane_when_last,
-                        screen_text: restored_screen_text_for_surface(&surface.terminal, cx),
+                        screen_text: restored_screen_text_for_surface(
+                            &surface.terminal,
+                            capture_screen_text,
+                            cx,
+                        ),
                     })
                     .collect();
 
@@ -1781,8 +1792,8 @@ impl PaneTree {
                     SplitDirection::Vertical => PaneSplitDirection::Vertical,
                 },
                 ratio: *ratio,
-                first: Box::new(Self::node_to_state(first, cx)),
-                second: Box::new(Self::node_to_state(second, cx)),
+                first: Box::new(Self::node_to_state(first, cx, capture_screen_text)),
+                second: Box::new(Self::node_to_state(second, cx, capture_screen_text)),
             },
         }
     }

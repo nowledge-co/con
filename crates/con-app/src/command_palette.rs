@@ -111,6 +111,12 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         category: "Terminal",
     },
     PaletteAction {
+        id: "clear-restored-terminal-history",
+        label: "Clear Restored Terminal History",
+        shortcut: "",
+        category: "Privacy",
+    },
+    PaletteAction {
         id: "focus-terminal",
         label: "Focus Terminal",
         shortcut: "",

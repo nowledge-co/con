@@ -109,6 +109,7 @@ actions!(
         SplitLeft,
         SplitUp,
         ClearTerminal,
+        ClearRestoredTerminalHistory,
         ExportWorkspaceLayout,
         AddWorkspaceLayoutTabs,
         OpenWorkspaceLayoutWindow,
@@ -1496,6 +1497,10 @@ fn main() {
                     MenuItem::action("Split Up", SplitUp),
                     MenuItem::separator(),
                     MenuItem::action("Clear Terminal", ClearTerminal),
+                    MenuItem::action(
+                        "Clear Restored Terminal History",
+                        ClearRestoredTerminalHistory,
+                    ),
                     MenuItem::separator(),
                     MenuItem::action("New Surface Tab", NewSurface),
                     MenuItem::action("New Surface Pane Right", NewSurfaceSplitRight),

@@ -44,6 +44,9 @@ fn default_background_image_position() -> String {
 fn default_background_image_fit() -> String {
     "contain".into()
 }
+fn default_restore_terminal_text() -> bool {
+    true
+}
 
 pub fn is_gpui_pseudo_font_family(name: &str) -> bool {
     name.trim_start().starts_with('.')
@@ -109,6 +112,9 @@ pub struct AppearanceConfig {
     pub background_image_position: String,
     pub background_image_fit: String,
     pub background_image_repeat: bool,
+    /// Keep bounded private terminal text so restart continuity can show what
+    /// was on screen. This is never exported to workspace layout profiles.
+    pub restore_terminal_text: bool,
     /// Layout of the workspace tab strip. Defaults to `Horizontal` for
     /// backward compatibility with every shipped beta.
     pub tabs_orientation: TabsOrientation,
@@ -127,6 +133,7 @@ impl Default for AppearanceConfig {
             background_image_position: default_background_image_position(),
             background_image_fit: default_background_image_fit(),
             background_image_repeat: false,
+            restore_terminal_text: default_restore_terminal_text(),
             tabs_orientation: TabsOrientation::default(),
         }
     }

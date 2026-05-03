@@ -17,6 +17,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Added project layout startup for explicit paths: `con <project-folder>` opens `<project-folder>/.con/workspace.toml` when it exists, while `con <workspace.toml>` opens that profile directly. Plain `con` still prefers private session restore.
 - Documented the production restore model: local continuity and project-local memory come first, exported layouts are generated from user-tuned workspaces, and command/task files remain a separate future workflow.
 - Documented the layout-profile "aha" flow and gesture semantics so users can distinguish automatic private restore, scratch windows, and explicit project layouts.
+- Added a **Restore Terminal Text** privacy control in Settings -> General -> Continuity and a **Clear Restored Terminal History** Command Palette action that disables the feature and wipes saved restored text.
 
 ### Changed
 
@@ -35,10 +36,15 @@ con is still pre-release, so entries may group related beta work while the produ
 **Workspace Layout Profiles**
 
 - Fixed cross-platform layout export so repo-relative `cwd` values are written with stable slash-separated paths on Windows, macOS, and Linux.
+- Avoided capturing terminal text when exporting layout profiles, since exported profiles deliberately exclude runtime text history.
 
 **Terminal, Windows and Linux Backends**
 
 - Hardened split-pane dividers on Windows and Linux by giving the resize seam a real hit target while keeping the visible separator at one pixel. This avoids fragile overflow hit testing around terminal panes.
+
+**Terminal, macOS**
+
+- Made the embedded Ghostty initial-output restore hook fail soft at build time. If upstream Ghostty patch anchors drift, Con now builds without terminal text seeding instead of failing the entire build.
 
 ## `v0.1.0-beta.54` - 2026-05-02
 

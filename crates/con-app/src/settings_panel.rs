@@ -2222,6 +2222,11 @@ impl SettingsPanel {
         }
     }
 
+    pub fn set_restore_terminal_text(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.config.appearance.restore_terminal_text = enabled;
+        cx.notify();
+    }
+
     pub fn config(&self) -> &Config {
         &self.config
     }
@@ -2616,6 +2621,26 @@ impl SettingsPanel {
         }
 
         container
+        // Continuity
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Continuity", &theme))
+                .child(card(theme, card_opacity).child(toggle_row(
+                    "Restore Terminal Text",
+                    "Keep bounded private terminal text for restart continuity. Layout profiles never include it.",
+                    Switch::new("restore-terminal-text-toggle")
+                        .checked(self.config.appearance.restore_terminal_text)
+                        .small()
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.config.appearance.restore_terminal_text = *checked;
+                            cx.notify();
+                        })),
+                    theme,
+                ))),
+        )
         // Skills paths
         .child(
             div()
