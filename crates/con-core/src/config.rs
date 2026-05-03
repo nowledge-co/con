@@ -509,7 +509,6 @@ impl Config {
         if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
             let mut config: Config = toml::from_str(&content)?;
-            migrate_loaded_config(&mut config, &content);
             config.agent.migrate_legacy();
             Ok(config)
         } else {
@@ -526,27 +525,6 @@ impl Config {
         let content = toml::to_string_pretty(self)?;
         write_private_atomic(&path, content.as_bytes())
     }
-}
-
-fn migrate_loaded_config(config: &mut Config, content: &str) {
-    // New installs get restart continuity by default. Existing config files
-    // created before the setting existed should not silently start retaining
-    // terminal text until the user enables it from Settings.
-    if !config_declares_restore_terminal_text(content) {
-        config.appearance.restore_terminal_text = false;
-    }
-}
-
-fn config_declares_restore_terminal_text(content: &str) -> bool {
-    toml::from_str::<toml::Value>(content)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("appearance")?
-                .get("restore_terminal_text")
-                .cloned()
-        })
-        .is_some()
 }
 
 fn write_private_atomic(path: &Path, content: &[u8]) -> Result<()> {
@@ -621,10 +599,7 @@ fn replace_file(tmp_path: &Path, path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Config, DEFAULT_TERMINAL_FONT_FAMILY, SkillsConfig, migrate_loaded_config,
-        sanitize_terminal_font_family,
-    };
+    use super::{Config, DEFAULT_TERMINAL_FONT_FAMILY, SkillsConfig, sanitize_terminal_font_family};
 
     #[test]
     fn default_skill_path_uses_shared_app_path_policy() {
@@ -661,28 +636,24 @@ mod tests {
     }
 
     #[test]
-    fn loaded_legacy_configs_do_not_opt_into_restore_terminal_text() {
+    fn loaded_legacy_configs_inherit_restore_terminal_text_default() {
         let content = r#"
 [appearance]
 terminal_opacity = 0.8
 "#;
-        let mut config: Config = toml::from_str(content).unwrap();
+        let config: Config = toml::from_str(content).unwrap();
 
-        migrate_loaded_config(&mut config, content);
-
-        assert!(!config.appearance.restore_terminal_text);
+        assert!(config.appearance.restore_terminal_text);
     }
 
     #[test]
     fn loaded_configs_preserve_explicit_restore_terminal_text() {
         let content = r#"
 [appearance]
-restore_terminal_text = true
+restore_terminal_text = false
 "#;
-        let mut config: Config = toml::from_str(content).unwrap();
+        let config: Config = toml::from_str(content).unwrap();
 
-        migrate_loaded_config(&mut config, content);
-
-        assert!(config.appearance.restore_terminal_text);
+        assert!(!config.appearance.restore_terminal_text);
     }
 }
