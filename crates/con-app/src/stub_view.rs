@@ -81,10 +81,6 @@ impl GhosttyView {
         self.initial_cwd.clone()
     }
 
-    pub fn reported_current_dir(&self) -> Option<String> {
-        None
-    }
-
     pub fn is_alive(&self) -> bool {
         false
     }

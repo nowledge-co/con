@@ -219,12 +219,6 @@ impl GhosttyView {
             .or_else(|| self.initial_cwd.clone())
     }
 
-    pub fn reported_current_dir(&self) -> Option<String> {
-        self.terminal
-            .as_ref()
-            .and_then(|terminal| terminal.reported_current_dir())
-    }
-
     pub fn is_alive(&self) -> bool {
         self.terminal
             .as_ref()
@@ -316,7 +310,7 @@ impl GhosttyView {
             cx.emit(GhosttyTitleChanged(title));
         }
 
-        let cwd = terminal.reported_current_dir();
+        let cwd = terminal.current_dir();
         if cwd != self.last_cwd {
             self.last_cwd = cwd.clone();
             changed = true;
@@ -358,7 +352,7 @@ impl GhosttyView {
                 cx.emit(GhosttyTitleChanged(title));
             }
 
-            let cwd = terminal.reported_current_dir();
+            let cwd = terminal.current_dir();
             if cwd != self.last_cwd {
                 self.last_cwd = cwd.clone();
                 changed = true;
@@ -400,7 +394,7 @@ impl GhosttyView {
                 self.restored_screen_text = None;
                 self.initialized = true;
                 self.process_exit_emitted = false;
-                self.last_cwd = terminal.reported_current_dir();
+                self.last_cwd = terminal.current_dir();
                 if let Some(pending) = self.pending_write.take() {
                     terminal.write_to_pty(&pending);
                 }

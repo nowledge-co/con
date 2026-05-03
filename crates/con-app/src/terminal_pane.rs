@@ -26,10 +26,6 @@ impl TerminalPane {
         self.entity.read(cx).current_dir()
     }
 
-    pub fn reported_current_dir(&self, cx: &App) -> Option<String> {
-        self.entity.read(cx).reported_current_dir()
-    }
-
     pub fn is_alive(&self, cx: &App) -> bool {
         self.entity.read(cx).is_alive()
     }

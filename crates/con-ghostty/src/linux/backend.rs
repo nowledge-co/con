@@ -366,13 +366,6 @@ impl LinuxGhosttyTerminal {
             .and_then(LinuxPtySession::current_dir)
     }
 
-    pub fn reported_current_dir(&self) -> Option<String> {
-        self.inner
-            .lock()
-            .as_ref()
-            .and_then(LinuxPtySession::reported_current_dir)
-    }
-
     pub fn is_alive(&self) -> bool {
         self.inner
             .lock()

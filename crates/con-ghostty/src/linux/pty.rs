@@ -279,10 +279,6 @@ impl LinuxPtySession {
             .or_else(|| self.current_dir.clone())
     }
 
-    pub fn reported_current_dir(&self) -> Option<String> {
-        self.shared.screen.current_dir()
-    }
-
     pub fn is_alive(&self) -> bool {
         self.poll_child_status();
         self.shared.alive.load(Ordering::Acquire)

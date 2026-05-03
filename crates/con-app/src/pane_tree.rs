@@ -106,12 +106,6 @@ fn trim_restored_screen_text(lines: Vec<String>) -> Vec<String> {
     kept
 }
 
-fn cwd_for_surface(terminal: &TerminalPane, cx: &App) -> Option<String> {
-    terminal
-        .reported_current_dir(cx)
-        .or_else(|| terminal.current_dir(cx))
-}
-
 #[derive(Clone)]
 pub struct PaneSurfaceInfo {
     pub pane_id: PaneId,
@@ -1778,7 +1772,7 @@ impl PaneTree {
                             surface_id: surface.id,
                             title: surface.title.clone(),
                             owner: surface.owner.clone(),
-                            cwd: cwd_for_surface(&surface.terminal, cx),
+                            cwd: surface.terminal.current_dir(cx),
                             close_pane_when_last: surface.close_pane_when_last,
                             screen_text,
                         }
