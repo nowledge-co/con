@@ -142,6 +142,9 @@ jobs:
 
       - name: Build con-cli
         shell: pwsh
+        env:
+          CON_RELEASE_CHANNEL: ${{ steps.meta.outputs.channel }}
+          CON_RELEASE_VERSION: ${{ steps.meta.outputs.version }}
         run: |
           cargo build -p con-cli --release
 
