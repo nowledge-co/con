@@ -238,6 +238,10 @@ impl GhosttyView {
     }
 
     pub fn write_or_queue(&mut self, data: &[u8]) {
+        if !data.is_empty() {
+            self.clear_restored_screen_text();
+        }
+
         if let Some(terminal) = &self.terminal {
             terminal.write_to_pty(data);
         }
@@ -644,6 +648,34 @@ impl GhosttyView {
         }
 
         false
+    }
+
+    fn clear_restored_screen_text(&mut self) {
+        self.restored_screen_text = None;
+    }
+
+    fn key_down_may_write_terminal(event: &KeyDownEvent) -> bool {
+        let keystroke = &event.keystroke;
+        if keystroke.modifiers.platform {
+            return false;
+        }
+
+        if keystroke.modifiers.control
+            && keystroke.modifiers.shift
+            && !keystroke.modifiers.alt
+            && matches!(keystroke.key.as_str(), "v")
+        {
+            return true;
+        }
+
+        encode_special_key(&keystroke.key, &keystroke.modifiers, false).is_some()
+            || (keystroke.modifiers.control
+                && !keystroke.modifiers.alt
+                && !keystroke.modifiers.shift
+                && keystroke.key.len() == 1)
+            || (keystroke.modifiers.alt && !keystroke.modifiers.control)
+            || (keystroke.key.len() == 1
+                && (keystroke.modifiers.control || keystroke.modifiers.alt))
     }
 
     fn image_children(&self) -> Vec<AnyElement> {
@@ -1338,6 +1370,9 @@ impl TerminalImeView for GhosttyView {
     }
 
     fn send_ime_text(&mut self, text: &str, _cx: &mut Context<Self>) {
+        if !text.is_empty() {
+            self.clear_restored_screen_text();
+        }
         if let Some(terminal) = &self.terminal {
             terminal.send_text(text);
         }
@@ -1393,6 +1428,7 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
+                this.clear_restored_screen_text();
                 if let Some(terminal) = &this.terminal {
                     terminal.send_text("\t");
                 }
@@ -1401,6 +1437,7 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
+                this.clear_restored_screen_text();
                 if let Some(terminal) = &this.terminal {
                     terminal.send_text("\x1b[Z");
                 }
@@ -1411,6 +1448,7 @@ impl Render for GhosttyView {
                 }
             }))
             .on_action(cx.listener(|this, _: &crate::Paste, _window, cx| {
+                this.clear_restored_screen_text();
                 if let Some(terminal) = &this.terminal
                     && paste_from_clipboard(terminal, cx)
                 {
@@ -1424,6 +1462,7 @@ impl Render for GhosttyView {
                 };
                 window.focus(&this.focus_handle, cx);
                 cx.emit(GhosttyFocusChanged);
+                this.clear_restored_screen_text();
                 if let Some(terminal) = &this.terminal {
                     send_terminal_paste_payload(terminal, payload);
                     cx.notify();
@@ -1432,6 +1471,9 @@ impl Render for GhosttyView {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.focus_handle.is_focused(window) {
                     return;
+                }
+                if Self::key_down_may_write_terminal(event) {
+                    this.clear_restored_screen_text();
                 }
                 if this.handle_key_down(event, window, cx) {
                     window.prevent_default();

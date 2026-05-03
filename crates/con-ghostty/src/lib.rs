@@ -16,6 +16,24 @@
 // Suppress warnings from objc 0.2's `sel_impl!` and `class!` macros.
 #![allow(unexpected_cfgs)]
 
+pub fn restored_terminal_output_text(lines: &[String]) -> Option<String> {
+    if lines.is_empty() {
+        return None;
+    }
+
+    let mut output = String::new();
+    for line in lines {
+        for ch in line.chars() {
+            if ch == '\t' || !ch.is_control() {
+                output.push(ch);
+            }
+        }
+        output.push_str("\r\n");
+    }
+
+    (!output.trim().is_empty()).then_some(output)
+}
+
 #[cfg(target_os = "macos")]
 pub mod ffi;
 #[cfg(target_os = "macos")]

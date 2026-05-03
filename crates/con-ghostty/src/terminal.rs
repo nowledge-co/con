@@ -636,25 +636,7 @@ impl GhosttyApp {
 }
 
 fn restored_terminal_output(lines: &[String]) -> Option<CString> {
-    if lines.is_empty() {
-        return None;
-    }
-
-    let mut output = String::new();
-    for line in lines {
-        for ch in line.chars() {
-            if ch == '\t' || !ch.is_control() {
-                output.push(ch);
-            }
-        }
-        output.push_str("\r\n");
-    }
-
-    if output.trim().is_empty() {
-        return None;
-    }
-
-    CString::new(output).ok()
+    CString::new(crate::restored_terminal_output_text(lines)?).ok()
 }
 
 impl Drop for GhosttyApp {
