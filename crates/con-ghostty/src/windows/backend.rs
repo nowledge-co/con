@@ -240,7 +240,10 @@ impl WindowsGhosttyTerminal {
         None
     }
     pub fn current_dir(&self) -> Option<String> {
-        None
+        self.inner
+            .lock()
+            .as_ref()
+            .and_then(RenderSession::current_dir)
     }
     pub fn is_alive(&self) -> bool {
         match self.inner.lock().as_ref() {

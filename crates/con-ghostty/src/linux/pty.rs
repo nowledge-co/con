@@ -273,7 +273,10 @@ impl LinuxPtySession {
     }
 
     pub fn current_dir(&self) -> Option<String> {
-        self.current_dir.clone()
+        self.shared
+            .screen
+            .current_dir()
+            .or_else(|| self.current_dir.clone())
     }
 
     pub fn is_alive(&self) -> bool {

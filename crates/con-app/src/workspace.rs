@@ -251,8 +251,8 @@ use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use con_terminal::TerminalTheme;
 
 use crate::ghostty_view::{
-    GhosttyFocusChanged, GhosttyProcessExited, GhosttySplitRequested, GhosttyTitleChanged,
-    GhosttyView,
+    GhosttyCwdChanged, GhosttyFocusChanged, GhosttyProcessExited, GhosttySplitRequested,
+    GhosttyTitleChanged, GhosttyView,
 };
 use crate::{
     AddWorkspaceLayoutTabs, ClearRestoredTerminalHistory, ClearTerminal, ClosePane, CloseSurface,
@@ -9508,6 +9508,23 @@ impl ConWorkspace {
         // Re-ask the AI for an updated label/icon. The engine
         // dedupes on cache key so this is cheap if context didn't
         // actually change.
+        self.request_tab_summaries(cx);
+        cx.notify();
+    }
+
+    pub(crate) fn on_terminal_cwd_changed(
+        &mut self,
+        _entity: &Entity<GhosttyView>,
+        event: &GhosttyCwdChanged,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let _reported_cwd = event.0.as_deref();
+        // Shell integration reports cwd independently from title/output.
+        // Persist immediately so restart continuity survives a later crash or
+        // force-quit instead of depending on an unrelated tab/layout save.
+        self.sync_sidebar(cx);
+        self.save_session(cx);
         self.request_tab_summaries(cx);
         cx.notify();
     }

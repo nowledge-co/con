@@ -90,11 +90,13 @@ pub struct GhosttyProcessExited;
 pub struct GhosttyFocusChanged;
 /// Emitted when Ghostty requests a new split from this surface.
 pub struct GhosttySplitRequested(pub GhosttySplitDirection);
+pub struct GhosttyCwdChanged(pub Option<String>);
 
 impl EventEmitter<GhosttyTitleChanged> for GhosttyView {}
 impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
 impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
+impl EventEmitter<GhosttyCwdChanged> for GhosttyView {}
 
 /// GPUI view wrapping a ghostty terminal surface.
 pub struct GhosttyView {
@@ -121,6 +123,7 @@ pub struct GhosttyView {
     last_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
     last_title: Option<String>,
+    last_cwd: Option<String>,
     /// Data queued for the PTY before the surface was created.
     /// Flushed once in `ensure_initialized()` after the terminal exists.
     pending_write: Option<Vec<u8>>,
@@ -174,7 +177,7 @@ impl GhosttyView {
             app,
             terminal: None,
             focus_handle: cx.focus_handle(),
-            initial_cwd: cwd,
+            initial_cwd: cwd.clone(),
             initial_font_size: font_size,
             #[cfg(target_os = "macos")]
             host_view: None,
@@ -194,6 +197,7 @@ impl GhosttyView {
             last_bounds: None,
             scale_factor: 1.0,
             last_title: None,
+            last_cwd: cwd,
             pending_write: None,
             restored_screen_text,
             native_view_visible: Cell::new(true),
@@ -232,6 +236,10 @@ impl GhosttyView {
                 GhosttySurfaceEvent::OpenUrl(url) => {
                     cx.open_url(&url);
                 }
+                GhosttySurfaceEvent::PwdChanged(cwd) => {
+                    self.last_cwd = Some(cwd.clone());
+                    cx.emit(GhosttyCwdChanged(Some(cwd)));
+                }
             }
         }
 
@@ -248,6 +256,13 @@ impl GhosttyView {
             self.last_title = title.clone();
             changed = true;
             cx.emit(GhosttyTitleChanged(title));
+        }
+
+        let cwd = terminal.current_dir().or_else(|| self.initial_cwd.clone());
+        if cwd != self.last_cwd {
+            self.last_cwd = cwd.clone();
+            changed = true;
+            cx.emit(GhosttyCwdChanged(cwd));
         }
 
         #[cfg(target_os = "macos")]
@@ -350,6 +365,10 @@ impl GhosttyView {
             .as_ref()
             .and_then(|t| t.current_dir())
             .or_else(|| self.initial_cwd.clone())
+    }
+
+    pub fn reported_current_dir(&self) -> Option<String> {
+        self.terminal.as_ref().and_then(|t| t.current_dir())
     }
 
     pub fn is_alive(&self) -> bool {

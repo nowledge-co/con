@@ -24,11 +24,13 @@ pub struct GhosttyTitleChanged(pub Option<String>);
 pub struct GhosttyProcessExited;
 pub struct GhosttyFocusChanged;
 pub struct GhosttySplitRequested(pub GhosttySplitDirection);
+pub struct GhosttyCwdChanged(pub Option<String>);
 
 impl EventEmitter<GhosttyTitleChanged> for GhosttyView {}
 impl EventEmitter<GhosttyProcessExited> for GhosttyView {}
 impl EventEmitter<GhosttyFocusChanged> for GhosttyView {}
 impl EventEmitter<GhosttySplitRequested> for GhosttyView {}
+impl EventEmitter<GhosttyCwdChanged> for GhosttyView {}
 
 /// Placeholder terminal view. Holds the shared `GhosttyApp` handle so the
 /// field shape matches the macOS view, but never creates a real surface.
@@ -77,6 +79,10 @@ impl GhosttyView {
 
     pub fn current_dir(&self) -> Option<String> {
         self.initial_cwd.clone()
+    }
+
+    pub fn reported_current_dir(&self) -> Option<String> {
+        None
     }
 
     pub fn is_alive(&self) -> bool {

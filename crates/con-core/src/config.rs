@@ -599,7 +599,9 @@ fn replace_file(tmp_path: &Path, path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, DEFAULT_TERMINAL_FONT_FAMILY, SkillsConfig, sanitize_terminal_font_family};
+    use super::{
+        Config, DEFAULT_TERMINAL_FONT_FAMILY, SkillsConfig, sanitize_terminal_font_family,
+    };
 
     #[test]
     fn default_skill_path_uses_shared_app_path_policy() {

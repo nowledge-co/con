@@ -106,6 +106,17 @@ fn trim_restored_screen_text(lines: Vec<String>) -> Vec<String> {
     kept
 }
 
+fn cwd_for_surface(
+    terminal: &TerminalPane,
+    _screen_text: &[String],
+    _capture_screen_text: bool,
+    cx: &App,
+) -> Option<String> {
+    terminal
+        .reported_current_dir(cx)
+        .or_else(|| terminal.current_dir(cx))
+}
+
 #[derive(Clone)]
 pub struct PaneSurfaceInfo {
     pub pane_id: PaneId,
@@ -1760,23 +1771,34 @@ impl PaneTree {
                 surfaces,
                 active_surface_id,
             } => {
-                let cwd = Self::active_surface(surfaces, *active_surface_id)
-                    .and_then(|surface| surface.terminal.current_dir(cx));
                 let surface_states = surfaces
                     .iter()
-                    .map(|surface| SurfaceState {
-                        surface_id: surface.id,
-                        title: surface.title.clone(),
-                        owner: surface.owner.clone(),
-                        cwd: surface.terminal.current_dir(cx),
-                        close_pane_when_last: surface.close_pane_when_last,
-                        screen_text: restored_screen_text_for_surface(
+                    .map(|surface| {
+                        let screen_text = restored_screen_text_for_surface(
                             &surface.terminal,
                             capture_screen_text,
                             cx,
-                        ),
+                        );
+                        SurfaceState {
+                            surface_id: surface.id,
+                            title: surface.title.clone(),
+                            owner: surface.owner.clone(),
+                            cwd: cwd_for_surface(
+                                &surface.terminal,
+                                &screen_text,
+                                capture_screen_text,
+                                cx,
+                            ),
+                            close_pane_when_last: surface.close_pane_when_last,
+                            screen_text,
+                        }
                     })
-                    .collect();
+                    .collect::<Vec<_>>();
+                let cwd = surface_states
+                    .iter()
+                    .find(|surface| surface.surface_id == *active_surface_id)
+                    .or_else(|| surface_states.first())
+                    .and_then(|surface| surface.cwd.clone());
 
                 PaneLayoutState::Leaf {
                     pane_id: *id,

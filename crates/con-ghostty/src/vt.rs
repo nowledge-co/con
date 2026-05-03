@@ -80,6 +80,7 @@ pub enum GhosttyTerminalData {
     CursorVisible = 7,
     Scrollbar = 9,
     Title = 12,
+    Pwd = 13,
 }
 
 /// `GhosttyTerminalScrollbar` — current viewport position in the full
@@ -1281,6 +1282,31 @@ impl VtScreen {
         })
     }
 
+    /// Current working directory reported by shell integration (OSC 7).
+    ///
+    /// Returns `None` when the shell has not reported a cwd yet. Callers
+    /// should keep their launch cwd as a fallback for plain shells.
+    pub fn current_dir(&self) -> Option<String> {
+        let inner = self.inner.lock();
+        if inner.terminal.is_null() {
+            return None;
+        }
+        let mut pwd = GhosttyString::default();
+        let rc = unsafe {
+            ghostty_terminal_get(
+                inner.terminal,
+                GhosttyTerminalData::Pwd,
+                &mut pwd as *mut _ as *mut c_void,
+            )
+        };
+        if rc != 0 || pwd.ptr.is_null() || pwd.len == 0 {
+            return None;
+        }
+
+        let bytes = unsafe { std::slice::from_raw_parts(pwd.ptr, pwd.len) };
+        String::from_utf8(bytes.to_vec()).ok()
+    }
+
     /// Returns `true` while the alternate screen buffer is active.
     pub fn is_alternate_screen(&self) -> bool {
         let inner = self.inner.lock();
@@ -1601,5 +1627,20 @@ impl Drop for VtScreen {
                 inner.terminal = std::ptr::null_mut();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vt_screen_reports_osc7_current_dir() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        assert_eq!(screen.current_dir(), None);
+        screen.feed(b"\x1b]7;file:///tmp/con-vt-cwd\x07");
+
+        assert_eq!(screen.current_dir().as_deref(), Some("/tmp/con-vt-cwd"));
     }
 }

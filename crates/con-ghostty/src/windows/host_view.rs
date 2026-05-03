@@ -646,6 +646,10 @@ impl RenderSession {
         snapshot_to_lines(&self.vt.snapshot(), max_lines)
     }
 
+    pub fn current_dir(&self) -> Option<String> {
+        self.vt.current_dir()
+    }
+
     pub fn read_recent_lines(&self, max_lines: usize) -> Vec<String> {
         self.transcript.lock().recent_lines(max_lines)
     }
