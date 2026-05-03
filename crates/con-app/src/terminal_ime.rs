@@ -9,7 +9,7 @@ pub(crate) trait TerminalImeView: Sized + 'static {
     fn set_ime_state(&mut self, marked_text: Option<String>, selected_range: Option<Range<usize>>);
     fn clear_ime_state(&mut self);
     fn send_ime_text(&mut self, text: &str, cx: &mut Context<Self>);
-    fn prepare_ime_marked_text(&mut self, _cx: &mut Context<Self>) {}
+    fn prepare_ime_marked_text(&mut self, _marked_text: &str, _cx: &mut Context<Self>) {}
     fn ime_cursor_bounds(&self) -> Option<Bounds<Pixels>>;
 }
 
@@ -117,7 +117,7 @@ impl<V: TerminalImeView> InputHandler for TerminalImeInputHandler<V> {
         cx: &mut App,
     ) {
         let _ = self.view.update(cx, |view, cx| {
-            view.prepare_ime_marked_text(cx);
+            view.prepare_ime_marked_text(new_text, cx);
             view.set_ime_state(
                 (!new_text.is_empty()).then(|| new_text.to_string()),
                 selected_range_for_text(new_selected_range, new_text),

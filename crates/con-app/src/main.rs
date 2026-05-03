@@ -763,11 +763,26 @@ fn live_control_endpoint_exists() -> bool {
 
 #[cfg(windows)]
 fn live_control_endpoint_exists() -> bool {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(con_core::control_socket_path())
-        .is_ok()
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::System::Pipes::WaitNamedPipeW;
+    use windows::core::PCWSTR;
+
+    let path = con_core::control_socket_path();
+    let pipe_name: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    if unsafe { WaitNamedPipeW(PCWSTR(pipe_name.as_ptr()), 75).as_bool() } {
+        true
+    } else {
+        log::debug!(
+            "con control endpoint probe did not find a live pipe at {} within 75ms",
+            path.display()
+        );
+        false
+    }
 }
 
 #[cfg(not(any(unix, windows)))]

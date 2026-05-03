@@ -30,7 +30,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **Startup**
 
-- Bounded the Unix control-endpoint probe used during second-process startup so a stale or wedged socket cannot hang Con while deciding whether to restore the saved workspace or open a fresh window.
+- Bounded the Unix and Windows control-endpoint probes used during second-process startup so a stale or wedged socket/pipe cannot hang Con while deciding whether to restore the saved workspace or open a fresh window.
 - When `con <path>` cannot open the requested workspace profile, Con now opens a fresh shell with a visible terminal-layer error message instead of silently falling back to unrelated private restore state.
 
 **Workspace Layout Profiles**
@@ -43,6 +43,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Terminal, Windows and Linux Backends**
 
 - Hardened split-pane dividers on Windows and Linux by giving the resize seam a real hit target while keeping the visible separator at one pixel. This avoids fragile overflow hit testing around terminal panes.
+- Preserved restored terminal text on Linux when the IME system only prepares composition without actual marked text.
 
 **Terminal, macOS**
 

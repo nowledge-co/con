@@ -829,9 +829,11 @@ impl TerminalImeView for GhosttyView {
         }
     }
 
-    fn prepare_ime_marked_text(&mut self, cx: &mut Context<Self>) {
+    fn prepare_ime_marked_text(&mut self, marked_text: &str, cx: &mut Context<Self>) {
         let _ = self.ensure_session(cx);
-        self.clear_restored_screen_text();
+        if !marked_text.is_empty() {
+            self.clear_restored_screen_text();
+        }
     }
 
     fn ime_cursor_bounds(&self) -> Option<Bounds<Pixels>> {

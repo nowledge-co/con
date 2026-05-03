@@ -74,6 +74,7 @@ windows = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Diagnostics_Debug",  # AddVectoredExceptionHandler
     "Win32_System_Kernel",             # EXCEPTION_POINTERS definition
+    "Win32_System_Pipes",              # WaitNamedPipeW
     "Win32_Graphics_Dwm",              # DwmSetWindowAttribute — Mica/Acrylic backdrop
 ] }
 # Used only by the Windows `GhosttyView` to wrap D3D11-readback BGRA into
