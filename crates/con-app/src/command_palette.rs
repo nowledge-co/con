@@ -69,6 +69,24 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         category: "Terminal",
     },
     PaletteAction {
+        id: "export-workspace-layout",
+        label: "Export Current Layout",
+        shortcut: "",
+        category: "Workspace",
+    },
+    PaletteAction {
+        id: "add-workspace-layout-tabs",
+        label: "Add Layout Profile Tabs",
+        shortcut: "",
+        category: "Workspace",
+    },
+    PaletteAction {
+        id: "open-workspace-layout-window",
+        label: "Open Layout Profile in New Window",
+        shortcut: "",
+        category: "Workspace",
+    },
+    PaletteAction {
         id: "next-tab",
         label: "Next Tab",
         shortcut: "ctrl-tab",

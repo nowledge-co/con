@@ -255,10 +255,11 @@ use crate::ghostty_view::{
     GhosttyView,
 };
 use crate::{
-    ClearTerminal, ClosePane, CloseSurface, CloseTab, CycleInputMode, FocusInput, NewSurface,
-    NewSurfaceSplitDown, NewSurfaceSplitRight, NewTab, NextSurface, NextTab, PreviousSurface,
-    PreviousTab, Quit, RenameSurface, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5,
-    SelectTab6, SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp,
+    AddWorkspaceLayoutTabs, ClearTerminal, ClosePane, CloseSurface, CloseTab, CycleInputMode,
+    ExportWorkspaceLayout, FocusInput, NewSurface, NewSurfaceSplitDown, NewSurfaceSplitRight,
+    NewTab, NextSurface, NextTab, OpenWorkspaceLayoutWindow, PreviousSurface, PreviousTab, Quit,
+    RenameSurface, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6,
+    SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp,
     ToggleAgentPanel, TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs,
 };
 use con_agent::{
@@ -274,8 +275,9 @@ use con_core::control::{
 use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
 use con_core::session::{
     AgentModelOverrideState, AgentRoutingState, GlobalHistoryState, PaneLayoutState,
-    PaneSplitDirection, Session,
+    PaneSplitDirection, Session, TabState,
 };
+use con_core::workspace_layout::WorkspaceLayout;
 use con_core::{
     SuggestionContext, SuggestionEngine, TabIconKind, TabSummary, TabSummaryEngine,
     TabSummaryRequest,
@@ -636,6 +638,16 @@ fn make_ghostty_terminal(
     let pane = TerminalPane::new(view);
     subscribe_terminal_pane(&pane, window, cx);
     pane
+}
+
+fn find_git_worktree_root(start: &std::path::Path) -> Option<std::path::PathBuf> {
+    start
+        .ancestors()
+        .find(|candidate| {
+            let marker = candidate.join(".git");
+            marker.is_dir() || marker.is_file()
+        })
+        .map(std::path::Path::to_path_buf)
 }
 
 impl ConWorkspace {
@@ -4818,6 +4830,15 @@ impl ConWorkspace {
             "new-tab" => {
                 self.new_tab(&NewTab, window, cx);
             }
+            "export-workspace-layout" => {
+                self.export_workspace_layout(&ExportWorkspaceLayout, window, cx);
+            }
+            "add-workspace-layout-tabs" => {
+                self.add_workspace_layout_tabs(&AddWorkspaceLayoutTabs, window, cx);
+            }
+            "open-workspace-layout-window" => {
+                self.open_workspace_layout_window(&OpenWorkspaceLayoutWindow, window, cx);
+            }
             "next-tab" => {
                 self.next_tab(&NextTab, window, cx);
             }
@@ -6725,6 +6746,281 @@ impl ConWorkspace {
 
     fn active_pane_layout(&self, cx: &App) -> PaneLayoutState {
         self.tabs[self.active_tab].pane_tree.to_state(cx)
+    }
+
+    fn layout_profile_export_root(&self, cx: &App) -> std::path::PathBuf {
+        self.active_terminal()
+            .current_dir(cx)
+            .map(std::path::PathBuf::from)
+            .and_then(|path| {
+                let path = std::fs::canonicalize(&path).unwrap_or(path);
+                find_git_worktree_root(&path).or(Some(path))
+            })
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+    }
+
+    fn show_layout_profile_error(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        message: &str,
+        err: impl std::fmt::Display,
+    ) {
+        let detail = err.to_string();
+        let _ = window.prompt(PromptLevel::Critical, message, Some(&detail), &["OK"], cx);
+    }
+
+    fn show_layout_profile_info(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        message: &str,
+        detail: String,
+    ) {
+        let _ = window.prompt(PromptLevel::Info, message, Some(&detail), &["OK"], cx);
+    }
+
+    fn save_current_layout_profile_to(
+        &mut self,
+        path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let root = crate::workspace_layout_root_for_file(&path);
+        let session = self.snapshot_session(cx);
+        let layout = WorkspaceLayout::from_session(&session, &root);
+
+        if let Err(err) = layout.save(&path) {
+            Self::show_layout_profile_error(window, cx, "Could not export layout profile", err);
+            return;
+        }
+
+        let detail = format!(
+            "{}\n\nThe file contains layout intent only: tabs, panes, surfaces, cwd, and agent defaults. It does not include terminal text, command history, conversations, credentials, or commands to run.",
+            path.display()
+        );
+        Self::show_layout_profile_info(window, cx, "Layout profile exported", detail);
+        cx.reveal_path(&path);
+    }
+
+    fn export_workspace_layout(
+        &mut self,
+        _: &ExportWorkspaceLayout,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let root = self.layout_profile_export_root(cx);
+        let export_dir = root.join(".con");
+        if let Err(err) = std::fs::create_dir_all(&export_dir) {
+            Self::show_layout_profile_error(window, cx, "Could not prepare .con directory", err);
+            return;
+        }
+
+        let save_path = cx.prompt_for_new_path(&export_dir, Some("workspace.toml"));
+        cx.spawn_in(window, async move |this, window| {
+            let path = save_path.await.ok()?.ok()??;
+            window
+                .update(|window, cx| {
+                    let _ = this.update(cx, |workspace, cx| {
+                        workspace.save_current_layout_profile_to(path, window, cx);
+                    });
+                })
+                .ok()?;
+            Some(())
+        })
+        .detach();
+    }
+
+    fn tab_from_state(
+        &mut self,
+        tab_state: &TabState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Tab {
+        let ghostty_app = self.ghostty_app.clone();
+        let font_size = self.font_size;
+        let pane_tree = if let Some(layout) = &tab_state.layout {
+            let mut restore_terminal =
+                |restore_cwd: Option<&str>, restored_screen_text: Option<&[String]>| {
+                    make_ghostty_terminal(
+                        &ghostty_app,
+                        restore_cwd,
+                        restored_screen_text,
+                        font_size,
+                        window,
+                        cx,
+                    )
+                };
+            PaneTree::from_state(layout, tab_state.focused_pane_id, &mut restore_terminal)
+        } else {
+            PaneTree::new(self.create_terminal(tab_state.cwd.as_deref(), window, cx))
+        };
+        let summary_id = self.next_tab_summary_id;
+        self.next_tab_summary_id += 1;
+
+        Tab {
+            pane_tree,
+            title: if tab_state.title.trim().is_empty() {
+                format!("Terminal {}", summary_id + 1)
+            } else {
+                tab_state.title.clone()
+            },
+            user_label: tab_state.user_label.clone(),
+            ai_label: None,
+            ai_icon: None,
+            summary_id,
+            needs_attention: false,
+            session: AgentSession::new(),
+            agent_routing: if tab_state.agent_routing.is_empty() {
+                Self::default_agent_routing(self.harness.config())
+            } else {
+                tab_state.agent_routing.clone()
+            },
+            panel_state: PanelState::new(),
+            runtime_trackers: RefCell::new(HashMap::new()),
+            runtime_cache: RefCell::new(HashMap::new()),
+            shell_history: Self::restore_shell_history(tab_state),
+        }
+    }
+
+    fn append_workspace_layout_session(
+        &mut self,
+        session: Session,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if session.tabs.is_empty() {
+            return;
+        }
+
+        let old_active = self.active_tab;
+        let first_new = self.tabs.len();
+        let imported_active = session.active_tab.min(session.tabs.len().saturating_sub(1));
+
+        for tab_state in &session.tabs {
+            let tab = self.tab_from_state(tab_state, window, cx);
+            self.tabs.push(tab);
+        }
+
+        if self.sync_tab_strip_motion() {
+            #[cfg(target_os = "macos")]
+            self.arm_top_chrome_snap_guard(cx);
+        }
+
+        self.active_tab = first_new + imported_active;
+        let incoming = std::mem::replace(
+            &mut self.tabs[self.active_tab].panel_state,
+            PanelState::new(),
+        );
+        let outgoing = self
+            .agent_panel
+            .update(cx, |panel, cx| panel.swap_state(incoming, cx));
+        if old_active < self.tabs.len() {
+            self.tabs[old_active].panel_state = outgoing;
+            for terminal in self.tabs[old_active].pane_tree.all_surface_terminals() {
+                terminal.set_focus_state(false, cx);
+            }
+        }
+
+        for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
+            terminal.ensure_surface(window, cx);
+        }
+        self.sync_active_tab_native_view_visibility(cx);
+        self.tabs[self.active_tab]
+            .pane_tree
+            .focused_terminal()
+            .focus(window, cx);
+        self.sync_active_terminal_focus_states(cx);
+        self.sync_sidebar(cx);
+        self.request_tab_summaries(cx);
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    fn add_workspace_layout_tabs_from_path(
+        &mut self,
+        path: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match crate::session_from_workspace_layout_file(&path) {
+            Ok(session) => {
+                let count = session.tabs.len();
+                self.append_workspace_layout_session(session, window, cx);
+                Self::show_layout_profile_info(
+                    window,
+                    cx,
+                    "Layout profile added",
+                    format!(
+                        "Added {count} tab{} from {}.",
+                        if count == 1 { "" } else { "s" },
+                        path.display()
+                    ),
+                );
+            }
+            Err(err) => {
+                Self::show_layout_profile_error(window, cx, "Could not open layout profile", err);
+            }
+        }
+    }
+
+    fn prompt_for_workspace_layout_path(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        open_in_new_window: bool,
+    ) {
+        let paths = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Choose a Con workspace layout".into()),
+        });
+
+        cx.spawn_in(window, async move |this, window| {
+            let path = paths.await.ok()?.ok()??.into_iter().next()?;
+            window
+                .update(|window, cx| {
+                    let _ = this.update(cx, |workspace, cx| {
+                        if open_in_new_window {
+                            match crate::session_from_workspace_layout_file(&path) {
+                                Ok(session) => {
+                                    let config = Config::load().unwrap_or_default();
+                                    crate::open_con_window(config, session, false, cx);
+                                }
+                                Err(err) => Self::show_layout_profile_error(
+                                    window,
+                                    cx,
+                                    "Could not open layout profile",
+                                    err,
+                                ),
+                            }
+                        } else {
+                            workspace.add_workspace_layout_tabs_from_path(path, window, cx);
+                        }
+                    });
+                })
+                .ok()?;
+            Some(())
+        })
+        .detach();
+    }
+
+    fn add_workspace_layout_tabs(
+        &mut self,
+        _: &AddWorkspaceLayoutTabs,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.prompt_for_workspace_layout_path(window, cx, false);
+    }
+
+    fn open_workspace_layout_window(
+        &mut self,
+        _: &OpenWorkspaceLayoutWindow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.prompt_for_workspace_layout_path(window, cx, true);
     }
 
     fn release_active_terminal_mouse_selection(&self, cx: &App) {
@@ -10412,6 +10708,9 @@ impl Render for ConWorkspace {
                 .on_action(cx.listener(Self::split_left))
                 .on_action(cx.listener(Self::split_up))
                 .on_action(cx.listener(Self::clear_terminal))
+                .on_action(cx.listener(Self::export_workspace_layout))
+                .on_action(cx.listener(Self::add_workspace_layout_tabs))
+                .on_action(cx.listener(Self::open_workspace_layout_window))
                 .on_action(cx.listener(Self::new_surface))
                 .on_action(cx.listener(Self::new_surface_split_right))
                 .on_action(cx.listener(Self::new_surface_split_down))

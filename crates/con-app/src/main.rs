@@ -70,6 +70,7 @@ mod workspace;
 
 use con_core::config::KeybindingConfig;
 use con_core::session::{GlobalHistoryState, Session};
+use con_core::workspace_layout::WorkspaceLayout;
 use gpui::*;
 use gpui_component::ActiveTheme;
 #[cfg(target_os = "macos")]
@@ -108,6 +109,9 @@ actions!(
         SplitLeft,
         SplitUp,
         ClearTerminal,
+        ExportWorkspaceLayout,
+        AddWorkspaceLayoutTabs,
+        OpenWorkspaceLayoutWindow,
         NewSurface,
         NewSurfaceSplitRight,
         NewSurfaceSplitDown,
@@ -459,7 +463,12 @@ fn default_window_decorations() -> Option<WindowDecorations> {
     }
 }
 
-fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bool, cx: &mut App) {
+pub(crate) fn open_con_window(
+    config: con_core::Config,
+    session: Session,
+    exit_on_error: bool,
+    cx: &mut App,
+) {
     let window_options = default_window_options(&config, cx);
     cx.spawn(async move |cx| {
         if let Err(err) = cx.open_window(window_options, |window, cx| {
@@ -520,6 +529,10 @@ fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bo
 }
 
 fn fresh_window_session_with_history() -> Session {
+    fresh_window_session_with_history_for_cwd(None)
+}
+
+fn fresh_window_session_with_history_for_cwd(cwd: Option<std::path::PathBuf>) -> Session {
     let persisted = Session::load().unwrap_or_default();
     let persisted_history = GlobalHistoryState::load().unwrap_or_default();
     let mut session = Session::default();
@@ -558,10 +571,61 @@ fn fresh_window_session_with_history() -> Session {
             .collect()
     };
 
+    if let Some(cwd) = cwd {
+        let cwd = cwd.to_string_lossy().to_string();
+        if let Some(tab) = session.tabs.first_mut() {
+            tab.cwd = Some(cwd.clone());
+            if let Some(pane) = tab.panes.first_mut() {
+                pane.cwd = Some(cwd);
+            }
+        }
+    }
+
     session
 }
 
+fn startup_path_argument() -> Option<std::path::PathBuf> {
+    std::env::args_os().skip(1).find_map(|arg| {
+        let text = arg.to_string_lossy();
+        (!text.starts_with('-')).then(|| std::path::PathBuf::from(arg))
+    })
+}
+
+fn startup_session_from_path(path: std::path::PathBuf) -> anyhow::Result<Session> {
+    let path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+
+    if path.is_file() {
+        return session_from_workspace_layout_file(path);
+    }
+
+    if path.is_dir() {
+        let layout_path = WorkspaceLayout::default_path_for_root(&path);
+        if layout_path.exists() {
+            return session_from_workspace_layout_file(layout_path);
+        }
+        return Ok(fresh_window_session_with_history_for_cwd(Some(path)));
+    }
+
+    anyhow::bail!("workspace path does not exist: {}", path.display())
+}
+
 fn startup_session() -> Session {
+    if let Some(path) = startup_path_argument() {
+        match startup_session_from_path(path.clone()) {
+            Ok(session) => {
+                log::info!("opening workspace path {}", path.display());
+                return session;
+            }
+            Err(err) => {
+                log::warn!("failed to open workspace path {}: {err}", path.display());
+            }
+        }
+    }
+
     if live_control_endpoint_exists() {
         log::info!(
             "existing con control endpoint detected; opening a fresh window session with shared history"
@@ -570,6 +634,40 @@ fn startup_session() -> Session {
     } else {
         Session::load().unwrap_or_default()
     }
+}
+
+pub(crate) fn workspace_layout_root_for_file(path: &std::path::Path) -> std::path::PathBuf {
+    let Some(parent) = path.parent() else {
+        return std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    };
+
+    if parent.file_name().and_then(|name| name.to_str()) == Some(".con")
+        && let Some(project_root) = parent.parent()
+    {
+        return project_root.to_path_buf();
+    }
+
+    parent.to_path_buf()
+}
+
+pub(crate) fn session_from_workspace_layout_file(
+    path: impl AsRef<std::path::Path>,
+) -> anyhow::Result<Session> {
+    let path = path.as_ref();
+    let layout = WorkspaceLayout::load(path)?;
+    let profile_root = workspace_layout_root_for_file(path);
+    let layout_root = if layout.root.trim().is_empty() || layout.root == "." {
+        profile_root
+    } else {
+        let root = std::path::Path::new(&layout.root);
+        if root.is_absolute() {
+            root.to_path_buf()
+        } else {
+            profile_root.join(root)
+        }
+    };
+    let history = GlobalHistoryState::load().unwrap_or_default();
+    layout.to_session(layout_root, Some(&history))
 }
 
 #[cfg(unix)]
@@ -1330,6 +1428,14 @@ fn main() {
                 items: vec![
                     MenuItem::action("New Window", NewWindow),
                     MenuItem::action("New Tab", NewTab),
+                    MenuItem::separator(),
+                    MenuItem::action("Export Current Layout…", ExportWorkspaceLayout),
+                    MenuItem::action("Add Layout Profile Tabs…", AddWorkspaceLayoutTabs),
+                    MenuItem::action(
+                        "Open Layout Profile in New Window…",
+                        OpenWorkspaceLayoutWindow,
+                    ),
+                    MenuItem::separator(),
                     MenuItem::action("Close Tab", CloseTab),
                     MenuItem::action("Close Pane", ClosePane),
                     MenuItem::action("Toggle Pane Zoom", TogglePaneZoom),
