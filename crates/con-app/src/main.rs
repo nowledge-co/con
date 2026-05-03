@@ -591,9 +591,12 @@ fn startup_path_argument() -> Option<std::path::PathBuf> {
     })
 }
 
-fn startup_session_from_path(path: std::path::PathBuf) -> anyhow::Result<Session> {
+pub(crate) fn session_from_workspace_layout_path(
+    path: impl AsRef<std::path::Path>,
+) -> anyhow::Result<Session> {
+    let path = path.as_ref();
     let path = if path.is_absolute() {
-        path
+        path.to_path_buf()
     } else {
         std::env::current_dir()?.join(path)
     };
@@ -615,7 +618,7 @@ fn startup_session_from_path(path: std::path::PathBuf) -> anyhow::Result<Session
 
 fn startup_session() -> Session {
     if let Some(path) = startup_path_argument() {
-        match startup_session_from_path(path.clone()) {
+        match session_from_workspace_layout_path(&path) {
             Ok(session) => {
                 log::info!("opening workspace path {}", path.display());
                 return session;

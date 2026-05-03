@@ -147,8 +147,11 @@ Production target:
 
 Current mitigation:
 
-- the second process detects the live endpoint and opens a fresh-history
-  session instead of cloning the last restored session
+- the second process detects the live endpoint for its build identity and opens
+  a fresh-history session instead of cloning the last restored session
+- debug builds use a separate default endpoint (`/tmp/con-debug.sock` on Unix,
+  `\\.\pipe\con-debug` on Windows), so a development build can run next to an
+  installed release/beta without suppressing the dev build's private restore
 
 The mitigation is safe, but not final. Single-instance forwarding is the
 production target.

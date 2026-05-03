@@ -13,7 +13,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Added the first restorable-workspace implementation slice. Private session layout now round-trips every pane-local surface, including surface id, title, owner, cwd, active surface, and close-pane-when-last policy, instead of restoring only the active surface in each pane.
 - Added the first private screen-text continuity slice. Con now snapshots bounded recent terminal text per pane-local surface and seeds it back through the terminal parser before the shell starts on macOS, Windows, and Linux, so restored text lives in terminal content instead of a UI overlay. This does not replay commands or export terminal text into workspace layouts.
 - Added a typed, validated, layout-only `.con/workspace.toml` schema for future Con-generated export/import flows. The schema covers tabs, panes, surfaces, split geometry, cwd, and optional agent defaults, but deliberately excludes commands, conversations, history, scrollback, credentials, and trust decisions.
-- Added the first layout-profile workflow. Use Command Palette or the File menu to export the current window as a `.con/workspace.toml`, add a layout profile as tabs in the current window, or open a layout profile in a new window.
+- Added the first layout-profile workflow. Use Command Palette or the File menu to export the current window as a `.con/workspace.toml`, add a project folder/profile as tabs in the current window, or open a project folder/profile in a new window.
 - Added project layout startup for explicit paths: `con <project-folder>` opens `<project-folder>/.con/workspace.toml` when it exists, while `con <workspace.toml>` opens that profile directly. Plain `con` still prefers private session restore.
 - Documented the production restore model: local continuity and project-local memory come first, exported layouts are generated from user-tuned workspaces, and command/task files remain a separate future workflow.
 
@@ -22,6 +22,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Startup**
 
 - When a second Con process sees an already-live control endpoint, it now opens a fresh window session with shared history instead of cloning the last restored layout and agent conversation again. Full single-instance forwarding remains a follow-up under the app-state workspace model.
+- Debug builds now use an isolated default control endpoint (`/tmp/con-debug.sock` on Unix and `\\.\pipe\con-debug` on Windows). This lets `cargo run -p con` coexist with an installed Con without suppressing the dev build's private workspace restore.
 
 ### Fixed
 

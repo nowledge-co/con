@@ -77,8 +77,11 @@ con ~/dev/app/.con/workspace.toml
 
 Inside the app, use:
 
-- **Add Layout Profile Tabs** to add the profile's tabs to the current window.
-- **Open Layout Profile in New Window** to open the profile separately.
+- **Add Layout Profile Tabs** to choose a project folder or profile file and add
+  its tabs to the current window. If the folder has no profile, Con adds one
+  fresh tab rooted there.
+- **Open Layout Profile in New Window** to choose a project folder or profile
+  file and open it separately.
 
 Plain `con` without a path still favors private session restore. That keeps
 normal relaunch behavior predictable: quitting, upgrading, or rebooting should

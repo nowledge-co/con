@@ -6942,7 +6942,7 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match crate::session_from_workspace_layout_file(&path) {
+        match crate::session_from_workspace_layout_path(&path) {
             Ok(session) => {
                 let count = session.tabs.len();
                 self.append_workspace_layout_session(session, window, cx);
@@ -6971,9 +6971,9 @@ impl ConWorkspace {
     ) {
         let paths = cx.prompt_for_paths(PathPromptOptions {
             files: true,
-            directories: false,
+            directories: true,
             multiple: false,
-            prompt: Some("Choose a Con workspace layout".into()),
+            prompt: Some("Choose a project folder or Con workspace layout".into()),
         });
 
         cx.spawn_in(window, async move |this, window| {
@@ -6982,7 +6982,7 @@ impl ConWorkspace {
                 .update(|window, cx| {
                     let _ = this.update(cx, |workspace, cx| {
                         if open_in_new_window {
-                            match crate::session_from_workspace_layout_file(&path) {
+                            match crate::session_from_workspace_layout_path(&path) {
                                 Ok(session) => {
                                     let config = Config::load().unwrap_or_default();
                                     crate::open_con_window(config, session, false, cx);
