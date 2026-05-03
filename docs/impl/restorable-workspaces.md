@@ -50,6 +50,30 @@ This slice is production-safe because it improves private restore fidelity and
 introduces only a layout-only schema. It does not introduce command replay or a
 repo trust model.
 
+## Slice 2 Product Bar
+
+The layout-profile workflow is mergeable only if it feels like a flagship
+continuity feature rather than a config-file feature.
+
+Required qualities:
+
+- **Invisible by default.** Ordinary launch, quit, upgrade, and reboot flows
+  restore private state without asking users to understand a file.
+- **Explicit when shared.** A repo file appears only after the user exports or
+  opens a project/profile intentionally.
+- **Generated, not hand-authored.** Users design the workspace in Con first;
+  `.con/workspace.toml` is the reviewable artifact Con writes from that design.
+- **Stable in git.** Exported paths are repo-relative and slash-separated on
+  every OS, so Windows/macOS/Linux do not churn diffs.
+- **No trust surprise.** Layout profiles never run commands, replay history,
+  restore conversations, or embed terminal text.
+- **One mental model.** The same path resolver powers `con <project-folder>`,
+  `con <workspace.toml>`, Add Layout Profile Tabs, and Open Layout Profile in
+  New Window.
+- **Scratch remains scratch.** New Tab and New Window do not silently explode
+  into project layouts; profile import is a named action until project memory
+  and single-instance forwarding make stronger defaults safe.
+
 ## First Principles
 
 1. **A terminal session is not a document.**

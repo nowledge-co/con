@@ -16,6 +16,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Added the first layout-profile workflow. Use Command Palette or the File menu to export the current window as a `.con/workspace.toml`, add a project folder/profile as tabs in the current window, or open a project folder/profile in a new window.
 - Added project layout startup for explicit paths: `con <project-folder>` opens `<project-folder>/.con/workspace.toml` when it exists, while `con <workspace.toml>` opens that profile directly. Plain `con` still prefers private session restore.
 - Documented the production restore model: local continuity and project-local memory come first, exported layouts are generated from user-tuned workspaces, and command/task files remain a separate future workflow.
+- Documented the layout-profile "aha" flow and gesture semantics so users can distinguish automatic private restore, scratch windows, and explicit project layouts.
 
 ### Changed
 
@@ -29,6 +30,10 @@ con is still pre-release, so entries may group related beta work while the produ
 **Startup**
 
 - Bounded the Unix control-endpoint probe used during second-process startup so a stale or wedged socket cannot hang Con while deciding whether to restore the saved workspace or open a fresh window.
+
+**Workspace Layout Profiles**
+
+- Fixed cross-platform layout export so repo-relative `cwd` values are written with stable slash-separated paths on Windows, macOS, and Linux.
 
 **Terminal, Windows and Linux Backends**
 

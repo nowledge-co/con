@@ -1,12 +1,14 @@
 # Workspace Layout Profiles
 
-Con restores your ordinary workspace automatically. You should not need a guide
-for that. After rebooting, upgrading, or relaunching Con, your windows, tabs,
-panes, surfaces, working directories, and private terminal text history should
-come back as continuity.
+Con has two workspace promises.
 
-This guide is for the explicit workflow: saving or opening a reusable layout
-profile for a project.
+The first is invisible: after rebooting, upgrading, or relaunching Con, your
+ordinary workspace should come back. Windows, tabs, panes, surfaces, working
+directories, and private terminal text history are continuity. You should not
+need a guide for that.
+
+The second is deliberate: when a workspace shape is worth keeping for a project,
+you can save it as a layout profile. This guide is for that explicit workflow.
 
 ## What A Layout Profile Is
 
@@ -30,7 +32,19 @@ It does not contain private runtime state:
 - no trust decisions
 
 Think of it as a profile for recreating a tuned workspace, not as a terminal
-session backup.
+session backup. It is safe to review because it describes shape, not activity.
+
+## The Aha Flow
+
+1. Tune the workspace visually until it feels right.
+2. Name the tabs, panes, and surfaces so the intent is obvious.
+3. Export the layout.
+4. Review the generated `.con/workspace.toml`.
+5. Reopen the project later with `con ~/dev/app`, or commit the file so a
+   teammate can get the same starting shape.
+
+The profile captures the workspace you designed. It does not capture what you
+typed, what the agent said, or what processes were running.
 
 ## Export A Profile
 
@@ -57,6 +71,14 @@ Project: ~/dev/app
 
 The exported file should recreate that shape, not the processes that happened
 to be running inside it.
+
+Path values are written as repo-relative slash paths, even on Windows:
+
+```toml
+cwd = "crates/server"
+```
+
+That keeps the file stable in git diffs and usable across machines.
 
 ## Open A Project Profile
 
@@ -126,6 +148,20 @@ Use these rules:
 - **New Window** stays scratch by default. A global "default new-window layout"
   setting is intentionally deferred because it can fight with private restore
   and project memory.
+
+## Gesture Semantics
+
+| Gesture | Result |
+| --- | --- |
+| Launch Con normally | Restore the private workspace you left behind. |
+| Cmd+N / New Window | Open one clean scratch shell with shared history. |
+| `con ~/dev/app` | Open the project's profile if present; otherwise one shell rooted there. |
+| `con ~/dev/app/.con/workspace.toml` | Open that profile directly. |
+| Add Layout Profile Tabs | Add the selected project/profile into the current window. |
+| Open Layout Profile in New Window | Open the selected project/profile separately. |
+
+This keeps every entry point legible: restore is automatic, scratch is fresh,
+and project layout is explicit.
 
 ## Process Continuity
 

@@ -737,7 +737,18 @@ fn layout_cwd(cwd: Option<&str>, root: &Path) -> Option<String> {
     {
         return Some(layout_path_string(relative));
     }
-    Some(cwd.replace('\\', "/"))
+
+    // Workspace layout files are meant to be reviewed and committed, so their
+    // paths must be stable across platforms. Windows' `Path::strip_prefix` can
+    // fail for Unix-looking test paths or mixed separators; keep a string-level
+    // fallback so exports still produce repo-relative slash paths.
+    let normalized_cwd = normalize_layout_path(cwd);
+    let normalized_root = normalize_layout_path(&root.to_string_lossy());
+    if let Some(relative) = strip_layout_root_prefix(&normalized_cwd, &normalized_root) {
+        return Some(relative);
+    }
+
+    Some(normalized_cwd)
 }
 
 fn resolved_layout_cwd(cwd: Option<&str>, root: &Path) -> Option<String> {
@@ -761,7 +772,55 @@ fn layout_path_string(path: &Path) -> String {
     if path.as_os_str().is_empty() {
         return ".".to_string();
     }
-    path.to_string_lossy().replace('\\', "/")
+    normalize_layout_path(&path.to_string_lossy())
+}
+
+fn normalize_layout_path(path: &str) -> String {
+    path.trim().replace('\\', "/")
+}
+
+fn trim_layout_trailing_slashes(path: &str) -> &str {
+    let mut end = path.len();
+    while end > 1 && path[..end].ends_with('/') && !path[..end].ends_with(":/") {
+        end -= 1;
+    }
+    &path[..end]
+}
+
+fn strip_layout_root_prefix(path: &str, root: &str) -> Option<String> {
+    let path = trim_layout_trailing_slashes(path);
+    let root = trim_layout_trailing_slashes(root);
+    if root.is_empty() || root == "." {
+        return None;
+    }
+
+    let same_path = if cfg!(windows) {
+        path.eq_ignore_ascii_case(root)
+    } else {
+        path == root
+    };
+    if same_path {
+        return Some(".".to_string());
+    }
+
+    let root_prefix = if root.ends_with('/') {
+        root.to_string()
+    } else {
+        format!("{root}/")
+    };
+    let has_prefix = if cfg!(windows) {
+        path.len() > root_prefix.len()
+            && path
+                .get(..root_prefix.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(&root_prefix))
+    } else {
+        path.starts_with(&root_prefix)
+    };
+    if has_prefix {
+        return path.get(root_prefix.len()..).map(ToOwned::to_owned);
+    }
+
+    None
 }
 
 fn slug_id(label: &str, fallback: &str) -> String {
@@ -840,6 +899,10 @@ fn validate_layout_node(
 mod tests {
     use super::*;
 
+    fn expected_resolved_cwd(root: &str, relative: &str) -> String {
+        Path::new(root).join(relative).to_string_lossy().to_string()
+    }
+
     #[test]
     fn workspace_layout_round_trips_as_toml() {
         let layout = WorkspaceLayout {
@@ -908,6 +971,34 @@ mod tests {
 
         let decoded = WorkspaceLayout::from_toml_str(&toml).unwrap();
         assert_eq!(decoded, layout);
+    }
+
+    #[test]
+    fn workspace_layout_exports_git_stable_slash_paths() {
+        assert_eq!(
+            layout_cwd(
+                Some("/tmp/project/crates/server"),
+                Path::new("/tmp/project")
+            )
+            .as_deref(),
+            Some("crates/server")
+        );
+        assert_eq!(
+            layout_cwd(
+                Some(r"C:\Users\me\project\crates\server"),
+                Path::new(r"C:\Users\me\project")
+            )
+            .as_deref(),
+            Some("crates/server")
+        );
+        assert_eq!(
+            layout_cwd(Some(r"crates\server"), Path::new(r"C:\Users\me\project")).as_deref(),
+            Some("crates/server")
+        );
+        assert_eq!(
+            layout_cwd(Some("C:/project"), Path::new("C:/")).as_deref(),
+            Some("project")
+        );
     }
 
     #[test]
@@ -1037,7 +1128,7 @@ mod tests {
             PaneLayoutState::Leaf { surfaces, .. } => {
                 assert_eq!(
                     surfaces[0].cwd.as_deref(),
-                    Some("/tmp/project/crates/server")
+                    Some(expected_resolved_cwd("/tmp/project", "crates/server").as_str())
                 );
                 assert!(surfaces[0].screen_text.is_empty());
             }
