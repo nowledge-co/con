@@ -216,7 +216,7 @@ impl PaneTree {
     pub fn from_state(
         layout: &PaneLayoutState,
         focused_pane_id: Option<PaneId>,
-        make_terminal: &mut impl FnMut(Option<&str>, Option<&[String]>) -> TerminalPane,
+        make_terminal: &mut impl FnMut(Option<&str>, Option<&[String]>, bool) -> TerminalPane,
     ) -> Self {
         let mut next_restored_surface_id = 0;
         let mut used_surface_ids = std::collections::HashSet::new();
@@ -1805,7 +1805,7 @@ impl PaneTree {
 
     fn node_from_state(
         state: &PaneLayoutState,
-        make_terminal: &mut impl FnMut(Option<&str>, Option<&[String]>) -> TerminalPane,
+        make_terminal: &mut impl FnMut(Option<&str>, Option<&[String]>, bool) -> TerminalPane,
         next_surface_id: &mut SurfaceId,
         used_surface_ids: &mut std::collections::HashSet<SurfaceId>,
     ) -> PaneNode {
@@ -1823,7 +1823,7 @@ impl PaneTree {
                         id: *pane_id,
                         surfaces: vec![PaneSurface::new(
                             surface_id,
-                            make_terminal(cwd.as_deref(), None),
+                            make_terminal(cwd.as_deref(), None, false),
                         )],
                         active_surface_id: surface_id,
                     };
@@ -1844,8 +1844,12 @@ impl PaneTree {
                     } else {
                         Some(clamped_screen_text.as_slice())
                     };
-                    let mut surface =
-                        PaneSurface::new(surface_id, make_terminal(restore_cwd, restored_text));
+                    let force_restored_screen_text = state.owner.as_deref()
+                        == Some(con_core::session::WORKSPACE_ERROR_SURFACE_OWNER);
+                    let mut surface = PaneSurface::new(
+                        surface_id,
+                        make_terminal(restore_cwd, restored_text, force_restored_screen_text),
+                    );
                     surface.title = state.title.clone();
                     surface.owner = state.owner.clone();
                     surface.close_pane_when_last = state.close_pane_when_last;
@@ -1861,7 +1865,7 @@ impl PaneTree {
                         Self::allocate_restored_surface_id(None, next_surface_id, used_surface_ids);
                     restored_surfaces.push(PaneSurface::new(
                         surface_id,
-                        make_terminal(cwd.as_deref(), None),
+                        make_terminal(cwd.as_deref(), None, false),
                     ));
                     restored_active_surface_id = Some(surface_id);
                 }

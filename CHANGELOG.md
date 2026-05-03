@@ -32,6 +32,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Bounded the Unix and Windows control-endpoint probes used during second-process startup so a stale or wedged socket/pipe cannot hang Con while deciding whether to restore the saved workspace or open a fresh window.
 - When `con <path>` cannot open the requested workspace profile, Con now opens a fresh shell with a visible terminal-layer error message instead of silently falling back to unrelated private restore state.
+- Kept the workspace-profile error message visible even when restored terminal text continuity is disabled, without re-enabling private terminal-text restore for normal panes.
 
 **Workspace Layout Profiles**
 
@@ -39,6 +40,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Avoided capturing terminal text when exporting layout profiles, since exported profiles deliberately exclude runtime text history.
 - Honored the **Restore Terminal Text** privacy setting when adding tabs from an imported layout profile, and prevented imported inactive native terminal views from staying visible behind the active tab.
 - Existing config files that predate **Restore Terminal Text** no longer silently opt into terminal-text retention on upgrade. New installs still enable continuity by default, and existing users can turn it on from Settings -> General -> Continuity.
+- Rejected edited layout profiles that define multiple panes without a layout tree, and made Con synthesize a safe split tree when exporting legacy private sessions that still have panes without layout metadata.
 
 **Terminal, Windows and Linux Backends**
 

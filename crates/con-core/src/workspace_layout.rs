@@ -215,7 +215,8 @@ impl WorkspaceLayout {
             let layout = tab
                 .layout
                 .as_ref()
-                .and_then(|layout| workspace_node_from_session(layout, &pane_id_map));
+                .and_then(|layout| workspace_node_from_session(layout, &pane_id_map))
+                .or_else(|| workspace_node_from_panes(&panes));
             let agent = workspace_tab_agent_from_routing(&tab.agent_routing);
 
             tabs.push(WorkspaceTab {
@@ -465,6 +466,12 @@ impl WorkspaceLayout {
                     "layout in tab {:?} must reference each pane exactly once",
                     tab.id
                 );
+            } else {
+                anyhow::ensure!(
+                    tab.panes.len() <= 1,
+                    "tab {:?} with multiple panes must define layout",
+                    tab.id
+                );
             }
         }
 
@@ -585,6 +592,24 @@ fn workspace_node_from_session(
             first: Box::new(workspace_node_from_session(first, pane_id_map)?),
             second: Box::new(workspace_node_from_session(second, pane_id_map)?),
         }),
+    }
+}
+
+fn workspace_node_from_panes(panes: &[WorkspacePane]) -> Option<WorkspaceLayoutNode> {
+    match panes {
+        [] => None,
+        [pane] => Some(WorkspaceLayoutNode::Pane {
+            id: pane.id.clone(),
+        }),
+        _ => {
+            let mid = panes.len().div_ceil(2);
+            Some(WorkspaceLayoutNode::Split {
+                direction: WorkspaceSplitDirection::Horizontal,
+                ratio: (mid as f32 / panes.len() as f32).clamp(0.05, 0.95),
+                first: Box::new(workspace_node_from_panes(&panes[..mid])?),
+                second: Box::new(workspace_node_from_panes(&panes[mid..])?),
+            })
+        }
     }
 }
 
@@ -1263,6 +1288,57 @@ panes = []
 
         let err = layout.validate().unwrap_err();
         assert!(err.to_string().contains("exactly once"));
+    }
+
+    #[test]
+    fn workspace_layout_rejects_multi_pane_tabs_without_layout() {
+        let mut layout = two_pane_layout();
+        layout.tabs[0].layout = None;
+
+        let err = layout.validate().unwrap_err();
+        assert!(err.to_string().contains("must define layout"));
+    }
+
+    #[test]
+    fn workspace_layout_export_synthesizes_layout_for_legacy_multi_pane_tabs() {
+        let session = Session {
+            tabs: vec![TabState {
+                title: "Legacy".to_string(),
+                cwd: Some("/tmp/project".to_string()),
+                layout: None,
+                focused_pane_id: Some(1),
+                panes: vec![
+                    PaneState {
+                        cwd: Some("/tmp/project".to_string()),
+                    },
+                    PaneState {
+                        cwd: Some("/tmp/project/crates/server".to_string()),
+                    },
+                ],
+                shell_history: Vec::new(),
+                conversation_id: None,
+                agent_routing: AgentRoutingState::default(),
+                user_label: None,
+            }],
+            active_tab: 0,
+            agent_panel_open: false,
+            agent_panel_width: None,
+            input_bar_visible: true,
+            global_shell_history: Vec::new(),
+            input_history: Vec::new(),
+            conversation_id: None,
+            vertical_tabs_pinned: false,
+            vertical_tabs_width: None,
+        };
+
+        let layout = WorkspaceLayout::from_session(&session, "/tmp/project");
+
+        layout.validate().unwrap();
+        assert!(matches!(
+            layout.tabs[0].layout,
+            Some(WorkspaceLayoutNode::Split { .. })
+        ));
+        assert_eq!(layout.tabs[0].panes.len(), 2);
     }
 
     #[test]

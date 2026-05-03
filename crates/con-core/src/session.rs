@@ -2,6 +2,8 @@ use con_agent::ProviderKind;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+pub const WORKSPACE_ERROR_SURFACE_OWNER: &str = "con:workspace-error";
+
 /// Session state for persistence across restarts
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {

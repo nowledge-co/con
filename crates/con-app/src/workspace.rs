@@ -932,10 +932,11 @@ impl ConWorkspace {
         let restore_terminal_text = config.appearance.restore_terminal_text;
         let make_terminal = |cwd: Option<&str>,
                              restored_screen_text: Option<&[String]>,
+                             force_restored_screen_text: bool,
                              window: &mut Window,
                              cx: &mut Context<Self>|
          -> TerminalPane {
-            let restored_screen_text = if restore_terminal_text {
+            let restored_screen_text = if restore_terminal_text || force_restored_screen_text {
                 restored_screen_text
             } else {
                 None
@@ -981,13 +982,21 @@ impl ConWorkspace {
                 };
                 let pane_tree = if let Some(layout) = &tab_state.layout {
                     let mut restore_terminal =
-                        |restore_cwd: Option<&str>, restored_screen_text: Option<&[String]>| {
-                            make_terminal(restore_cwd, restored_screen_text, window, cx)
+                        |restore_cwd: Option<&str>,
+                         restored_screen_text: Option<&[String]>,
+                         force_restored_screen_text: bool| {
+                            make_terminal(
+                                restore_cwd,
+                                restored_screen_text,
+                                force_restored_screen_text,
+                                window,
+                                cx,
+                            )
                         };
                     PaneTree::from_state(layout, tab_state.focused_pane_id, &mut restore_terminal)
                 } else {
                     let cwd = tab_state.cwd.as_deref();
-                    PaneTree::new(make_terminal(cwd, None, window, cx))
+                    PaneTree::new(make_terminal(cwd, None, false, window, cx))
                 };
                 Tab {
                     pane_tree,
@@ -1015,7 +1024,7 @@ impl ConWorkspace {
             })
             .collect();
         if tabs.is_empty() {
-            let terminal = make_terminal(None, None, window, cx);
+            let terminal = make_terminal(None, None, false, window, cx);
             tabs.push(Tab {
                 pane_tree: PaneTree::new(terminal),
                 title: "Terminal".to_string(),
@@ -6889,12 +6898,15 @@ impl ConWorkspace {
         let restore_terminal_text = self.config.appearance.restore_terminal_text;
         let pane_tree = if let Some(layout) = &tab_state.layout {
             let mut restore_terminal =
-                |restore_cwd: Option<&str>, restored_screen_text: Option<&[String]>| {
-                    let restored_screen_text = if restore_terminal_text {
-                        restored_screen_text
-                    } else {
-                        None
-                    };
+                |restore_cwd: Option<&str>,
+                 restored_screen_text: Option<&[String]>,
+                 force_restored_screen_text: bool| {
+                    let restored_screen_text =
+                        if restore_terminal_text || force_restored_screen_text {
+                            restored_screen_text
+                        } else {
+                            None
+                        };
                     make_ghostty_terminal(
                         &ghostty_app,
                         restore_cwd,

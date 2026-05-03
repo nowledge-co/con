@@ -68,7 +68,9 @@ mod updater;
 mod workspace;
 
 use con_core::config::KeybindingConfig;
-use con_core::session::{GlobalHistoryState, PaneLayoutState, Session, SurfaceState};
+use con_core::session::{
+    GlobalHistoryState, PaneLayoutState, Session, SurfaceState, WORKSPACE_ERROR_SURFACE_OWNER,
+};
 use con_core::workspace_layout::WorkspaceLayout;
 use gpui::*;
 use gpui_component::ActiveTheme;
@@ -626,7 +628,7 @@ fn workspace_path_error_session(path: &std::path::Path, err: &anyhow::Error) -> 
                 title: Some("Shell".to_string()),
                 // Synthetic Con-owned diagnostic surface. Keep it out of
                 // human/subagent owner namespaces used by the orchestrator.
-                owner: Some("con:workspace-error".to_string()),
+                owner: Some(WORKSPACE_ERROR_SURFACE_OWNER.to_string()),
                 cwd,
                 close_pane_when_last: false,
                 screen_text,
