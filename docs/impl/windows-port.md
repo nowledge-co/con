@@ -438,10 +438,13 @@ resize / advanced selection polish, and distribution hardening rather than basic
 input/selection bring-up.
 
 Caveats:
-- You must have **Zig 0.15.2+** on `PATH` (one-time install from
-  <https://ziglang.org/download/>) for `cargo build` to compile
-  `libghostty-vt`. `cargo check` works without Zig (compile-only, no
-  link); set `CON_SKIP_GHOSTTY_VT=1` to skip the build entirely.
+- You must have **Zig 0.15.2 exactly** on `PATH` for `cargo build` to
+  compile `libghostty-vt`. Do not use Zig 0.16.0 for this pinned
+  Ghostty revision; install 0.15.2 from
+  <https://ziglang.org/download/0.15.2/> or point `CON_ZIG_BIN` at an
+  explicit 0.15.2 binary. `cargo check` works without Zig
+  (compile-only, no link); set `CON_SKIP_GHOSTTY_VT=1` to skip the
+  build entirely.
 - The shell is `CON_SHELL` if set, else the configured Windows Terminal
   default profile command when `%LOCALAPPDATA%` settings are readable,
   else `pwsh.exe`/`powershell.exe` if on `PATH`, else `$env:COMSPEC`,
