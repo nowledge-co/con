@@ -25,6 +25,7 @@ use anyhow::{Context, Result};
 use parking_lot::Mutex;
 
 use crate::stub::GhosttyScrollbar;
+use crate::transcript::TranscriptBuffer;
 
 use super::conpty::{ConPty, PtySize};
 use super::profile::{perf_trace_enabled, perf_trace_verbose};
@@ -39,6 +40,7 @@ use super::render::CellMetrics;
 pub struct RenderSession {
     renderer: Mutex<Renderer>,
     vt: Arc<VtScreen>,
+    transcript: Arc<Mutex<TranscriptBuffer>>,
     conpty: Arc<ConPty>,
     config: Mutex<RendererConfig>,
     base_font_size_px: f32,
@@ -165,14 +167,18 @@ impl RenderSession {
             VtScreen::new(cols, rows, renderer_config.theme.as_ref())
                 .context("VtScreen::new failed")?,
         );
+        let transcript = Arc::new(Mutex::new(TranscriptBuffer::default()));
         if let Some(output) = initial_output
             .as_deref()
             .filter(|output| !output.is_empty())
         {
             vt.feed(output);
+            let text = String::from_utf8_lossy(output);
+            transcript.lock().push(text.as_ref());
         }
 
         let vt_for_pty = vt.clone();
+        let transcript_for_pty = transcript.clone();
         let wake_for_pty: Arc<dyn Fn() + Send + Sync> = Arc::new(wake);
         let shell = super::conpty::default_shell_command();
         let shell_cwd = resolve_shell_cwd(cwd);
@@ -182,6 +188,8 @@ impl RenderSession {
             shell_cwd.as_deref(),
             PtySize { cols, rows },
             move |bytes| {
+                let text = String::from_utf8_lossy(bytes);
+                transcript_for_pty.lock().push(text.as_ref());
                 vt_for_pty.feed(bytes);
                 wake_for_pty();
             },
@@ -192,6 +200,7 @@ impl RenderSession {
         Ok(Self {
             renderer: Mutex::new(renderer),
             vt,
+            transcript,
             conpty,
             config: Mutex::new(renderer_config),
             base_font_size_px,
@@ -635,6 +644,14 @@ impl RenderSession {
 
     pub fn read_screen_text(&self, max_lines: usize) -> Vec<String> {
         snapshot_to_lines(&self.vt.snapshot(), max_lines)
+    }
+
+    pub fn read_recent_lines(&self, max_lines: usize) -> Vec<String> {
+        self.transcript.lock().recent_lines(max_lines)
+    }
+
+    pub fn search_text(&self, pattern: &str, limit: usize) -> Vec<(usize, String)> {
+        self.transcript.lock().search(pattern, limit)
     }
 
     pub fn clear_selection(&self) {

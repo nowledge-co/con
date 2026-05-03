@@ -1885,13 +1885,15 @@ impl PaneTree {
         if let Some(requested) = requested
             && used_surface_ids.insert(requested)
         {
-            *next_surface_id = (*next_surface_id).max(requested.saturating_add(1));
+            if let Some(next) = requested.checked_add(1) {
+                *next_surface_id = (*next_surface_id).max(next);
+            }
             return requested;
         }
 
         loop {
             let candidate = *next_surface_id;
-            *next_surface_id = (*next_surface_id).saturating_add(1);
+            *next_surface_id = (*next_surface_id).checked_add(1).unwrap_or(0);
             if used_surface_ids.insert(candidate) {
                 return candidate;
             }

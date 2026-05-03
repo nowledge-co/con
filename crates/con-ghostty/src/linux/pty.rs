@@ -9,11 +9,11 @@ use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::stub::{CommandFinishedSignal, SurfaceSize, TerminalColors};
+use crate::transcript::TranscriptBuffer;
 use crate::vt::{ScreenSnapshot, ThemeColors, VtScreen};
 
 const DEFAULT_COLUMNS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
-const MAX_TRANSCRIPT_BYTES: usize = 256 * 1024;
 
 pub type LinuxWakeCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 
@@ -109,56 +109,6 @@ impl SessionShared {
         self.transcript.lock().push(chunk);
         self.needs_render.store(true, Ordering::Release);
         self.wake();
-    }
-}
-
-#[derive(Default)]
-struct TranscriptBuffer {
-    text: String,
-}
-
-impl TranscriptBuffer {
-    fn push(&mut self, chunk: &str) {
-        self.text.push_str(chunk);
-        if self.text.len() <= MAX_TRANSCRIPT_BYTES {
-            return;
-        }
-
-        let mut keep_from = self.text.len().saturating_sub(MAX_TRANSCRIPT_BYTES);
-        while keep_from < self.text.len() && !self.text.is_char_boundary(keep_from) {
-            keep_from += 1;
-        }
-        if keep_from > 0 {
-            self.text.drain(..keep_from);
-        }
-    }
-
-    fn recent_lines(&self, max_lines: usize) -> Vec<String> {
-        if max_lines == 0 {
-            return Vec::new();
-        }
-        let sanitized = sanitize_terminal_output(&self.text);
-        let mut lines: Vec<String> = sanitized
-            .lines()
-            .rev()
-            .take(max_lines)
-            .map(ToOwned::to_owned)
-            .collect();
-        lines.reverse();
-        lines
-    }
-
-    fn search(&self, pattern: &str, limit: usize) -> Vec<(usize, String)> {
-        if pattern.is_empty() || limit == 0 {
-            return Vec::new();
-        }
-        sanitize_terminal_output(&self.text)
-            .lines()
-            .enumerate()
-            .filter(|(_, line)| line.contains(pattern))
-            .take(limit)
-            .map(|(idx, line)| (idx, line.to_string()))
-            .collect()
     }
 }
 
@@ -559,141 +509,12 @@ fn snapshot_to_lines(snapshot: &ScreenSnapshot, max_lines: usize) -> Vec<String>
     lines
 }
 
-fn sanitize_terminal_output(raw: &str) -> String {
-    #[derive(Clone, Copy)]
-    enum EscapeState {
-        None,
-        Esc,
-        Csi,
-        Osc,
-        OscEsc,
-        Ss3,
-        Charset,
-        Dcs,
-        DcsEsc,
-    }
-
-    let mut output = String::with_capacity(raw.len());
-    let bytes = raw.as_bytes();
-    let mut index = 0;
-    let mut state = EscapeState::None;
-
-    while index < bytes.len() {
-        let byte = bytes[index];
-        match state {
-            EscapeState::None => match byte {
-                b'\x1b' => {
-                    state = EscapeState::Esc;
-                    index += 1;
-                }
-                b'\r' => {
-                    if bytes.get(index + 1) != Some(&b'\n') {
-                        clear_current_line(&mut output);
-                    }
-                    index += 1;
-                }
-                b'\x08' => {
-                    if !output.ends_with('\n') {
-                        output.pop();
-                    }
-                    index += 1;
-                }
-                b'\t' => {
-                    output.push_str("    ");
-                    index += 1;
-                }
-                b'\n' => {
-                    output.push('\n');
-                    index += 1;
-                }
-                0x00..=0x1f | 0x7f => {
-                    index += 1;
-                }
-                _ => {
-                    let ch = raw[index..]
-                        .chars()
-                        .next()
-                        .expect("valid utf-8 chunk while sanitizing pty output");
-                    output.push(ch);
-                    index += ch.len_utf8();
-                }
-            },
-            EscapeState::Esc => {
-                state = match byte {
-                    b'[' => EscapeState::Csi,
-                    b']' => EscapeState::Osc,
-                    b'O' => EscapeState::Ss3,
-                    b'(' | b')' | b'*' | b'+' => EscapeState::Charset,
-                    b'P' | b'X' | b'^' | b'_' => EscapeState::Dcs,
-                    _ => EscapeState::None,
-                };
-                index += 1;
-            }
-            EscapeState::Csi => {
-                if (0x40..=0x7e).contains(&byte) {
-                    state = EscapeState::None;
-                }
-                index += 1;
-            }
-            EscapeState::Osc => {
-                match byte {
-                    b'\x07' => state = EscapeState::None,
-                    b'\x1b' => state = EscapeState::OscEsc,
-                    _ => {}
-                }
-                index += 1;
-            }
-            EscapeState::OscEsc => {
-                state = if byte == b'\\' {
-                    EscapeState::None
-                } else {
-                    EscapeState::Osc
-                };
-                index += 1;
-            }
-            EscapeState::Ss3 => {
-                if (0x40..=0x7e).contains(&byte) {
-                    state = EscapeState::None;
-                }
-                index += 1;
-            }
-            EscapeState::Charset => {
-                state = EscapeState::None;
-                index += 1;
-            }
-            EscapeState::Dcs => {
-                match byte {
-                    b'\x07' => state = EscapeState::None,
-                    b'\x1b' => state = EscapeState::DcsEsc,
-                    _ => {}
-                }
-                index += 1;
-            }
-            EscapeState::DcsEsc => {
-                state = if byte == b'\\' {
-                    EscapeState::None
-                } else {
-                    EscapeState::Dcs
-                };
-                index += 1;
-            }
-        }
-    }
-
-    output
-}
-
-fn clear_current_line(output: &mut String) {
-    while output.chars().last().is_some_and(|ch| ch != '\n') {
-        output.pop();
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::transcript::{TranscriptBuffer, sanitize_terminal_output};
     use crate::vt::{Cell, Cursor, ScreenSnapshot};
 
-    use super::{TranscriptBuffer, sanitize_terminal_output, snapshot_to_lines};
+    use super::snapshot_to_lines;
 
     #[test]
     fn transcript_buffer_returns_recent_lines_in_order() {

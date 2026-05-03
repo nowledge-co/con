@@ -287,10 +287,18 @@ impl WindowsGhosttyTerminal {
             .unwrap_or_default()
     }
     pub fn read_recent_lines(&self, max_lines: usize) -> Vec<String> {
-        self.read_screen_text(max_lines)
+        self.inner
+            .lock()
+            .as_ref()
+            .map(|session| session.read_recent_lines(max_lines))
+            .unwrap_or_default()
     }
-    pub fn search_text(&self, _pattern: &str, _limit: usize) -> Vec<(usize, String)> {
-        Vec::new()
+    pub fn search_text(&self, pattern: &str, limit: usize) -> Vec<(usize, String)> {
+        self.inner
+            .lock()
+            .as_ref()
+            .map(|session| session.search_text(pattern, limit))
+            .unwrap_or_default()
     }
     pub fn take_needs_render(&self) -> bool {
         false

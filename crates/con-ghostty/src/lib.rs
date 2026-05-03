@@ -34,6 +34,9 @@ pub fn restored_terminal_output_text(lines: &[String]) -> Option<String> {
     (!output.trim().is_empty()).then_some(output)
 }
 
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+mod transcript;
+
 #[cfg(target_os = "macos")]
 pub mod ffi;
 #[cfg(target_os = "macos")]
