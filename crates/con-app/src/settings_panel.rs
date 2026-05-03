@@ -3660,9 +3660,38 @@ impl SettingsPanel {
             .child(ai_layout)
     }
 
-    fn render_providers(&mut self, cx: &mut Context<Self>) -> Div {
+    fn render_providers(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let theme = cx.theme();
         let card_opacity = self.card_opacity();
+        let viewport_w = window.viewport_size().width.as_f32();
+        let compact = viewport_w < 980.0;
+        let narrow = viewport_w < 840.0;
+        let settings_sidebar_w = if narrow {
+            48.0
+        } else if compact {
+            144.0
+        } else {
+            160.0
+        };
+        let settings_content_pad = if narrow {
+            14.0
+        } else if compact {
+            18.0
+        } else {
+            24.0
+        };
+        let settings_surface_w = if self.standalone {
+            viewport_w
+        } else {
+            ((viewport_w * 0.76).clamp(680.0, 980.0)).min((viewport_w - 32.0).max(320.0))
+        };
+        let provider_content_w =
+            (settings_surface_w - settings_sidebar_w - settings_content_pad * 2.0).max(0.0);
+        let provider_sidebar_w = if provider_content_w < 600.0 {
+            px(148.0)
+        } else {
+            px(180.0)
+        };
         let model_input = self.model_input.clone();
         let api_key_input = self.api_key_input.clone();
         let base_url_input = self.base_url_input.clone();
@@ -3843,22 +3872,35 @@ impl SettingsPanel {
                         ),
                 )
                 .child(if models.is_empty() {
-                    div().child(Input::new(&model_input).small())
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .child(Input::new(&model_input).small())
                 } else {
                     div()
+                        .w_full()
+                        .min_w_0()
                         .flex()
                         .flex_col()
                         .gap(px(8.0))
                         .child(
-                            Select::new(&model_select)
-                                .placeholder("Select a known model…")
-                                .small(),
+                            div().w_full().min_w_0().child(
+                                Select::new(&model_select)
+                                    .placeholder("Select a known model…")
+                                    .small(),
+                            ),
                         )
-                        .child(Input::new(&model_input).small())
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .child(Input::new(&model_input).small()),
+                        )
                 })
                 .children(can_fetch_models.then(|| {
                     div()
                         .flex()
+                        .flex_wrap()
                         .items_center()
                         .justify_between()
                         .gap(px(10.0))
@@ -3866,6 +3908,7 @@ impl SettingsPanel {
                         .child(
                             div()
                                 .flex_1()
+                                .min_w(px(220.0))
                                 .text_size(px(11.0))
                                 .line_height(px(16.0))
                                 .text_color(if self.provider_model_status_error {
@@ -3875,20 +3918,22 @@ impl SettingsPanel {
                                 })
                                 .child(
                                     self.provider_model_status.clone().unwrap_or_else(|| {
-                                        "Optional: fetch /models when the provider exposes a model list. Otherwise, type the model ID manually.".to_string()
+                                        "Fetch /models when the provider exposes a model list. Or enter the model ID.".to_string()
                                     }),
                                 ),
                         )
                         .child(
-                            Button::new("fetch-openai-compatible-models")
-                                .small()
-                                .ghost()
-                                .label("Fetch Models")
-                                .loading(self.provider_model_fetching)
-                                .disabled(self.provider_model_fetching)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.fetch_selected_provider_models(window, cx);
-                                })),
+                            div().flex_shrink_0().child(
+                                Button::new("fetch-openai-compatible-models")
+                                    .small()
+                                    .ghost()
+                                    .label("Fetch Models")
+                                    .loading(self.provider_model_fetching)
+                                    .disabled(self.provider_model_fetching)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.fetch_selected_provider_models(window, cx);
+                                    })),
+                            ),
                         )
                 })),
         );
@@ -3897,6 +3942,7 @@ impl SettingsPanel {
             .flex()
             .flex_col()
             .flex_1()
+            .min_w_0()
             .gap(px(12.0))
             .child(model_card_content)
             .child(
@@ -4175,7 +4221,7 @@ impl SettingsPanel {
             .flex()
             .flex_col()
             .gap(px(6.0))
-            .w(px(180.0))
+            .w(provider_sidebar_w)
             .flex_shrink_0()
             .child(
                 card(theme, card_opacity).child(div().px(px(4.0)).py(px(4.0)).child(provider_list)),
@@ -4190,6 +4236,7 @@ impl SettingsPanel {
             div()
                 .flex()
                 .flex_1()
+                .min_w_0()
                 .gap(px(16.0))
                 .child(provider_column)
                 .child(right_col),
@@ -4604,7 +4651,7 @@ impl Render for SettingsPanel {
             SettingsSection::General => self.render_general(cx),
             SettingsSection::Appearance => self.render_appearance(cx),
             SettingsSection::Ai => self.render_ai(cx),
-            SettingsSection::Providers => self.render_providers(cx),
+            SettingsSection::Providers => self.render_providers(window, cx),
             SettingsSection::Keys => self.render_keys(cx),
         };
 
