@@ -121,6 +121,9 @@ jobs:
           CON_RELEASE_VERSION: ${{ steps.meta.outputs.version }}
         run: |
           ./scripts/linux/release.sh
+          ./scripts/release/verify-artifacts.sh linux \
+            "dist/con-${{ steps.meta.outputs.version }}-linux-x86_64.tar.gz" \
+            "dist/SHA256SUMS-linux.txt"
           echo "tarball=dist/con-${{ steps.meta.outputs.version }}-linux-x86_64.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifacts

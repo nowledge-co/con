@@ -99,6 +99,25 @@ jobs:
           APPLE_NOTARY_API_KEY_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_BASE64 }}
         run: ./scripts/macos/release.sh
 
+      - name: Verify release artifact contract
+        shell: bash
+        env:
+          CON_CHANNEL: ${{ steps.meta.outputs.channel }}
+          CON_APP_VERSION: ${{ steps.meta.outputs.version }}
+          CON_BUILD_NUMBER: ${{ github.run_number }}
+          CON_ARCH: ${{ matrix.arch }}
+          CON_RUST_TARGET: ${{ matrix.rust_target }}
+          CON_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+        run: |
+          set -euo pipefail
+          source ./scripts/macos/common.sh
+          setup_release_env
+          ./scripts/release/verify-artifacts.sh macos \
+            "$CON_APP_BUNDLE_PATH" \
+            "$CON_APP_ZIP_PATH" \
+            "$CON_DMG_PATH" \
+            "$CON_CHECKSUM_PATH"
+
       - name: Upload notarized artifacts
         uses: actions/upload-artifact@v5
         with:

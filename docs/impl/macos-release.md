@@ -272,6 +272,24 @@ Before shipping a beta or stable build, verify these flows from the bundled app:
 6. Run `Check for Updates…` against the intended channel and confirm Sparkle presents the expected UI.
 7. After installation, reopen `About con` and confirm the build number changed.
 
+### Automated Release Gates
+
+Release safety is enforced in two layers:
+
+1. Platform release jobs verify artifact shape before upload. macOS checks the
+   app bundle, ZIP, DMG, checksums, and bundled `con-cli`; Linux checks the
+   tarball layout, checksum, and `con-cli --help`; Windows expands the ZIP,
+   verifies `con-app.exe` and `con-cli.exe`, runs `con-cli.exe --help`, and
+   checks `SHA256SUMS-windows.txt`.
+2. `release-finalize.yml` refuses to promote the draft release unless the
+   expected GitHub Release assets exist, stable/beta appcasts point at the
+   same tag's artifacts, and the gh-pages installer scripts expose `con-cli`
+   / `con-cli.exe`.
+
+This means a failed or incomplete platform build can upload nothing more than
+a private draft. Fresh installs keep resolving the previous public release, and
+older clients keep polling the previous valid appcast entry.
+
 ### Release Channel Runtime
 
 `con-core/src/release_channel.rs` provides a cross-platform `ReleaseChannel` enum:

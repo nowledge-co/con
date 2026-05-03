@@ -265,6 +265,34 @@ jobs:
           "zip=$Zip"                          | Out-File $env:GITHUB_OUTPUT -Append
           "sha256=dist\SHA256SUMS-windows.txt" | Out-File $env:GITHUB_OUTPUT -Append
 
+      - name: Verify release artifact contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $Zip = "${{ steps.package.outputs.zip }}"
+          $Sha = "${{ steps.package.outputs.sha256 }}"
+          if (-not (Test-Path $Zip)) { throw "missing ZIP: $Zip" }
+          if (-not (Test-Path $Sha)) { throw "missing checksum: $Sha" }
+
+          $Expected = (Select-String -Path $Sha -Pattern ([regex]::Escape((Split-Path -Leaf $Zip))) |
+              Select-Object -First 1).Line -split '\s+' | Select-Object -First 1
+          if (-not $Expected) { throw "checksum file does not reference $(Split-Path -Leaf $Zip)" }
+          $Actual = (Get-FileHash -Algorithm SHA256 $Zip).Hash.ToLower()
+          if ($Actual -ne $Expected.ToLower()) {
+              throw "checksum mismatch for $Zip (expected $Expected, got $Actual)"
+          }
+
+          $Extract = Join-Path $env:RUNNER_TEMP "con-release-verify-$([System.Guid]::NewGuid())"
+          New-Item -ItemType Directory -Force -Path $Extract | Out-Null
+          Expand-Archive -Path $Zip -DestinationPath $Extract -Force
+
+          $App = Join-Path $Extract 'con-app.exe'
+          $Cli = Join-Path $Extract 'con-cli.exe'
+          if (-not (Test-Path $App)) { throw 'con-app.exe missing from Windows ZIP' }
+          if (-not (Test-Path $Cli)) { throw 'con-cli.exe missing from Windows ZIP' }
+          & $Cli --help | Out-Null
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
         with:

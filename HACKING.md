@@ -122,6 +122,12 @@ missing. The Homebrew cask and Unix installer expose that bundled
 `con-cli` on PATH so orchestrators such as `pi-interactive-subagents`
 do not need a separate source checkout.
 
+Release CI also has a final promotion gate. Platform jobs verify the
+artifact shape before upload, and `release-finalize.yml` keeps the
+GitHub Release drafted unless all expected assets, appcasts, and
+gh-pages installer scripts are present for the same tag. A broken
+artifact should fail private, not become `/releases/latest`.
+
 For a Linux release tarball (un-signed; mirrors the Windows
 preview's distribution shape), use:
 

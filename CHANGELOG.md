@@ -20,6 +20,11 @@ con is still pre-release, so entries may group related beta work while the produ
   user-managed binaries.
 - Added release verification for the macOS app bundle so a signed/notarized
   build cannot ship without the control-plane CLI.
+- Added blocking release gates for installer/update safety. macOS and Linux
+  release jobs now verify artifact layout before upload; Windows verifies the
+  ZIP contains both `con-app.exe` and `con-cli.exe`; the finalizer refuses to
+  publish a draft unless all expected assets, appcasts, and gh-pages installer
+  scripts are present and point at the same tag.
 - Documented that `con-cli` is part of the normal install path for surface
   orchestrators such as `pi-interactive-subagents`.
 
