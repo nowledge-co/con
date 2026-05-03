@@ -136,6 +136,8 @@ pub struct ghostty_surface_config_s {
     pub env_vars: *mut ghostty_env_var_s,
     pub env_var_count: usize,
     pub initial_input: *const c_char,
+    #[cfg(con_ghostty_embedded_initial_output)]
+    pub initial_output: *const c_char,
     pub wait_after_command: bool,
     pub context: ghostty_surface_context_e,
 }

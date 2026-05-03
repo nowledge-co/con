@@ -1287,6 +1287,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smallvec",
+ "socket2",
  "tokio",
  "toml 0.8.23",
  "tracing",

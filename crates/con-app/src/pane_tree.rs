@@ -1,4 +1,4 @@
-use con_core::session::{PaneLayoutState, PaneSplitDirection};
+use con_core::session::{PaneLayoutState, PaneSplitDirection, SurfaceState};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{
@@ -9,6 +9,9 @@ use gpui_component::{
 };
 
 use crate::terminal_pane::TerminalPane;
+
+const RESTORED_SCREEN_TEXT_MAX_LINES: usize = 600;
+const RESTORED_SCREEN_TEXT_MAX_BYTES: usize = 128 * 1024;
 
 /// Split direction for pane layout
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -58,6 +61,49 @@ impl PaneSurface {
             close_pane_when_last: false,
         }
     }
+}
+
+fn restored_screen_text_for_surface(
+    terminal: &TerminalPane,
+    capture_screen_text: bool,
+    cx: &App,
+) -> Vec<String> {
+    if !capture_screen_text {
+        return Vec::new();
+    }
+    trim_restored_screen_text(terminal.recent_lines(RESTORED_SCREEN_TEXT_MAX_LINES, cx))
+}
+
+fn trim_restored_screen_text(lines: Vec<String>) -> Vec<String> {
+    let mut trimmed = Vec::with_capacity(lines.len());
+    let mut seen_non_blank = false;
+    for line in lines {
+        if !seen_non_blank && line.trim().is_empty() {
+            continue;
+        }
+        seen_non_blank = true;
+        trimmed.push(line);
+    }
+
+    while trimmed.last().is_some_and(|line| line.trim().is_empty()) {
+        trimmed.pop();
+    }
+
+    let mut total = 0usize;
+    let mut kept = Vec::new();
+    for line in trimmed.into_iter().rev() {
+        let line_bytes = line.len().saturating_add(2);
+        if line_bytes > RESTORED_SCREEN_TEXT_MAX_BYTES {
+            break;
+        }
+        if total.saturating_add(line_bytes) > RESTORED_SCREEN_TEXT_MAX_BYTES {
+            break;
+        }
+        total = total.saturating_add(line_bytes);
+        kept.push(line);
+    }
+    kept.reverse();
+    kept
 }
 
 #[derive(Clone)]
@@ -170,10 +216,16 @@ impl PaneTree {
     pub fn from_state(
         layout: &PaneLayoutState,
         focused_pane_id: Option<PaneId>,
-        make_terminal: &mut impl FnMut(Option<&str>) -> TerminalPane,
+        make_terminal: &mut impl FnMut(Option<&str>, Option<&[String]>, bool) -> TerminalPane,
     ) -> Self {
-        let mut restored_surface_id = 0;
-        let mut root = Self::node_from_state(layout, make_terminal, &mut restored_surface_id);
+        let mut next_restored_surface_id = 0;
+        let mut used_surface_ids = std::collections::HashSet::new();
+        let mut root = Self::node_from_state(
+            layout,
+            make_terminal,
+            &mut next_restored_surface_id,
+            &mut used_surface_ids,
+        );
         let mut next_split_id = 0;
         Self::normalize_split_ids(&mut root, &mut next_split_id);
         let next_id = Self::max_pane_id(&root).saturating_add(1);
@@ -196,8 +248,8 @@ impl PaneTree {
         }
     }
 
-    pub fn to_state(&self, cx: &App) -> PaneLayoutState {
-        Self::node_to_state(&self.root, cx)
+    pub fn to_state(&self, cx: &App, capture_screen_text: bool) -> PaneLayoutState {
+        Self::node_to_state(&self.root, cx, capture_screen_text)
     }
 
     /// Get the focused terminal
@@ -1069,6 +1121,37 @@ impl PaneTree {
                 let divider_id = ElementId::Name(format!("divider-{}", sid).into());
                 let divider = match dir {
                     SplitDirection::Horizontal => {
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            let hover_color = cx.theme().foreground.opacity(0.10);
+                            div()
+                                .id(divider_id)
+                                .relative()
+                                .w(px(5.0))
+                                .ml(px(-2.0))
+                                .mr(px(-2.0))
+                                .h_full()
+                                .flex_shrink_0()
+                                .cursor_col_resize()
+                                .bg(gpui::transparent_black())
+                                .hover(move |s| s.bg(hover_color))
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .bottom_0()
+                                        .left(px(2.0))
+                                        .w(px(1.0))
+                                        .bg(divider_color),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    move |event: &MouseDownEvent, _window, _cx| {
+                                        cb_divider(sid, f32::from(event.position.x));
+                                    },
+                                )
+                        }
+                        #[cfg(target_os = "macos")]
                         let handle = div()
                             .absolute()
                             .top_0()
@@ -1077,11 +1160,7 @@ impl PaneTree {
                             .w(px(5.0))
                             .cursor_col_resize()
                             .bg(gpui::transparent_black());
-                        #[cfg(not(target_os = "macos"))]
-                        let handle = {
-                            let hover_color = cx.theme().foreground.opacity(0.10);
-                            handle.hover(move |s| s.bg(hover_color))
-                        };
+                        #[cfg(target_os = "macos")]
                         div()
                             .id(divider_id)
                             .relative()
@@ -1097,6 +1176,37 @@ impl PaneTree {
                             ))
                     }
                     SplitDirection::Vertical => {
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            let hover_color = cx.theme().foreground.opacity(0.10);
+                            div()
+                                .id(divider_id)
+                                .relative()
+                                .h(px(5.0))
+                                .mt(px(-2.0))
+                                .mb(px(-2.0))
+                                .w_full()
+                                .flex_shrink_0()
+                                .cursor_row_resize()
+                                .bg(gpui::transparent_black())
+                                .hover(move |s| s.bg(hover_color))
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .right_0()
+                                        .top(px(2.0))
+                                        .h(px(1.0))
+                                        .bg(divider_color),
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    move |event: &MouseDownEvent, _window, _cx| {
+                                        cb_divider(sid, f32::from(event.position.y));
+                                    },
+                                )
+                        }
+                        #[cfg(target_os = "macos")]
                         let handle = div()
                             .absolute()
                             .left_0()
@@ -1105,11 +1215,7 @@ impl PaneTree {
                             .h(px(5.0))
                             .cursor_row_resize()
                             .bg(gpui::transparent_black());
-                        #[cfg(not(target_os = "macos"))]
-                        let handle = {
-                            let hover_color = cx.theme().foreground.opacity(0.10);
-                            handle.hover(move |s| s.bg(hover_color))
-                        };
+                        #[cfg(target_os = "macos")]
                         div()
                             .id(divider_id)
                             .relative()
@@ -1647,17 +1753,38 @@ impl PaneTree {
             .or_else(|| surfaces.first())
     }
 
-    fn node_to_state(node: &PaneNode, cx: &App) -> PaneLayoutState {
+    fn node_to_state(node: &PaneNode, cx: &App, capture_screen_text: bool) -> PaneLayoutState {
         match node {
             PaneNode::Leaf {
                 id,
                 surfaces,
                 active_surface_id,
-            } => PaneLayoutState::Leaf {
-                pane_id: *id,
-                cwd: Self::active_surface(surfaces, *active_surface_id)
-                    .and_then(|surface| surface.terminal.current_dir(cx)),
-            },
+            } => {
+                let cwd = Self::active_surface(surfaces, *active_surface_id)
+                    .and_then(|surface| surface.terminal.current_dir(cx));
+                let surface_states = surfaces
+                    .iter()
+                    .map(|surface| SurfaceState {
+                        surface_id: surface.id,
+                        title: surface.title.clone(),
+                        owner: surface.owner.clone(),
+                        cwd: surface.terminal.current_dir(cx),
+                        close_pane_when_last: surface.close_pane_when_last,
+                        screen_text: restored_screen_text_for_surface(
+                            &surface.terminal,
+                            capture_screen_text,
+                            cx,
+                        ),
+                    })
+                    .collect();
+
+                PaneLayoutState::Leaf {
+                    pane_id: *id,
+                    cwd,
+                    active_surface_id: Some(*active_surface_id),
+                    surfaces: surface_states,
+                }
+            }
             PaneNode::Split {
                 direction,
                 ratio,
@@ -1670,25 +1797,84 @@ impl PaneTree {
                     SplitDirection::Vertical => PaneSplitDirection::Vertical,
                 },
                 ratio: *ratio,
-                first: Box::new(Self::node_to_state(first, cx)),
-                second: Box::new(Self::node_to_state(second, cx)),
+                first: Box::new(Self::node_to_state(first, cx, capture_screen_text)),
+                second: Box::new(Self::node_to_state(second, cx, capture_screen_text)),
             },
         }
     }
 
     fn node_from_state(
         state: &PaneLayoutState,
-        make_terminal: &mut impl FnMut(Option<&str>) -> TerminalPane,
+        make_terminal: &mut impl FnMut(Option<&str>, Option<&[String]>, bool) -> TerminalPane,
         next_surface_id: &mut SurfaceId,
+        used_surface_ids: &mut std::collections::HashSet<SurfaceId>,
     ) -> PaneNode {
         match state {
-            PaneLayoutState::Leaf { pane_id, cwd } => {
-                let surface_id = *next_surface_id;
-                *next_surface_id = (*next_surface_id).saturating_add(1);
+            PaneLayoutState::Leaf {
+                pane_id,
+                cwd,
+                active_surface_id,
+                surfaces,
+            } => {
+                if surfaces.is_empty() {
+                    let surface_id =
+                        Self::allocate_restored_surface_id(None, next_surface_id, used_surface_ids);
+                    return PaneNode::Leaf {
+                        id: *pane_id,
+                        surfaces: vec![PaneSurface::new(
+                            surface_id,
+                            make_terminal(cwd.as_deref(), None, false),
+                        )],
+                        active_surface_id: surface_id,
+                    };
+                }
+
+                let mut restored_surfaces = Vec::with_capacity(surfaces.len());
+                let mut restored_active_surface_id = None;
+                for state in surfaces {
+                    let surface_id = Self::allocate_restored_surface_id(
+                        Some(state.surface_id),
+                        next_surface_id,
+                        used_surface_ids,
+                    );
+                    let restore_cwd = state.cwd.as_deref().or(cwd.as_deref());
+                    let clamped_screen_text = trim_restored_screen_text(state.screen_text.clone());
+                    let restored_text = if clamped_screen_text.is_empty() {
+                        None
+                    } else {
+                        Some(clamped_screen_text.as_slice())
+                    };
+                    let force_restored_screen_text = state.owner.as_deref()
+                        == Some(con_core::session::WORKSPACE_ERROR_SURFACE_OWNER);
+                    let mut surface = PaneSurface::new(
+                        surface_id,
+                        make_terminal(restore_cwd, restored_text, force_restored_screen_text),
+                    );
+                    surface.title = state.title.clone();
+                    surface.owner = state.owner.clone();
+                    surface.close_pane_when_last = state.close_pane_when_last;
+
+                    if active_surface_id == &Some(state.surface_id) {
+                        restored_active_surface_id = Some(surface_id);
+                    }
+                    restored_surfaces.push(surface);
+                }
+
+                if restored_surfaces.is_empty() {
+                    let surface_id =
+                        Self::allocate_restored_surface_id(None, next_surface_id, used_surface_ids);
+                    restored_surfaces.push(PaneSurface::new(
+                        surface_id,
+                        make_terminal(cwd.as_deref(), None, false),
+                    ));
+                    restored_active_surface_id = Some(surface_id);
+                }
+                let active_surface_id =
+                    restored_active_surface_id.unwrap_or(restored_surfaces[0].id);
                 PaneNode::Leaf {
                     id: *pane_id,
-                    surfaces: vec![PaneSurface::new(surface_id, make_terminal(cwd.as_deref()))],
-                    active_surface_id: surface_id,
+                    surfaces: restored_surfaces,
+                    active_surface_id,
                 }
             }
             PaneLayoutState::Split {
@@ -1702,14 +1888,43 @@ impl PaneTree {
                     PaneSplitDirection::Horizontal => SplitDirection::Horizontal,
                     PaneSplitDirection::Vertical => SplitDirection::Vertical,
                 },
-                first: Box::new(Self::node_from_state(first, make_terminal, next_surface_id)),
+                first: Box::new(Self::node_from_state(
+                    first,
+                    make_terminal,
+                    next_surface_id,
+                    used_surface_ids,
+                )),
                 second: Box::new(Self::node_from_state(
                     second,
                     make_terminal,
                     next_surface_id,
+                    used_surface_ids,
                 )),
                 ratio: ratio.clamp(0.05, 0.95),
             },
+        }
+    }
+
+    fn allocate_restored_surface_id(
+        requested: Option<SurfaceId>,
+        next_surface_id: &mut SurfaceId,
+        used_surface_ids: &mut std::collections::HashSet<SurfaceId>,
+    ) -> SurfaceId {
+        if let Some(requested) = requested
+            && used_surface_ids.insert(requested)
+        {
+            if let Some(next) = requested.checked_add(1) {
+                *next_surface_id = (*next_surface_id).max(next);
+            }
+            return requested;
+        }
+
+        loop {
+            let candidate = *next_surface_id;
+            *next_surface_id = (*next_surface_id).checked_add(1).unwrap_or(0);
+            if used_surface_ids.insert(candidate) {
+                return candidate;
+            }
         }
     }
 }

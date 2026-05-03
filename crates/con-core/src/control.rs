@@ -14,17 +14,27 @@ use con_agent::{PaneCreateLocation, TmuxExecLocation};
 
 /// Default control endpoint location.
 ///
-/// On Unix this is a filesystem-backed Unix domain socket. On Windows it is
-/// a Named Pipe — the host portion `\\.\pipe\` is required by the Win32
-/// `CreateNamedPipeW` API and the leaf `con` matches the Unix default name.
-/// The default can be overridden with the `CON_SOCKET_PATH` env var on
-/// every platform.
-#[cfg(unix)]
+/// On Unix this is a filesystem-backed Unix domain socket. On Windows it is a
+/// Named Pipe — the host portion `\\.\pipe\` is required by the Win32
+/// `CreateNamedPipeW` API.
+///
+/// Debug builds intentionally use a distinct endpoint so `cargo run -p con`
+/// can coexist with an installed production/beta Con without making startup
+/// believe the dev process is a second window for the installed app. The
+/// default can be overridden with the `CON_SOCKET_PATH` env var on every
+/// platform.
+#[cfg(all(unix, not(debug_assertions)))]
 pub const DEFAULT_SOCKET_PATH: &str = "/tmp/con.sock";
-#[cfg(windows)]
+#[cfg(all(unix, debug_assertions))]
+pub const DEFAULT_SOCKET_PATH: &str = "/tmp/con-debug.sock";
+#[cfg(all(windows, not(debug_assertions)))]
 pub const DEFAULT_SOCKET_PATH: &str = r"\\.\pipe\con";
-#[cfg(not(any(unix, windows)))]
+#[cfg(all(windows, debug_assertions))]
+pub const DEFAULT_SOCKET_PATH: &str = r"\\.\pipe\con-debug";
+#[cfg(all(not(any(unix, windows)), not(debug_assertions)))]
 pub const DEFAULT_SOCKET_PATH: &str = "con.sock";
+#[cfg(all(not(any(unix, windows)), debug_assertions))]
+pub const DEFAULT_SOCKET_PATH: &str = "con-debug.sock";
 
 pub const JSON_RPC_VERSION: &str = "2.0";
 
@@ -1763,5 +1773,20 @@ mod tests {
     #[test]
     fn control_methods_are_non_empty() {
         assert!(!control_methods().is_empty());
+    }
+
+    #[test]
+    fn debug_build_uses_isolated_default_control_endpoint() {
+        if cfg!(debug_assertions) {
+            assert!(
+                DEFAULT_SOCKET_PATH.contains("debug"),
+                "debug builds should not share the production control endpoint"
+            );
+        } else {
+            assert!(
+                !DEFAULT_SOCKET_PATH.contains("debug"),
+                "release builds should keep the stable production control endpoint"
+            );
+        }
     }
 }

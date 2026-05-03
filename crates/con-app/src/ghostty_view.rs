@@ -32,6 +32,7 @@ use gpui_component::menu::ContextMenuExt;
 use crate::terminal_paste::{
     TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
 };
+use crate::terminal_restore::key_down_may_write_terminal;
 
 // Actions to intercept Tab/Shift-Tab before Root's focus-cycling handler.
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
@@ -123,6 +124,10 @@ pub struct GhosttyView {
     /// Data queued for the PTY before the surface was created.
     /// Flushed once in `ensure_initialized()` after the terminal exists.
     pending_write: Option<Vec<u8>>,
+    /// Private screen text restored from the previous app session. This is a
+    /// visual continuity layer only; it is cleared on the first user input so
+    /// we never replay commands or write synthetic bytes into the shell.
+    restored_screen_text: Option<Vec<String>>,
     /// Desired native view visibility, including before the NSView exists.
     native_view_visible: Cell<bool>,
     /// Desired Ghostty focus state. This is independent from GPUI keyboard
@@ -161,6 +166,7 @@ impl GhosttyView {
     pub fn new(
         app: Arc<GhosttyApp>,
         cwd: Option<String>,
+        restored_screen_text: Option<Vec<String>>,
         font_size: f32,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -189,6 +195,7 @@ impl GhosttyView {
             scale_factor: 1.0,
             last_title: None,
             pending_write: None,
+            restored_screen_text,
             native_view_visible: Cell::new(true),
             surface_focused: Cell::new(true),
             awaiting_first_layout_visibility: false,
@@ -322,6 +329,9 @@ impl GhosttyView {
     /// Queue data to write to the PTY. If the terminal is already initialized,
     /// writes immediately. Otherwise, buffers until `ensure_initialized()` runs.
     pub fn write_or_queue(&mut self, data: &[u8]) {
+        if !data.is_empty() {
+            self.restored_screen_text = None;
+        }
         if let Some(ref terminal) = self.terminal {
             terminal.write_to_pty(data);
         } else {
@@ -483,6 +493,7 @@ impl GhosttyView {
         self.last_bounds = None;
         self.last_title = None;
         self.pending_write = None;
+        self.restored_screen_text = None;
         self.next_surface_init_retry_at = None;
         #[cfg(target_os = "macos")]
         {
@@ -604,6 +615,7 @@ impl GhosttyView {
             nsview as *mut c_void,
             scale,
             self.initial_cwd.as_deref(),
+            self.restored_screen_text.as_deref(),
             Some(self.initial_font_size),
         ) {
             Ok(terminal) => {
@@ -613,6 +625,7 @@ impl GhosttyView {
                 terminal.set_content_scale(scale);
                 terminal.set_focus(self.surface_focused.get());
                 self.terminal = Some(Arc::new(terminal));
+                self.restored_screen_text = None;
                 self.host_view = Some(host_view);
                 self.document_view = Some(document_view);
                 self.nsview = Some(nsview);
@@ -1655,6 +1668,7 @@ impl Render for GhosttyView {
                 }
             }))
             .on_action(cx.listener(|this, _: &crate::Paste, _window, cx| {
+                this.restored_screen_text = None;
                 if this.paste_from_clipboard(cx) {
                     cx.notify();
                 }
@@ -1665,6 +1679,7 @@ impl Render for GhosttyView {
                     return;
                 };
                 window.focus(&this.focus_handle, cx);
+                this.restored_screen_text = None;
                 if this.send_terminal_paste_payload(payload) {
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
@@ -1745,6 +1760,16 @@ impl Render for GhosttyView {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.focus_handle.is_focused(window) {
                     return;
+                }
+                let special_key_writes = gpui_key_to_keycode(event.keystroke.key.as_str())
+                    .is_some()
+                    || event
+                        .keystroke
+                        .key_char
+                        .as_deref()
+                        .is_some_and(|key_char| !key_char.is_empty());
+                if key_down_may_write_terminal(event, special_key_writes) {
+                    this.restored_screen_text = None;
                 }
                 if this.handle_key_down(event, window, cx) {
                     window.prevent_default();

@@ -1,34 +1,49 @@
-# Docs
+# Documentation
 
-This folder collects research notes, implementation notes, and design handoff documents for `con`.
+This is the map for Con's docs. Start with the user guides unless you are
+building or changing Con itself.
 
-## Start Here
+## User Guides
 
-- `../README.md` — project overview
-- `../CHANGELOG.md` — release notes and product changes
-- `../DESIGN.md` — vision and architecture
-- `../HACKING.md` — contributor quickstart
+| Need | Read |
+| --- | --- |
+| See what Con looks like | [Screenshot gallery](screenshots.md) |
+| Save and reuse a project layout | [Workspace layout profiles](workspace-layout-profiles-guide.md) |
+| See what changed in the latest beta | [Release notes](../CHANGELOG.md) |
+| Install Con | [Install section in README](../README.md#install) |
+| Learn the main shortcuts | [Quick controls in README](../README.md#2-min-know-how) |
 
-## Design
+## Product And Design
 
-- `design/con-design-language.md` — core design principles
-- `design/con-ux-product-spec.md` — product and flow handoff
-- `design/con-ui-visual-spec.md` — visual system and component guidance
-- `design/con-prototype-addendum.md` — validated prototype notes
+| Need | Read |
+| --- | --- |
+| Understand the product direction | [Architecture and vision](../DESIGN.md) |
+| Understand the UI principles | [Design language](design/con-design-language.md) |
+| Understand the UX model | [Product and flow spec](design/con-ux-product-spec.md) |
+| Understand visual system details | [Visual spec](design/con-ui-visual-spec.md) |
 
-## Implementation
+## Developer Docs
 
-- `impl/agent-harness.md` — AI harness architecture
-- `impl/macos-release.md` — packaging, signing, notarization, and updater flow
-- `impl/terminal-agent-benchmark.md` — benchmark architecture and evaluation policy
-- `impl/terminal-rendering.md` — rendering pipeline
-- `impl/pane-surfaces.md` — pane-local terminal surface design and control API
-- `impl/socket-api.md` — automation and control API
-- `impl/build-system.md` — build and dependency notes
+| Need | Read |
+| --- | --- |
+| Build, run, and test locally | [Contributor quickstart](../HACKING.md) |
+| Understand the agent harness | [Agent harness](impl/agent-harness.md) |
+| Use the local control API | [Socket API](impl/socket-api.md) |
+| Validate the CLI/control plane | [con-cli E2E](impl/con-cli-e2e.md) |
+| Understand pane-local surfaces | [Pane surfaces](impl/pane-surfaces.md) |
+| Understand restorable workspaces internals | [Restorable workspaces](impl/restorable-workspaces.md) |
+| Understand terminal rendering | [Terminal rendering](impl/terminal-rendering.md) |
+| Package macOS releases | [macOS release flow](impl/macos-release.md) |
+| Track Windows port status | [Windows port](impl/windows-port.md) |
+| Track Linux port status | [Linux port](impl/linux-port.md) |
 
-## Research
+## Research Notes
 
-- `study/gpui.md` — GPUI study notes
-- `study/ghostty-vt.md` — Ghostty / VT notes
-- `study/rig.md` — Rig integration notes
-- `study/socket-control-patterns.md` — external automation architecture notes
+These are internal study notes. They are useful when changing architecture, but
+most users should not need them.
+
+- [GPUI](study/gpui.md)
+- [Ghostty VT](study/ghostty-vt.md)
+- [Rig](study/rig.md)
+- [Socket control patterns](study/socket-control-patterns.md)
+- [Markdown renderer architecture](study/markdown-renderer-architecture.md)

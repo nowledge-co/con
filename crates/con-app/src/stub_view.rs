@@ -53,6 +53,7 @@ impl GhosttyView {
     pub fn new(
         app: Arc<GhosttyApp>,
         cwd: Option<String>,
+        _restored_screen_text: Option<Vec<String>>,
         font_size: f32,
         cx: &mut Context<Self>,
     ) -> Self {

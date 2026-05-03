@@ -20,7 +20,7 @@
 //!
 //! Lifecycle:
 //!
-//! 1. `GhosttyView::new(app, cwd, font_size, cx)` pre-allocates a
+//! 1. `GhosttyView::new(app, cwd, restored_screen_text, font_size, cx)` pre-allocates a
 //!    `WindowsGhosttyTerminal` so `terminal_pane` can hold an Arc to
 //!    it. No renderer/ConPTY yet — those are built lazily.
 //! 2. `on_children_prepainted` captures the pane's bounds the first
@@ -56,6 +56,7 @@ use crate::terminal_paste::{
     TerminalPastePayload, copy_selection_to_clipboard, payload_from_clipboard,
     payload_from_external_paths,
 };
+use crate::terminal_restore::{key_down_may_write_terminal, restored_terminal_output};
 use con_ghostty::windows::host_view::{MouseEventMods, RenderSession};
 use con_ghostty::windows::render::{FrameBgra, RenderOutcome};
 
@@ -105,6 +106,7 @@ pub struct GhosttyView {
     terminal: Option<Arc<GhosttyTerminal>>,
     focus_handle: FocusHandle,
     initial_cwd: Option<String>,
+    restored_screen_text: Option<Vec<String>>,
     initial_font_size: f32,
     initialized: bool,
     /// Latched after a `RenderSession::new` failure so we don't re-try
@@ -177,6 +179,7 @@ impl GhosttyView {
     pub fn new(
         app: Arc<GhosttyApp>,
         cwd: Option<String>,
+        restored_screen_text: Option<Vec<String>>,
         font_size: f32,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -204,6 +207,7 @@ impl GhosttyView {
             terminal: Some(terminal),
             focus_handle: cx.focus_handle(),
             initial_cwd: cwd,
+            restored_screen_text,
             initial_font_size: font_size,
             initialized: false,
             init_failed: false,
@@ -234,6 +238,10 @@ impl GhosttyView {
     }
 
     pub fn write_or_queue(&mut self, data: &[u8]) {
+        if !data.is_empty() {
+            self.clear_restored_screen_text();
+        }
+
         if let Some(terminal) = &self.terminal {
             terminal.write_to_pty(data);
         }
@@ -385,11 +393,13 @@ impl GhosttyView {
         };
 
         let cwd = self.initial_cwd.as_deref().map(std::path::PathBuf::from);
-        match RenderSession::new(width_px, height_px, dpi, config, cwd, wake) {
+        let initial_output = restored_terminal_output(self.restored_screen_text.as_deref());
+        match RenderSession::new(width_px, height_px, dpi, config, cwd, initial_output, wake) {
             Ok(session) => {
                 if let Some(terminal) = &self.terminal {
                     terminal.attach(session);
                 }
+                self.restored_screen_text = None;
                 self.initialized = true;
                 self.last_physical_size = Some((width_px, height_px));
                 self.last_scale_factor = dpi as f32 / 96.0;
@@ -638,6 +648,10 @@ impl GhosttyView {
         }
 
         false
+    }
+
+    fn clear_restored_screen_text(&mut self) {
+        self.restored_screen_text = None;
     }
 
     fn image_children(&self) -> Vec<AnyElement> {
@@ -1332,6 +1346,9 @@ impl TerminalImeView for GhosttyView {
     }
 
     fn send_ime_text(&mut self, text: &str, _cx: &mut Context<Self>) {
+        if !text.is_empty() {
+            self.clear_restored_screen_text();
+        }
         if let Some(terminal) = &self.terminal {
             terminal.send_text(text);
         }
@@ -1387,6 +1404,7 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
+                this.clear_restored_screen_text();
                 if let Some(terminal) = &this.terminal {
                     terminal.send_text("\t");
                 }
@@ -1395,6 +1413,7 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
+                this.clear_restored_screen_text();
                 if let Some(terminal) = &this.terminal {
                     terminal.send_text("\x1b[Z");
                 }
@@ -1405,6 +1424,7 @@ impl Render for GhosttyView {
                 }
             }))
             .on_action(cx.listener(|this, _: &crate::Paste, _window, cx| {
+                this.clear_restored_screen_text();
                 if let Some(terminal) = &this.terminal
                     && paste_from_clipboard(terminal, cx)
                 {
@@ -1418,6 +1438,7 @@ impl Render for GhosttyView {
                 };
                 window.focus(&this.focus_handle, cx);
                 cx.emit(GhosttyFocusChanged);
+                this.clear_restored_screen_text();
                 if let Some(terminal) = &this.terminal {
                     send_terminal_paste_payload(terminal, payload);
                     cx.notify();
@@ -1426,6 +1447,12 @@ impl Render for GhosttyView {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.focus_handle.is_focused(window) {
                     return;
+                }
+                let special_key_writes =
+                    encode_special_key(&event.keystroke.key, &event.keystroke.modifiers, false)
+                        .is_some();
+                if key_down_may_write_terminal(event, special_key_writes) {
+                    this.clear_restored_screen_text();
                 }
                 if this.handle_key_down(event, window, cx) {
                     window.prevent_default();

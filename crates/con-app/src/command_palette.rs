@@ -69,6 +69,24 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         category: "Terminal",
     },
     PaletteAction {
+        id: "export-workspace-layout",
+        label: "Save Layout Profile",
+        shortcut: "",
+        category: "Workspace",
+    },
+    PaletteAction {
+        id: "add-workspace-layout-tabs",
+        label: "Add Tabs from Layout Profile",
+        shortcut: "",
+        category: "Workspace",
+    },
+    PaletteAction {
+        id: "open-workspace-layout-window",
+        label: "Open Layout Profile in New Window",
+        shortcut: "",
+        category: "Workspace",
+    },
+    PaletteAction {
         id: "next-tab",
         label: "Next Tab",
         shortcut: "ctrl-tab",
@@ -91,6 +109,12 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         label: "Clear Terminal",
         shortcut: "secondary-k",
         category: "Terminal",
+    },
+    PaletteAction {
+        id: "clear-restored-terminal-history",
+        label: "Clear Restored Terminal History",
+        shortcut: "",
+        category: "Privacy",
     },
     PaletteAction {
         id: "focus-terminal",

@@ -44,6 +44,9 @@ fn default_background_image_position() -> String {
 fn default_background_image_fit() -> String {
     "contain".into()
 }
+fn default_restore_terminal_text() -> bool {
+    true
+}
 
 pub fn is_gpui_pseudo_font_family(name: &str) -> bool {
     name.trim_start().starts_with('.')
@@ -109,6 +112,9 @@ pub struct AppearanceConfig {
     pub background_image_position: String,
     pub background_image_fit: String,
     pub background_image_repeat: bool,
+    /// Keep bounded private terminal text so restart continuity can show what
+    /// was on screen. This is never exported to workspace layout profiles.
+    pub restore_terminal_text: bool,
     /// Layout of the workspace tab strip. Defaults to `Horizontal` for
     /// backward compatibility with every shipped beta.
     pub tabs_orientation: TabsOrientation,
@@ -127,6 +133,7 @@ impl Default for AppearanceConfig {
             background_image_position: default_background_image_position(),
             background_image_fit: default_background_image_fit(),
             background_image_repeat: false,
+            restore_terminal_text: default_restore_terminal_text(),
             tabs_orientation: TabsOrientation::default(),
         }
     }
@@ -502,6 +509,7 @@ impl Config {
         if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
             let mut config: Config = toml::from_str(&content)?;
+            migrate_loaded_config(&mut config, &content);
             config.agent.migrate_legacy();
             Ok(config)
         } else {
@@ -518,6 +526,27 @@ impl Config {
         let content = toml::to_string_pretty(self)?;
         write_private_atomic(&path, content.as_bytes())
     }
+}
+
+fn migrate_loaded_config(config: &mut Config, content: &str) {
+    // New installs get restart continuity by default. Existing config files
+    // created before the setting existed should not silently start retaining
+    // terminal text until the user enables it from Settings.
+    if !config_declares_restore_terminal_text(content) {
+        config.appearance.restore_terminal_text = false;
+    }
+}
+
+fn config_declares_restore_terminal_text(content: &str) -> bool {
+    toml::from_str::<toml::Value>(content)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("appearance")?
+                .get("restore_terminal_text")
+                .cloned()
+        })
+        .is_some()
 }
 
 fn write_private_atomic(path: &Path, content: &[u8]) -> Result<()> {
@@ -592,7 +621,10 @@ fn replace_file(tmp_path: &Path, path: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_TERMINAL_FONT_FAMILY, SkillsConfig, sanitize_terminal_font_family};
+    use super::{
+        Config, DEFAULT_TERMINAL_FONT_FAMILY, SkillsConfig, migrate_loaded_config,
+        sanitize_terminal_font_family,
+    };
 
     #[test]
     fn default_skill_path_uses_shared_app_path_policy() {
@@ -621,5 +653,36 @@ mod tests {
             sanitize_terminal_font_family("JetBrains Mono"),
             "JetBrains Mono"
         );
+    }
+
+    #[test]
+    fn new_configs_enable_restore_terminal_text_by_default() {
+        assert!(Config::default().appearance.restore_terminal_text);
+    }
+
+    #[test]
+    fn loaded_legacy_configs_do_not_opt_into_restore_terminal_text() {
+        let content = r#"
+[appearance]
+terminal_opacity = 0.8
+"#;
+        let mut config: Config = toml::from_str(content).unwrap();
+
+        migrate_loaded_config(&mut config, content);
+
+        assert!(!config.appearance.restore_terminal_text);
+    }
+
+    #[test]
+    fn loaded_configs_preserve_explicit_restore_terminal_text() {
+        let content = r#"
+[appearance]
+restore_terminal_text = true
+"#;
+        let mut config: Config = toml::from_str(content).unwrap();
+
+        migrate_loaded_config(&mut config, content);
+
+        assert!(config.appearance.restore_terminal_text);
     }
 }

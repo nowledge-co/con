@@ -21,6 +21,7 @@ const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
 /// — that's known-good on macOS.
 const GHOSTTY_REV: &str = "ca7516bea60190ee2e9a4f9182b61d318d107c6e";
 const GHOSTTY_ENV: &str = "CON_GHOSTTY_SOURCE_DIR";
+const GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV: &str = "CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT";
 const GHOSTTY_VT_TARGET_ENV: &str = "CON_GHOSTTY_VT_TARGET";
 
 fn main() {
@@ -30,6 +31,7 @@ fn main() {
     // until something unrelated invalidated the cache.
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     println!("cargo:rerun-if-env-changed={GHOSTTY_ENV}");
+    println!("cargo:rerun-if-env-changed={GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV}");
     println!("cargo:rerun-if-env-changed=CON_STUB_GHOSTTY_VT");
     println!("cargo:rerun-if-env-changed=CON_SKIP_GHOSTTY_VT");
     println!("cargo:rerun-if-env-changed=CON_GHOSTTY_VT_SIMD");
@@ -58,6 +60,8 @@ fn main() {
 
 fn build_macos() {
     let ghostty_dir = resolve_ghostty_source();
+    let ghostty_dir = patchable_ghostty_source(ghostty_dir);
+    let _initial_output_restore_enabled = apply_embedded_initial_output_patch(&ghostty_dir);
     let optimize = ghostty_optimize();
     let zig_bin = env::var_os("CON_ZIG_BIN").unwrap_or_else(|| std::ffi::OsString::from("zig"));
 
@@ -126,6 +130,13 @@ fn build_macos() {
 
 fn ghostty_optimize() -> String {
     env::var("CON_GHOSTTY_OPTIMIZE").unwrap_or_else(|_| "ReleaseFast".to_string())
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    env::var_os(name).is_some_and(|value| {
+        let value = value.to_string_lossy();
+        !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+    })
 }
 
 // ── Windows ───────────────────────────────────────────────────────────
@@ -511,6 +522,182 @@ fn resolve_ghostty_source() -> PathBuf {
     );
 
     vendor_root
+}
+
+fn patchable_ghostty_source(source: PathBuf) -> PathBuf {
+    if env::var_os(GHOSTTY_ENV).is_none() {
+        return source;
+    }
+
+    // Never patch a caller-provided checkout in place. `CON_GHOSTTY_SOURCE_DIR`
+    // is for local upstream study; Con's embedding extension is applied to a
+    // throwaway copy under OUT_DIR so `3pp/` and user checkouts stay read-only.
+    println!("cargo:rerun-if-changed={}", source.join("src").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        source.join("include/ghostty.h").display()
+    );
+
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR missing"));
+    let patched = out_dir.join("ghostty-src-patched-env");
+    if patched.exists() {
+        fs::remove_dir_all(&patched).expect("failed to clear patched Ghostty source copy");
+    }
+    copy_dir_filtered(&source, &patched).unwrap_or_else(|err| {
+        panic!(
+            "failed to copy CON_GHOSTTY_SOURCE_DIR from {} to {}: {err}",
+            source.display(),
+            patched.display()
+        )
+    });
+    patched
+}
+
+fn copy_dir_filtered(src: &Path, dst: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        if matches!(name.as_ref(), ".git" | ".zig-cache" | "zig-out" | "target") {
+            continue;
+        }
+
+        let src_path = entry.path();
+        let dst_path = dst.join(&file_name);
+        let metadata = fs::symlink_metadata(&src_path)?;
+        if metadata.is_dir() {
+            copy_dir_filtered(&src_path, &dst_path)?;
+        } else if metadata.file_type().is_symlink() {
+            let target = fs::read_link(&src_path)?;
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, &dst_path)?;
+            #[cfg(windows)]
+            {
+                if src_path.is_dir() {
+                    std::os::windows::fs::symlink_dir(target, &dst_path)?;
+                } else {
+                    std::os::windows::fs::symlink_file(target, &dst_path)?;
+                }
+            }
+        } else if metadata.is_file() {
+            fs::copy(&src_path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn apply_embedded_initial_output_patch(ghostty_dir: &Path) -> bool {
+    if let Err(err) = try_apply_embedded_initial_output_patch(ghostty_dir) {
+        if env_flag_enabled(GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV) {
+            panic!(
+                "con-ghostty: embedded initial_output restore hook is required but could not be applied: {err}\n\
+                 Rebase Con's Ghostty embedding patch against GHOSTTY_REV={GHOSTTY_REV}, or unset \
+                 {GHOSTTY_INITIAL_OUTPUT_REQUIRE_ENV} for a local best-effort build."
+            );
+        }
+        println!("cargo:warning=con-ghostty: embedded initial_output restore hook disabled: {err}");
+        return false;
+    }
+
+    true
+}
+
+fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), String> {
+    let embedded = ghostty_dir.join("src/apprt/embedded.zig");
+    let surface = ghostty_dir.join("src/Surface.zig");
+    let header = ghostty_dir.join("include/ghostty.h");
+
+    patch_file_once(
+        &embedded,
+        "initial_output: ?[*:0]const u8",
+        &[(
+            "        /// Input to send to the command after it is started.\n        initial_input: ?[*:0]const u8 = null,\n\n        /// Wait after the command exits\n",
+            "        /// Input to send to the command after it is started.\n        initial_input: ?[*:0]const u8 = null,\n\n        /// Output to seed into the terminal state before the command starts.\n        /// This is an embedding-only hook used for visual scrollback restore;\n        /// it is parsed as terminal output and is never written to the pty.\n        initial_output: ?[*:0]const u8 = null,\n\n        /// Wait after the command exits\n",
+        )],
+    )?;
+    patch_file_once(
+        &embedded,
+        "initial_output_restore = if (opts.initial_output)",
+        &[(
+            "        // Initialize our surface right away. We're given a view that is\n        // ready to use.\n        try self.core_surface.init(\n            app.core_app.alloc,\n            &config,\n            app.core_app,\n            app,\n            self,\n        );\n",
+            "        // Initialize our surface right away. We're given a view that is\n        // ready to use. `initial_output_restore` is parsed into Ghostty's\n        // terminal state before the child process starts.\n        const initial_output_restore = if (opts.initial_output) |c_output|\n            std.mem.sliceTo(c_output, 0)\n        else\n            null;\n        try self.core_surface.init(\n            app.core_app.alloc,\n            &config,\n            app.core_app,\n            app,\n            self,\n            initial_output_restore,\n        );\n",
+        )],
+    )?;
+    patch_file_once(
+        &surface,
+        "initial_output_restore: ?[]const u8",
+        &[(
+            "    rt_surface: *apprt.runtime.Surface,\n) !void {\n",
+            "    rt_surface: *apprt.runtime.Surface,\n    initial_output_restore: ?[]const u8,\n) !void {\n",
+        )],
+    )?;
+    patch_file_once(
+        &surface,
+        "This keeps restored text in Ghostty's",
+        &[(
+            "    // Start our IO thread\n    self.io_thr = try std.Thread.spawn(\n",
+            "    // Seed restored output after the renderer is alive but before the IO\n    // thread starts the child process. This keeps restored text in Ghostty's\n    // own terminal screen/scrollback layer without ever feeding it to the shell.\n    if (initial_output_restore) |initial_output| {\n        if (initial_output.len > 0) self.io.processOutput(initial_output);\n    }\n\n    // Start our IO thread\n    self.io_thr = try std.Thread.spawn(\n",
+        )],
+    )?;
+    replace_file_text_if_present(
+        &surface,
+        "    if (opts.initial_output) |c_output| {\n        const initial_output = std.mem.sliceTo(c_output, 0);\n        if (initial_output.len > 0) self.io.processOutput(initial_output);\n    }\n",
+        "    if (initial_output_restore) |initial_output| {\n        if (initial_output.len > 0) self.io.processOutput(initial_output);\n    }\n",
+    )?;
+
+    patch_file_once(
+        &header,
+        "const char* initial_output;",
+        &[(
+            "  const char* initial_input;\n  bool wait_after_command;\n",
+            "  const char* initial_input;\n  const char* initial_output;\n  bool wait_after_command;\n",
+        )],
+    )?;
+
+    println!("cargo:rustc-cfg=con_ghostty_embedded_initial_output");
+    println!("cargo:rerun-if-changed={}", embedded.display());
+    println!("cargo:rerun-if-changed={}", surface.display());
+    println!("cargo:rerun-if-changed={}", header.display());
+    Ok(())
+}
+
+fn patch_file_once(path: &Path, marker: &str, replacements: &[(&str, &str)]) -> Result<(), String> {
+    let mut text = fs::read_to_string(path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    if text.contains(marker) {
+        return Ok(());
+    }
+
+    for (from, to) in replacements {
+        if !text.contains(from) {
+            return Err(format!(
+                "failed to patch {}: expected anchor not found while applying Con embedding extension",
+                path.display()
+            ));
+        }
+        text = text.replacen(from, to, 1);
+    }
+
+    write_file_atomic(path, &text)
+}
+
+fn replace_file_text_if_present(path: &Path, from: &str, to: &str) -> Result<(), String> {
+    let text = fs::read_to_string(path)
+        .map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    if !text.contains(from) {
+        return Ok(());
+    }
+    write_file_atomic(path, &text.replace(from, to))
+}
+
+fn write_file_atomic(path: &Path, text: &str) -> Result<(), String> {
+    let tmp = path.with_extension(format!("con-patch-{}.tmp", std::process::id()));
+    fs::write(&tmp, text).map_err(|err| format!("failed to write {}: {err}", tmp.display()))?;
+    fs::rename(&tmp, path).map_err(|err| {
+        let _ = fs::remove_file(&tmp);
+        format!("failed to replace {}: {err}", path.display())
+    })
 }
 
 fn try_find_lib(ghostty_dir: &PathBuf, lib_name: &str) -> Option<PathBuf> {

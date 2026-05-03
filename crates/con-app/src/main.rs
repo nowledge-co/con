@@ -61,13 +61,17 @@ mod terminal_ime;
 mod terminal_links;
 mod terminal_pane;
 mod terminal_paste;
+mod terminal_restore;
 mod terminal_shortcuts;
 mod theme;
 mod updater;
 mod workspace;
 
 use con_core::config::KeybindingConfig;
-use con_core::session::{GlobalHistoryState, Session};
+use con_core::session::{
+    GlobalHistoryState, PaneLayoutState, Session, SurfaceState, WORKSPACE_ERROR_SURFACE_OWNER,
+};
+use con_core::workspace_layout::WorkspaceLayout;
 use gpui::*;
 use gpui_component::ActiveTheme;
 #[cfg(target_os = "macos")]
@@ -106,6 +110,10 @@ actions!(
         SplitLeft,
         SplitUp,
         ClearTerminal,
+        ClearRestoredTerminalHistory,
+        ExportWorkspaceLayout,
+        AddWorkspaceLayoutTabs,
+        OpenWorkspaceLayoutWindow,
         NewSurface,
         NewSurfaceSplitRight,
         NewSurfaceSplitDown,
@@ -457,7 +465,12 @@ fn default_window_decorations() -> Option<WindowDecorations> {
     }
 }
 
-fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bool, cx: &mut App) {
+pub(crate) fn open_con_window(
+    config: con_core::Config,
+    session: Session,
+    exit_on_error: bool,
+    cx: &mut App,
+) {
     let window_options = default_window_options(&config, cx);
     cx.spawn(async move |cx| {
         if let Err(err) = cx.open_window(window_options, |window, cx| {
@@ -518,6 +531,10 @@ fn open_con_window(config: con_core::Config, session: Session, exit_on_error: bo
 }
 
 fn fresh_window_session_with_history() -> Session {
+    fresh_window_session_with_history_for_cwd(None)
+}
+
+fn fresh_window_session_with_history_for_cwd(cwd: Option<std::path::PathBuf>) -> Session {
     let persisted = Session::load().unwrap_or_default();
     let persisted_history = GlobalHistoryState::load().unwrap_or_default();
     let mut session = Session::default();
@@ -556,7 +573,223 @@ fn fresh_window_session_with_history() -> Session {
             .collect()
     };
 
+    if let Some(cwd) = cwd {
+        let cwd = cwd.to_string_lossy().to_string();
+        if let Some(tab) = session.tabs.first_mut() {
+            tab.cwd = Some(cwd.clone());
+            if let Some(pane) = tab.panes.first_mut() {
+                pane.cwd = Some(cwd);
+            }
+        }
+    }
+
     session
+}
+
+fn fallback_cwd_for_workspace_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    if path.is_dir() {
+        return Some(path.to_path_buf());
+    }
+    path.parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .and_then(|parent| {
+            parent
+                .ancestors()
+                .find(|ancestor| !ancestor.as_os_str().is_empty() && ancestor.is_dir())
+                .map(std::path::Path::to_path_buf)
+        })
+}
+
+fn workspace_path_error_session(path: &std::path::Path, err: &anyhow::Error) -> Session {
+    let mut session =
+        fresh_window_session_with_history_for_cwd(fallback_cwd_for_workspace_path(path));
+    let screen_text = vec![
+        "Con could not open the requested workspace profile.".to_string(),
+        format!("Path: {}", path.display()),
+        format!("Reason: {err}"),
+        "Opened a fresh shell instead. Fix the profile and run con <path> again.".to_string(),
+        String::new(),
+    ];
+
+    if let Some(tab) = session.tabs.first_mut() {
+        tab.title = "Workspace Error".to_string();
+        tab.user_label = Some("Workspace Error".to_string());
+        tab.focused_pane_id = Some(0);
+        let cwd = tab
+            .cwd
+            .clone()
+            .or_else(|| tab.panes.first().and_then(|pane| pane.cwd.clone()));
+        tab.layout = Some(PaneLayoutState::Leaf {
+            pane_id: 0,
+            cwd: cwd.clone(),
+            active_surface_id: Some(0),
+            surfaces: vec![SurfaceState {
+                surface_id: 0,
+                title: Some("Shell".to_string()),
+                // Synthetic Con-owned diagnostic surface. Keep it out of
+                // human/subagent owner namespaces used by the orchestrator.
+                owner: Some(WORKSPACE_ERROR_SURFACE_OWNER.to_string()),
+                cwd,
+                close_pane_when_last: false,
+                screen_text,
+            }],
+        });
+    }
+
+    session
+}
+
+fn startup_path_argument() -> Option<std::path::PathBuf> {
+    std::env::args_os().skip(1).find_map(|arg| {
+        let text = arg.to_string_lossy();
+        (!text.starts_with('-')).then(|| std::path::PathBuf::from(arg))
+    })
+}
+
+pub(crate) fn session_from_workspace_layout_path(
+    path: impl AsRef<std::path::Path>,
+) -> anyhow::Result<Session> {
+    let path = path.as_ref();
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+
+    if path.is_file() {
+        return session_from_workspace_layout_file(path);
+    }
+
+    if path.is_dir() {
+        let layout_path = WorkspaceLayout::default_path_for_root(&path);
+        if layout_path.exists() {
+            return session_from_workspace_layout_file(layout_path);
+        }
+        return Ok(fresh_window_session_with_history_for_cwd(Some(path)));
+    }
+
+    anyhow::bail!("workspace path does not exist: {}", path.display())
+}
+
+fn startup_session() -> Session {
+    if let Some(path) = startup_path_argument() {
+        match session_from_workspace_layout_path(&path) {
+            Ok(session) => {
+                log::info!("opening workspace path {}", path.display());
+                return session;
+            }
+            Err(err) => {
+                log::warn!("failed to open workspace path {}: {err}", path.display());
+                return workspace_path_error_session(&path, &err);
+            }
+        }
+    }
+
+    if live_control_endpoint_exists() {
+        log::info!(
+            "existing con control endpoint detected; opening a fresh window session with shared history"
+        );
+        fresh_window_session_with_history()
+    } else {
+        Session::load().unwrap_or_default()
+    }
+}
+
+pub(crate) fn workspace_layout_root_for_file(path: &std::path::Path) -> std::path::PathBuf {
+    let Some(parent) = path.parent() else {
+        return std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    };
+
+    if parent.file_name().and_then(|name| name.to_str()) == Some(".con")
+        && let Some(project_root) = parent.parent()
+    {
+        return project_root.to_path_buf();
+    }
+
+    parent.to_path_buf()
+}
+
+pub(crate) fn session_from_workspace_layout_file(
+    path: impl AsRef<std::path::Path>,
+) -> anyhow::Result<Session> {
+    let path = path.as_ref();
+    let layout = WorkspaceLayout::load(path)?;
+    let profile_root = workspace_layout_root_for_file(path);
+    let layout_root = if layout.root.trim().is_empty() || layout.root == "." {
+        profile_root
+    } else {
+        let root = std::path::Path::new(&layout.root);
+        if root.is_absolute() {
+            root.to_path_buf()
+        } else {
+            profile_root.join(root)
+        }
+    };
+    let history = GlobalHistoryState::load().unwrap_or_default();
+    layout.to_session(layout_root, Some(&history))
+}
+
+#[cfg(unix)]
+fn live_control_endpoint_exists() -> bool {
+    let path = con_core::control_socket_path();
+    let addr = match socket2::SockAddr::unix(&path) {
+        Ok(addr) => addr,
+        Err(err) => {
+            log::debug!(
+                "skipping con control endpoint probe for invalid socket path {}: {err}",
+                path.display()
+            );
+            return false;
+        }
+    };
+
+    let socket = match socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None) {
+        Ok(socket) => socket,
+        Err(err) => {
+            log::debug!("failed to create con control endpoint probe socket: {err}");
+            return false;
+        }
+    };
+
+    match socket.connect_timeout(&addr, std::time::Duration::from_millis(75)) {
+        Ok(()) => true,
+        Err(err) => {
+            log::debug!(
+                "con control endpoint probe did not find a live server at {}: {err}",
+                path.display()
+            );
+            false
+        }
+    }
+}
+
+#[cfg(windows)]
+fn live_control_endpoint_exists() -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::System::Pipes::WaitNamedPipeW;
+    use windows::core::PCWSTR;
+
+    let path = con_core::control_socket_path();
+    let pipe_name: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    if unsafe { WaitNamedPipeW(PCWSTR(pipe_name.as_ptr()), 75).as_bool() } {
+        true
+    } else {
+        log::debug!(
+            "con control endpoint probe did not find a live pipe at {} within 75ms",
+            path.display()
+        );
+        false
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn live_control_endpoint_exists() -> bool {
+    false
 }
 
 pub(crate) fn toggle_global_summon(cx: &mut App) {
@@ -1269,6 +1502,7 @@ fn main() {
                 items: vec![
                     MenuItem::action("New Window", NewWindow),
                     MenuItem::action("New Tab", NewTab),
+                    MenuItem::separator(),
                     MenuItem::action("Close Tab", CloseTab),
                     MenuItem::action("Close Pane", ClosePane),
                     MenuItem::action("Toggle Pane Zoom", TogglePaneZoom),
@@ -1279,6 +1513,10 @@ fn main() {
                     MenuItem::action("Split Up", SplitUp),
                     MenuItem::separator(),
                     MenuItem::action("Clear Terminal", ClearTerminal),
+                    MenuItem::action(
+                        "Clear Restored Terminal History",
+                        ClearRestoredTerminalHistory,
+                    ),
                     MenuItem::separator(),
                     MenuItem::action("New Surface Tab", NewSurface),
                     MenuItem::action("New Surface Pane Right", NewSurfaceSplitRight),
@@ -1287,6 +1525,19 @@ fn main() {
                     MenuItem::action("Previous Surface Tab", PreviousSurface),
                     MenuItem::action("Rename Current Surface", RenameSurface),
                     MenuItem::action("Close Current Surface", CloseSurface),
+                ],
+                disabled: false,
+            },
+            Menu {
+                name: "Workspace".into(),
+                items: vec![
+                    MenuItem::action("Save Layout Profile…", ExportWorkspaceLayout),
+                    MenuItem::separator(),
+                    MenuItem::action("Add Tabs from Layout Profile…", AddWorkspaceLayoutTabs),
+                    MenuItem::action(
+                        "Open Layout Profile in New Window…",
+                        OpenWorkspaceLayoutWindow,
+                    ),
                 ],
                 disabled: false,
             },
@@ -1327,12 +1578,7 @@ fn main() {
             },
         ]);
 
-        open_con_window(
-            config.clone(),
-            Session::load().unwrap_or_default(),
-            true,
-            cx,
-        );
+        open_con_window(config.clone(), startup_session(), true, cx);
 
         // Initialize the auto-updater. On macOS this loads Sparkle
         // from the app bundle; on Windows it kicks off a notify-only

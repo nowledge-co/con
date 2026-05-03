@@ -4,6 +4,53 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.57` - 2026-05-03
+
+### Added
+
+**Restorable Workspaces**
+
+- Added the first restorable-workspace implementation slice. Private session layout now round-trips every pane-local surface, including surface id, title, owner, cwd, active surface, and close-pane-when-last policy, instead of restoring only the active surface in each pane.
+- Added the first private screen-text continuity slice. Con now snapshots bounded recent terminal text per pane-local surface and seeds it back through the terminal parser before the shell starts on macOS, Windows, and Linux, so restored text lives in terminal content instead of a UI overlay. This does not replay commands or export terminal text into workspace layouts.
+- Added a typed, validated, layout-only `.con/workspace.toml` schema for future Con-generated export/import flows. The schema covers tabs, panes, surfaces, split geometry, cwd, and optional agent defaults, but deliberately excludes commands, conversations, history, scrollback, credentials, and trust decisions.
+- Added the first layout-profile workflow. Use Command Palette or the Workspace menu to save the current window as a `.con/workspace.toml`, add a project folder/profile as tabs in the current window, or open a project folder/profile in a new window.
+- Added project layout startup for explicit paths: `con <project-folder>` opens `<project-folder>/.con/workspace.toml` when it exists, while `con <workspace.toml>` opens that profile directly. Plain `con` still prefers private session restore.
+- Documented the production restore model: local continuity and project-local memory come first, exported layouts are generated from user-tuned workspaces, and command/task files remain a separate future workflow.
+- Documented the layout-profile "aha" flow and gesture semantics so users can distinguish automatic private restore, scratch windows, and explicit project layouts.
+- Added a **Restore Terminal Text** privacy control in Settings -> General -> Continuity and a **Clear Restored Terminal History** Command Palette action that disables the feature and wipes saved restored text.
+
+### Changed
+
+**Startup**
+
+- When a second Con process sees an already-live control endpoint, it now opens a fresh window session with shared history instead of cloning the last restored layout and agent conversation again. Full single-instance forwarding remains a follow-up under the app-state workspace model.
+- Debug builds now use an isolated default control endpoint (`/tmp/con-debug.sock` on Unix and `\\.\pipe\con-debug` on Windows). This lets `cargo run -p con` coexist with an installed Con without suppressing the dev build's private workspace restore.
+
+### Fixed
+
+**Startup**
+
+- Bounded the Unix and Windows control-endpoint probes used during second-process startup so a stale or wedged socket/pipe cannot hang Con while deciding whether to restore the saved workspace or open a fresh window.
+- When `con <path>` cannot open the requested workspace profile, Con now opens a fresh shell with a visible terminal-layer error message instead of silently falling back to unrelated private restore state.
+- Kept the workspace-profile error message visible even when restored terminal text continuity is disabled, without re-enabling private terminal-text restore for normal panes.
+
+**Workspace Layout Profiles**
+
+- Fixed cross-platform layout export so repo-relative `cwd` values are written with stable slash-separated paths on Windows, macOS, and Linux.
+- Avoided capturing terminal text when exporting layout profiles, since exported profiles deliberately exclude runtime text history.
+- Honored the **Restore Terminal Text** privacy setting when adding tabs from an imported layout profile, and prevented imported inactive native terminal views from staying visible behind the active tab.
+- Existing config files that predate **Restore Terminal Text** no longer silently opt into terminal-text retention on upgrade. New installs still enable continuity by default, and existing users can turn it on from Settings -> General -> Continuity.
+- Rejected edited layout profiles that define multiple panes without a layout tree, and made Con synthesize a safe split tree when exporting legacy private sessions that still have panes without layout metadata.
+
+**Terminal, Windows and Linux Backends**
+
+- Hardened split-pane dividers on Windows and Linux by giving the resize seam a real hit target while keeping the visible separator at one pixel. This avoids fragile overflow hit testing around terminal panes.
+- Preserved restored terminal text on Linux when the IME system only prepares composition without actual marked text.
+
+**Terminal, macOS**
+
+- Made the embedded Ghostty initial-output restore hook fail soft for local best-effort builds while keeping macOS release packaging fail-hard, so upstream anchor drift blocks a release instead of silently shipping without terminal text seeding.
+
 ## `v0.1.0-beta.54` - 2026-05-02
 
 ### Added

@@ -2222,6 +2222,28 @@ impl SettingsPanel {
         }
     }
 
+    /// Updates the settings draft only. Normal Settings edits persist through
+    /// the Save button; callers that already persisted this value should use
+    /// `set_persisted_restore_terminal_text` to keep close/revert semantics
+    /// aligned with disk.
+    pub fn set_restore_terminal_text(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.preview_snapshot.is_none() {
+            self.preview_snapshot = Some(self.config.clone());
+        }
+        self.config.appearance.restore_terminal_text = enabled;
+        cx.notify();
+    }
+
+    pub fn set_persisted_restore_terminal_text(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.config.appearance.restore_terminal_text = enabled;
+        if let Some(snapshot) = &mut self.preview_snapshot {
+            snapshot.appearance.restore_terminal_text = enabled;
+        } else {
+            self.preview_snapshot = Some(self.config.clone());
+        }
+        cx.notify();
+    }
+
     pub fn config(&self) -> &Config {
         &self.config
     }
@@ -2616,6 +2638,25 @@ impl SettingsPanel {
         }
 
         container
+        // Continuity
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Continuity", &theme))
+                .child(card(theme, card_opacity).child(toggle_row(
+                    "Restore Terminal Text",
+                    "Keep bounded private terminal text for restart continuity. Layout profiles never include it.",
+                    Switch::new("restore-terminal-text-toggle")
+                        .checked(self.config.appearance.restore_terminal_text)
+                        .small()
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.set_restore_terminal_text(*checked, cx);
+                        })),
+                    theme,
+                ))),
+        )
         // Skills paths
         .child(
             div()

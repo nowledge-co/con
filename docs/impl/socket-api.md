@@ -27,11 +27,15 @@ The result in con is a hybrid:
 
 ## Socket path
 
-- Default: `/tmp/con.sock`
+- Release default: `/tmp/con.sock`
+- Debug default: `/tmp/con-debug.sock`
 - Override: `CON_SOCKET_PATH`
 - CLI override: `con-cli --socket /custom/path ...`
 
-The app removes stale socket files on startup and creates the live socket with user-only permissions.
+The app removes stale socket files on startup and creates the live socket with
+user-only permissions. Debug builds intentionally use a separate default
+endpoint so `cargo run -p con` can run beside an installed Con without making
+startup treat the dev process as another window for the production app.
 
 ## Protocol
 

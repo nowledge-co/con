@@ -23,8 +23,11 @@ RUST_LOG=con=debug cargo run -p con
 Wait for the socket:
 
 ```bash
-test -S /tmp/con.sock
+test -S /tmp/con-debug.sock
 ```
+
+Debug builds use `/tmp/con-debug.sock`; release builds use `/tmp/con.sock`.
+`con-cli` uses the same build-aware default when built from the workspace.
 
 Override the socket only when needed:
 

@@ -9,11 +9,11 @@ use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 use crate::stub::{CommandFinishedSignal, SurfaceSize, TerminalColors};
+use crate::transcript::{TranscriptBuffer, snapshot_to_lines};
 use crate::vt::{ScreenSnapshot, ThemeColors, VtScreen};
 
 const DEFAULT_COLUMNS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
-const MAX_TRANSCRIPT_BYTES: usize = 256 * 1024;
 
 pub type LinuxWakeCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 
@@ -22,6 +22,7 @@ pub struct LinuxPtyOptions {
     pub cwd: Option<PathBuf>,
     pub program: Option<String>,
     pub size: SurfaceSize,
+    pub initial_output: Option<Vec<u8>>,
     pub wake_generation: Option<Arc<AtomicU64>>,
     pub wake_callback: Option<LinuxWakeCallback>,
     pub theme: Option<TerminalColors>,
@@ -40,6 +41,7 @@ impl Default for LinuxPtyOptions {
                 cell_width_px: 0,
                 cell_height_px: 0,
             },
+            initial_output: None,
             wake_generation: None,
             wake_callback: None,
             theme: None,
@@ -110,56 +112,6 @@ impl SessionShared {
     }
 }
 
-#[derive(Default)]
-struct TranscriptBuffer {
-    text: String,
-}
-
-impl TranscriptBuffer {
-    fn push(&mut self, chunk: &str) {
-        self.text.push_str(chunk);
-        if self.text.len() <= MAX_TRANSCRIPT_BYTES {
-            return;
-        }
-
-        let mut keep_from = self.text.len().saturating_sub(MAX_TRANSCRIPT_BYTES);
-        while keep_from < self.text.len() && !self.text.is_char_boundary(keep_from) {
-            keep_from += 1;
-        }
-        if keep_from > 0 {
-            self.text.drain(..keep_from);
-        }
-    }
-
-    fn recent_lines(&self, max_lines: usize) -> Vec<String> {
-        if max_lines == 0 {
-            return Vec::new();
-        }
-        let sanitized = sanitize_terminal_output(&self.text);
-        let mut lines: Vec<String> = sanitized
-            .lines()
-            .rev()
-            .take(max_lines)
-            .map(ToOwned::to_owned)
-            .collect();
-        lines.reverse();
-        lines
-    }
-
-    fn search(&self, pattern: &str, limit: usize) -> Vec<(usize, String)> {
-        if pattern.is_empty() || limit == 0 {
-            return Vec::new();
-        }
-        sanitize_terminal_output(&self.text)
-            .lines()
-            .enumerate()
-            .filter(|(_, line)| line.contains(pattern))
-            .take(limit)
-            .map(|(idx, line)| (idx, line.to_string()))
-            .collect()
-    }
-}
-
 impl LinuxPtySession {
     pub fn spawn(options: LinuxPtyOptions) -> Result<Self> {
         let pty_system = native_pty_system();
@@ -207,6 +159,13 @@ impl LinuxPtySession {
             )
             .context("failed to create linux vt screen")?,
         );
+        if let Some(output) = options
+            .initial_output
+            .as_deref()
+            .filter(|output| !output.is_empty())
+        {
+            screen.feed(output);
+        }
         let child = pair
             .slave
             .spawn_command(command)
@@ -217,6 +176,11 @@ impl LinuxPtySession {
             options.wake_generation,
             options.wake_callback,
         ));
+        if let Some(output) = options.initial_output.as_deref()
+            && let Ok(text) = std::str::from_utf8(output)
+        {
+            shared.transcript.lock().push(text);
+        }
         spawn_reader_thread(reader, shared.clone());
 
         Ok(Self {
@@ -506,180 +470,9 @@ fn pty_size_from_surface(size: &SurfaceSize) -> PtySize {
     }
 }
 
-fn snapshot_to_lines(snapshot: &ScreenSnapshot, max_lines: usize) -> Vec<String> {
-    if max_lines == 0 || snapshot.cols == 0 || snapshot.rows == 0 {
-        return Vec::new();
-    }
-
-    let cols = usize::from(snapshot.cols);
-    let mut lines = Vec::with_capacity(usize::from(snapshot.rows));
-
-    for row in 0..usize::from(snapshot.rows) {
-        let row_start = row * cols;
-        let row_end = row_start + cols;
-        let Some(cells) = snapshot.cells.get(row_start..row_end) else {
-            break;
-        };
-
-        let mut line = String::with_capacity(cols);
-        for cell in cells {
-            let ch = match cell.codepoint {
-                0 => ' ',
-                codepoint => char::from_u32(codepoint).unwrap_or('\u{FFFD}'),
-            };
-            line.push(ch);
-        }
-
-        let trimmed = line.trim_end_matches(' ');
-        lines.push(trimmed.to_string());
-    }
-
-    while lines.last().is_some_and(String::is_empty) {
-        lines.pop();
-    }
-
-    if lines.len() > max_lines {
-        lines.drain(..lines.len() - max_lines);
-    }
-
-    lines
-}
-
-fn sanitize_terminal_output(raw: &str) -> String {
-    #[derive(Clone, Copy)]
-    enum EscapeState {
-        None,
-        Esc,
-        Csi,
-        Osc,
-        OscEsc,
-        Ss3,
-        Charset,
-        Dcs,
-        DcsEsc,
-    }
-
-    let mut output = String::with_capacity(raw.len());
-    let bytes = raw.as_bytes();
-    let mut index = 0;
-    let mut state = EscapeState::None;
-
-    while index < bytes.len() {
-        let byte = bytes[index];
-        match state {
-            EscapeState::None => match byte {
-                b'\x1b' => {
-                    state = EscapeState::Esc;
-                    index += 1;
-                }
-                b'\r' => {
-                    if bytes.get(index + 1) != Some(&b'\n') {
-                        clear_current_line(&mut output);
-                    }
-                    index += 1;
-                }
-                b'\x08' => {
-                    if !output.ends_with('\n') {
-                        output.pop();
-                    }
-                    index += 1;
-                }
-                b'\t' => {
-                    output.push_str("    ");
-                    index += 1;
-                }
-                b'\n' => {
-                    output.push('\n');
-                    index += 1;
-                }
-                0x00..=0x1f | 0x7f => {
-                    index += 1;
-                }
-                _ => {
-                    let ch = raw[index..]
-                        .chars()
-                        .next()
-                        .expect("valid utf-8 chunk while sanitizing pty output");
-                    output.push(ch);
-                    index += ch.len_utf8();
-                }
-            },
-            EscapeState::Esc => {
-                state = match byte {
-                    b'[' => EscapeState::Csi,
-                    b']' => EscapeState::Osc,
-                    b'O' => EscapeState::Ss3,
-                    b'(' | b')' | b'*' | b'+' => EscapeState::Charset,
-                    b'P' | b'X' | b'^' | b'_' => EscapeState::Dcs,
-                    _ => EscapeState::None,
-                };
-                index += 1;
-            }
-            EscapeState::Csi => {
-                if (0x40..=0x7e).contains(&byte) {
-                    state = EscapeState::None;
-                }
-                index += 1;
-            }
-            EscapeState::Osc => {
-                match byte {
-                    b'\x07' => state = EscapeState::None,
-                    b'\x1b' => state = EscapeState::OscEsc,
-                    _ => {}
-                }
-                index += 1;
-            }
-            EscapeState::OscEsc => {
-                state = if byte == b'\\' {
-                    EscapeState::None
-                } else {
-                    EscapeState::Osc
-                };
-                index += 1;
-            }
-            EscapeState::Ss3 => {
-                if (0x40..=0x7e).contains(&byte) {
-                    state = EscapeState::None;
-                }
-                index += 1;
-            }
-            EscapeState::Charset => {
-                state = EscapeState::None;
-                index += 1;
-            }
-            EscapeState::Dcs => {
-                match byte {
-                    b'\x07' => state = EscapeState::None,
-                    b'\x1b' => state = EscapeState::DcsEsc,
-                    _ => {}
-                }
-                index += 1;
-            }
-            EscapeState::DcsEsc => {
-                state = if byte == b'\\' {
-                    EscapeState::None
-                } else {
-                    EscapeState::Dcs
-                };
-                index += 1;
-            }
-        }
-    }
-
-    output
-}
-
-fn clear_current_line(output: &mut String) {
-    while output.chars().last().is_some_and(|ch| ch != '\n') {
-        output.pop();
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::vt::{Cell, Cursor, ScreenSnapshot};
-
-    use super::{TranscriptBuffer, sanitize_terminal_output, snapshot_to_lines};
+    use crate::transcript::{TranscriptBuffer, sanitize_terminal_output};
 
     #[test]
     fn transcript_buffer_returns_recent_lines_in_order() {
@@ -714,25 +507,5 @@ mod tests {
     #[test]
     fn sanitize_terminal_output_honors_carriage_return_rewrites() {
         assert_eq!(sanitize_terminal_output("loading\rready"), "ready");
-    }
-
-    #[test]
-    fn snapshot_to_lines_trims_trailing_blank_rows() {
-        let mut cells = vec![Cell::default(); 6];
-        cells[0].codepoint = 'p' as u32;
-        cells[1].codepoint = 's' as u32;
-        cells[2].codepoint = '1' as u32;
-
-        let snapshot = ScreenSnapshot {
-            cols: 3,
-            rows: 2,
-            cells,
-            dirty_rows: vec![0, 1],
-            cursor: Cursor::default(),
-            title: None,
-            generation: 1,
-        };
-
-        assert_eq!(snapshot_to_lines(&snapshot, 10), vec!["ps1".to_string()]);
     }
 }
