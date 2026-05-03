@@ -56,7 +56,7 @@ use crate::terminal_paste::{
     TerminalPastePayload, copy_selection_to_clipboard, payload_from_clipboard,
     payload_from_external_paths,
 };
-use crate::terminal_restore::restored_terminal_output;
+use crate::terminal_restore::{key_down_may_write_terminal, restored_terminal_output};
 use con_ghostty::windows::host_view::{MouseEventMods, RenderSession};
 use con_ghostty::windows::render::{FrameBgra, RenderOutcome};
 
@@ -652,30 +652,6 @@ impl GhosttyView {
 
     fn clear_restored_screen_text(&mut self) {
         self.restored_screen_text = None;
-    }
-
-    fn key_down_may_write_terminal(event: &KeyDownEvent) -> bool {
-        let keystroke = &event.keystroke;
-        if keystroke.modifiers.platform {
-            return false;
-        }
-
-        if keystroke.modifiers.control
-            && keystroke.modifiers.shift
-            && !keystroke.modifiers.alt
-            && matches!(keystroke.key.as_str(), "v")
-        {
-            return true;
-        }
-
-        encode_special_key(&keystroke.key, &keystroke.modifiers, false).is_some()
-            || (keystroke.modifiers.control
-                && !keystroke.modifiers.alt
-                && !keystroke.modifiers.shift
-                && keystroke.key.len() == 1)
-            || (keystroke.modifiers.alt && !keystroke.modifiers.control)
-            || (keystroke.key.len() == 1
-                && (keystroke.modifiers.control || keystroke.modifiers.alt))
     }
 
     fn image_children(&self) -> Vec<AnyElement> {
@@ -1472,7 +1448,10 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
-                if Self::key_down_may_write_terminal(event) {
+                let special_key_writes =
+                    encode_special_key(&event.keystroke.key, &event.keystroke.modifiers, false)
+                        .is_some();
+                if key_down_may_write_terminal(event, special_key_writes) {
                     this.clear_restored_screen_text();
                 }
                 if this.handle_key_down(event, window, cx) {
