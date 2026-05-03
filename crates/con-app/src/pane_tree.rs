@@ -90,15 +90,20 @@ fn trim_restored_screen_text(lines: Vec<String>) -> Vec<String> {
     }
 
     let mut total = 0usize;
-    let mut keep_from = trimmed.len();
-    for (idx, line) in trimmed.iter().enumerate().rev() {
-        total = total.saturating_add(line.len()).saturating_add(2);
-        if total > RESTORED_SCREEN_TEXT_MAX_BYTES {
+    let mut kept = Vec::new();
+    for line in trimmed.into_iter().rev() {
+        let line_bytes = line.len().saturating_add(2);
+        if line_bytes > RESTORED_SCREEN_TEXT_MAX_BYTES {
+            continue;
+        }
+        if total.saturating_add(line_bytes) > RESTORED_SCREEN_TEXT_MAX_BYTES {
             break;
         }
-        keep_from = idx;
+        total = total.saturating_add(line_bytes);
+        kept.push(line);
     }
-    trimmed.split_off(keep_from)
+    kept.reverse();
+    kept
 }
 
 #[derive(Clone)]
@@ -1851,9 +1856,17 @@ impl PaneTree {
                     restored_surfaces.push(surface);
                 }
 
-                let active_surface_id = restored_active_surface_id.unwrap_or_else(|| {
-                    restored_surfaces.first().map(|surface| surface.id).unwrap()
-                });
+                if restored_surfaces.is_empty() {
+                    let surface_id =
+                        Self::allocate_restored_surface_id(None, next_surface_id, used_surface_ids);
+                    restored_surfaces.push(PaneSurface::new(
+                        surface_id,
+                        make_terminal(cwd.as_deref(), None),
+                    ));
+                    restored_active_surface_id = Some(surface_id);
+                }
+                let active_surface_id =
+                    restored_active_surface_id.unwrap_or(restored_surfaces[0].id);
                 PaneNode::Leaf {
                     id: *pane_id,
                     surfaces: restored_surfaces,

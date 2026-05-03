@@ -32,6 +32,7 @@ use gpui_component::menu::ContextMenuExt;
 use crate::terminal_paste::{
     TerminalPastePayload, payload_from_clipboard, payload_from_external_paths,
 };
+use crate::terminal_restore::key_down_may_write_terminal;
 
 // Actions to intercept Tab/Shift-Tab before Root's focus-cycling handler.
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
@@ -1760,7 +1761,16 @@ impl Render for GhosttyView {
                 if !this.focus_handle.is_focused(window) {
                     return;
                 }
-                this.restored_screen_text = None;
+                let special_key_writes = gpui_key_to_keycode(event.keystroke.key.as_str())
+                    .is_some()
+                    || event
+                        .keystroke
+                        .key_char
+                        .as_deref()
+                        .is_some_and(|key_char| !key_char.is_empty());
+                if key_down_may_write_terminal(event, special_key_writes) {
+                    this.restored_screen_text = None;
+                }
                 if this.handle_key_down(event, window, cx) {
                     window.prevent_default();
                     cx.stop_propagation();

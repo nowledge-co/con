@@ -61,7 +61,6 @@ mod terminal_ime;
 mod terminal_links;
 mod terminal_pane;
 mod terminal_paste;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
 mod terminal_restore;
 mod terminal_shortcuts;
 mod theme;

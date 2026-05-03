@@ -1002,6 +1002,18 @@ mod tests {
     }
 
     #[test]
+    fn workspace_layout_exports_native_absolute_paths_relative_to_root() {
+        let root = std::env::current_dir().unwrap().join("project");
+        let cwd = root.join("crates").join("server");
+        let cwd = cwd.to_string_lossy();
+
+        assert_eq!(
+            layout_cwd(Some(&cwd), &root).as_deref(),
+            Some("crates/server")
+        );
+    }
+
+    #[test]
     fn workspace_layout_export_drops_private_runtime_state() {
         let session = Session {
             tabs: vec![TabState {

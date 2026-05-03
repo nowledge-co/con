@@ -2635,8 +2635,7 @@ impl SettingsPanel {
                         .checked(self.config.appearance.restore_terminal_text)
                         .small()
                         .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                            this.config.appearance.restore_terminal_text = *checked;
-                            cx.notify();
+                            this.set_restore_terminal_text(*checked, cx);
                         })),
                     theme,
                 ))),
