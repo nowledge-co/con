@@ -628,15 +628,7 @@ fn make_ghostty_terminal(
     cx: &mut Context<ConWorkspace>,
 ) -> TerminalPane {
     let app = app.clone();
-    let cwd = cwd
-        .map(str::trim)
-        .filter(|cwd| !cwd.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .map(|path| path.to_string_lossy().into_owned())
-        });
+    let cwd = cwd.filter(|cwd| !cwd.is_empty()).map(str::to_string);
     let restored_screen_text = restored_screen_text
         .map(|lines| lines.to_vec())
         .filter(|lines| !lines.is_empty());

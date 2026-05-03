@@ -82,6 +82,7 @@ pub struct GhosttyView {
     initialized: bool,
     process_exit_emitted: bool,
     last_title: Option<String>,
+    last_cwd: Option<String>,
     pending_write: Option<Vec<u8>>,
     snapshot: Option<ScreenSnapshot>,
     row_cache: Vec<CachedTerminalRow>,
@@ -165,6 +166,7 @@ impl GhosttyView {
             initialized: false,
             process_exit_emitted: false,
             last_title: None,
+            last_cwd: None,
             pending_write: None,
             snapshot: None,
             row_cache: Vec::new(),
@@ -218,7 +220,9 @@ impl GhosttyView {
     }
 
     pub fn reported_current_dir(&self) -> Option<String> {
-        None
+        self.terminal
+            .as_ref()
+            .and_then(|terminal| terminal.reported_current_dir())
     }
 
     pub fn is_alive(&self) -> bool {
@@ -312,6 +316,13 @@ impl GhosttyView {
             cx.emit(GhosttyTitleChanged(title));
         }
 
+        let cwd = terminal.reported_current_dir();
+        if cwd != self.last_cwd {
+            self.last_cwd = cwd.clone();
+            changed = true;
+            cx.emit(GhosttyCwdChanged(cwd));
+        }
+
         if !terminal.is_alive() && !self.process_exit_emitted {
             self.process_exit_emitted = true;
             changed = true;
@@ -345,6 +356,13 @@ impl GhosttyView {
                 self.last_title = title.clone();
                 changed = true;
                 cx.emit(GhosttyTitleChanged(title));
+            }
+
+            let cwd = terminal.reported_current_dir();
+            if cwd != self.last_cwd {
+                self.last_cwd = cwd.clone();
+                changed = true;
+                cx.emit(GhosttyCwdChanged(cwd));
             }
 
             if !terminal.is_alive() && !self.process_exit_emitted {
@@ -382,6 +400,7 @@ impl GhosttyView {
                 self.restored_screen_text = None;
                 self.initialized = true;
                 self.process_exit_emitted = false;
+                self.last_cwd = terminal.reported_current_dir();
                 if let Some(pending) = self.pending_write.take() {
                     terminal.write_to_pty(&pending);
                 }
