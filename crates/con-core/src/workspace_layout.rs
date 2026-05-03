@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+
+use crate::session::{
+    AgentModelOverrideState, AgentRoutingState, CommandHistoryEntryState, GlobalHistoryState,
+    PaneLayoutState, PaneSplitDirection, PaneState, Session, SurfaceState, TabState,
+};
+use con_agent::ProviderKind;
 
 pub const WORKSPACE_LAYOUT_VERSION: u32 = 1;
 pub const WORKSPACE_LAYOUT_FORMAT: &str = "con.workspace.layout";
@@ -15,6 +22,8 @@ pub struct WorkspaceLayout {
     pub name: Option<String>,
     #[serde(default = "default_root")]
     pub root: String,
+    #[serde(default)]
+    pub active_tab: Option<String>,
     #[serde(default)]
     pub defaults: WorkspaceDefaults,
     #[serde(default)]
@@ -122,6 +131,7 @@ impl Default for WorkspaceLayout {
             version: WORKSPACE_LAYOUT_VERSION,
             name: None,
             root: default_root(),
+            active_tab: None,
             defaults: WorkspaceDefaults::default(),
             tabs: Vec::new(),
         }
@@ -156,6 +166,220 @@ impl WorkspaceLayout {
 
     pub fn default_path_for_root(root: impl AsRef<Path>) -> PathBuf {
         root.as_ref().join(DEFAULT_WORKSPACE_LAYOUT_PATH)
+    }
+
+    pub fn from_session(session: &Session, root: impl AsRef<Path>) -> Self {
+        let root = root.as_ref();
+        let mut used_tab_ids = HashSet::new();
+        let mut tabs = Vec::new();
+
+        for tab in &session.tabs {
+            let tab_name = tab
+                .user_label
+                .as_deref()
+                .or_else(|| (!tab.title.trim().is_empty()).then_some(tab.title.as_str()))
+                .unwrap_or("Tab");
+            let tab_id = unique_id(&slug_id(tab_name, "tab"), &mut used_tab_ids);
+            let mut used_pane_ids = HashSet::new();
+            let mut pane_id_map = HashMap::new();
+            let mut surface_id_map = HashMap::new();
+            let mut panes = Vec::new();
+
+            if let Some(layout) = tab.layout.as_ref() {
+                collect_workspace_panes(
+                    layout,
+                    root,
+                    &mut used_pane_ids,
+                    &mut pane_id_map,
+                    &mut surface_id_map,
+                    &mut panes,
+                );
+            } else {
+                for (pane_index, pane) in tab.panes.iter().enumerate() {
+                    let pane_id =
+                        unique_id(&format!("pane-{}", pane_index + 1), &mut used_pane_ids);
+                    pane_id_map.insert(pane_index, pane_id.clone());
+                    panes.push(WorkspacePane {
+                        id: pane_id,
+                        title: Some(format!("Pane {}", pane_index + 1)),
+                        cwd: layout_cwd(pane.cwd.as_deref(), root),
+                        active_surface: None,
+                        surfaces: Vec::new(),
+                    });
+                }
+            }
+
+            let active_pane = tab
+                .focused_pane_id
+                .and_then(|pane_id| pane_id_map.get(&pane_id).cloned());
+            let layout = tab
+                .layout
+                .as_ref()
+                .and_then(|layout| workspace_node_from_session(layout, &pane_id_map));
+            let agent = workspace_tab_agent_from_routing(&tab.agent_routing);
+
+            tabs.push(WorkspaceTab {
+                id: tab_id,
+                title: tab.user_label.clone().or_else(|| Some(tab.title.clone())),
+                cwd: layout_cwd(tab.cwd.as_deref(), root),
+                active_pane,
+                agent,
+                layout,
+                panes,
+            });
+        }
+
+        let active_tab = tabs
+            .get(session.active_tab.min(tabs.len().saturating_sub(1)))
+            .map(|tab| tab.id.clone());
+
+        let name = root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.trim().is_empty())
+            .map(ToOwned::to_owned);
+
+        Self {
+            format: WORKSPACE_LAYOUT_FORMAT.to_string(),
+            version: WORKSPACE_LAYOUT_VERSION,
+            name,
+            root: ".".to_string(),
+            active_tab,
+            defaults: WorkspaceDefaults::default(),
+            tabs,
+        }
+    }
+
+    pub fn to_session(
+        &self,
+        root: impl AsRef<Path>,
+        history: Option<&GlobalHistoryState>,
+    ) -> anyhow::Result<Session> {
+        self.validate()?;
+        let root = root.as_ref();
+        let default_provider = parse_provider_kind(self.defaults.agent_provider.as_deref());
+        let default_model = self.defaults.agent_model.clone();
+
+        let mut tabs = Vec::new();
+        for tab in &self.tabs {
+            let provider =
+                parse_provider_kind(tab.agent.provider.as_deref()).or(default_provider.clone());
+            let model = tab.agent.model.clone().or_else(|| default_model.clone());
+            let pane_id_map = tab
+                .panes
+                .iter()
+                .enumerate()
+                .map(|(idx, pane)| (pane.id.as_str(), idx))
+                .collect::<HashMap<_, _>>();
+            let layout = match tab.layout.as_ref() {
+                Some(node) => Some(session_node_from_workspace(node, tab, root, &pane_id_map)?),
+                None if !tab.panes.is_empty() => Some(PaneLayoutState::Leaf {
+                    pane_id: 0,
+                    cwd: resolved_layout_cwd(
+                        tab.panes[0].cwd.as_deref().or(tab.cwd.as_deref()),
+                        root,
+                    ),
+                    active_surface_id: active_surface_index(&tab.panes[0]),
+                    surfaces: session_surfaces_from_workspace(&tab.panes[0], root),
+                }),
+                None => None,
+            };
+            let focused_pane_id = tab
+                .active_pane
+                .as_deref()
+                .and_then(|id| pane_id_map.get(id).copied())
+                .or_else(|| (!tab.panes.is_empty()).then_some(0));
+            let panes = if tab.panes.is_empty() {
+                vec![PaneState {
+                    cwd: resolved_layout_cwd(tab.cwd.as_deref(), root),
+                }]
+            } else {
+                tab.panes
+                    .iter()
+                    .map(|pane| PaneState {
+                        cwd: resolved_layout_cwd(pane.cwd.as_deref().or(tab.cwd.as_deref()), root),
+                    })
+                    .collect()
+            };
+            let agent_routing = agent_routing_from_workspace(provider, model);
+            let shell_history = panes
+                .iter()
+                .enumerate()
+                .map(|(pane_id, _pane)| crate::session::PaneCommandHistoryState {
+                    pane_id: Some(pane_id),
+                    entries: Vec::new(),
+                })
+                .collect();
+
+            tabs.push(TabState {
+                title: tab
+                    .title
+                    .clone()
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| tab.id.clone()),
+                cwd: resolved_layout_cwd(tab.cwd.as_deref(), root),
+                layout,
+                focused_pane_id,
+                panes,
+                shell_history,
+                conversation_id: None,
+                agent_routing,
+                user_label: tab.title.clone(),
+            });
+        }
+
+        if tabs.is_empty() {
+            tabs.push(TabState {
+                title: self.name.clone().unwrap_or_else(|| "Terminal".to_string()),
+                cwd: Some(root.to_string_lossy().to_string()),
+                layout: None,
+                focused_pane_id: Some(0),
+                panes: vec![PaneState {
+                    cwd: Some(root.to_string_lossy().to_string()),
+                }],
+                shell_history: Vec::new(),
+                conversation_id: None,
+                agent_routing: agent_routing_from_workspace(
+                    default_provider.clone(),
+                    default_model,
+                ),
+                user_label: self.name.clone(),
+            });
+        }
+
+        let active_tab = self
+            .active_tab
+            .as_deref()
+            .and_then(|active| self.tabs.iter().position(|tab| tab.id == active))
+            .unwrap_or(0)
+            .min(tabs.len().saturating_sub(1));
+        let mut session = Session {
+            tabs,
+            active_tab,
+            agent_panel_open: false,
+            agent_panel_width: None,
+            input_bar_visible: true,
+            global_shell_history: history
+                .map(|history| history.global_shell_history.clone())
+                .unwrap_or_default(),
+            input_history: profile_input_history(history),
+            conversation_id: None,
+            vertical_tabs_pinned: false,
+            vertical_tabs_width: None,
+        };
+
+        if session.global_shell_history.is_empty() && !session.input_history.is_empty() {
+            session.global_shell_history = session
+                .input_history
+                .iter()
+                .map(|command| CommandHistoryEntryState {
+                    command: command.clone(),
+                    cwd: None,
+                })
+                .collect();
+        }
+
+        Ok(session)
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
@@ -235,8 +459,348 @@ impl WorkspaceLayout {
             }
         }
 
+        if let Some(active_tab) = self.active_tab.as_deref() {
+            anyhow::ensure!(
+                self.tabs.iter().any(|tab| tab.id == active_tab),
+                "active tab {:?} is not defined",
+                active_tab
+            );
+        }
+
         Ok(())
     }
+}
+
+fn collect_workspace_panes(
+    node: &PaneLayoutState,
+    root: &Path,
+    used_pane_ids: &mut HashSet<String>,
+    pane_id_map: &mut HashMap<usize, String>,
+    surface_id_map: &mut HashMap<(usize, usize), String>,
+    panes: &mut Vec<WorkspacePane>,
+) {
+    match node {
+        PaneLayoutState::Leaf {
+            pane_id,
+            cwd,
+            active_surface_id,
+            surfaces,
+        } => {
+            let fallback_id = format!("pane-{}", panes.len() + 1);
+            let title_hint = surfaces
+                .iter()
+                .find_map(|surface| surface.title.as_deref())
+                .or_else(|| surfaces.iter().find_map(|surface| surface.owner.as_deref()));
+            let pane_id_text = unique_id(
+                &slug_id(title_hint.unwrap_or(&fallback_id), &fallback_id),
+                used_pane_ids,
+            );
+            pane_id_map.insert(*pane_id, pane_id_text.clone());
+
+            let mut used_surface_ids = HashSet::new();
+            let mut workspace_surfaces = Vec::new();
+            for (surface_index, surface) in surfaces.iter().enumerate() {
+                let fallback_surface_id = format!("surface-{}", surface_index + 1);
+                let surface_id = unique_id(
+                    &slug_id(
+                        surface
+                            .title
+                            .as_deref()
+                            .or(surface.owner.as_deref())
+                            .unwrap_or(&fallback_surface_id),
+                        &fallback_surface_id,
+                    ),
+                    &mut used_surface_ids,
+                );
+                surface_id_map.insert((*pane_id, surface.surface_id), surface_id.clone());
+                workspace_surfaces.push(WorkspaceSurface {
+                    id: surface_id,
+                    title: surface.title.clone(),
+                    owner: surface.owner.clone(),
+                    cwd: layout_cwd(surface.cwd.as_deref().or(cwd.as_deref()), root),
+                    close_pane_when_last: surface.close_pane_when_last,
+                });
+            }
+            let active_surface = active_surface_id
+                .and_then(|surface_id| surface_id_map.get(&(*pane_id, surface_id)).cloned())
+                .or_else(|| workspace_surfaces.first().map(|surface| surface.id.clone()));
+
+            panes.push(WorkspacePane {
+                id: pane_id_text,
+                title: title_hint.map(ToOwned::to_owned),
+                cwd: layout_cwd(cwd.as_deref(), root),
+                active_surface,
+                surfaces: workspace_surfaces,
+            });
+        }
+        PaneLayoutState::Split { first, second, .. } => {
+            collect_workspace_panes(
+                first,
+                root,
+                used_pane_ids,
+                pane_id_map,
+                surface_id_map,
+                panes,
+            );
+            collect_workspace_panes(
+                second,
+                root,
+                used_pane_ids,
+                pane_id_map,
+                surface_id_map,
+                panes,
+            );
+        }
+    }
+}
+
+fn workspace_node_from_session(
+    node: &PaneLayoutState,
+    pane_id_map: &HashMap<usize, String>,
+) -> Option<WorkspaceLayoutNode> {
+    match node {
+        PaneLayoutState::Leaf { pane_id, .. } => pane_id_map
+            .get(pane_id)
+            .map(|id| WorkspaceLayoutNode::Pane { id: id.clone() }),
+        PaneLayoutState::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } => Some(WorkspaceLayoutNode::Split {
+            direction: match direction {
+                PaneSplitDirection::Horizontal => WorkspaceSplitDirection::Horizontal,
+                PaneSplitDirection::Vertical => WorkspaceSplitDirection::Vertical,
+            },
+            ratio: ratio.clamp(0.05, 0.95),
+            first: Box::new(workspace_node_from_session(first, pane_id_map)?),
+            second: Box::new(workspace_node_from_session(second, pane_id_map)?),
+        }),
+    }
+}
+
+fn session_node_from_workspace(
+    node: &WorkspaceLayoutNode,
+    tab: &WorkspaceTab,
+    root: &Path,
+    pane_id_map: &HashMap<&str, usize>,
+) -> anyhow::Result<PaneLayoutState> {
+    match node {
+        WorkspaceLayoutNode::Pane { id } => {
+            let pane_index = *pane_id_map
+                .get(id.as_str())
+                .ok_or_else(|| anyhow::anyhow!("layout references undefined pane {:?}", id))?;
+            let pane = &tab.panes[pane_index];
+            Ok(PaneLayoutState::Leaf {
+                pane_id: pane_index,
+                cwd: resolved_layout_cwd(pane.cwd.as_deref().or(tab.cwd.as_deref()), root),
+                active_surface_id: active_surface_index(pane),
+                surfaces: session_surfaces_from_workspace(pane, root),
+            })
+        }
+        WorkspaceLayoutNode::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } => Ok(PaneLayoutState::Split {
+            direction: match direction {
+                WorkspaceSplitDirection::Horizontal => PaneSplitDirection::Horizontal,
+                WorkspaceSplitDirection::Vertical => PaneSplitDirection::Vertical,
+            },
+            ratio: ratio.clamp(0.05, 0.95),
+            first: Box::new(session_node_from_workspace(first, tab, root, pane_id_map)?),
+            second: Box::new(session_node_from_workspace(second, tab, root, pane_id_map)?),
+        }),
+    }
+}
+
+fn session_surfaces_from_workspace(pane: &WorkspacePane, root: &Path) -> Vec<SurfaceState> {
+    pane.surfaces
+        .iter()
+        .enumerate()
+        .map(|(surface_id, surface)| SurfaceState {
+            surface_id,
+            title: surface.title.clone(),
+            owner: surface.owner.clone(),
+            cwd: resolved_layout_cwd(surface.cwd.as_deref().or(pane.cwd.as_deref()), root),
+            close_pane_when_last: surface.close_pane_when_last,
+            screen_text: Vec::new(),
+        })
+        .collect()
+}
+
+fn active_surface_index(pane: &WorkspacePane) -> Option<usize> {
+    pane.active_surface
+        .as_deref()
+        .and_then(|id| pane.surfaces.iter().position(|surface| surface.id == id))
+        .or_else(|| (!pane.surfaces.is_empty()).then_some(0))
+}
+
+fn workspace_tab_agent_from_routing(routing: &AgentRoutingState) -> WorkspaceTabAgent {
+    let provider = routing
+        .provider
+        .as_ref()
+        .map(|provider| provider.to_string());
+    let model = routing
+        .provider
+        .as_ref()
+        .and_then(|provider| {
+            routing
+                .model_overrides
+                .iter()
+                .find(|override_state| &override_state.provider == provider)
+        })
+        .or_else(|| routing.model_overrides.first())
+        .map(|override_state| override_state.model.clone());
+
+    WorkspaceTabAgent { provider, model }
+}
+
+fn agent_routing_from_workspace(
+    provider: Option<ProviderKind>,
+    model: Option<String>,
+) -> AgentRoutingState {
+    let Some(provider) = provider else {
+        return AgentRoutingState::default();
+    };
+    let model_overrides = model
+        .filter(|model| !model.trim().is_empty())
+        .map(|model| {
+            vec![AgentModelOverrideState {
+                provider: provider.clone(),
+                model,
+            }]
+        })
+        .unwrap_or_default();
+
+    AgentRoutingState {
+        provider: Some(provider),
+        model_overrides,
+    }
+}
+
+fn parse_provider_kind(value: Option<&str>) -> Option<ProviderKind> {
+    match value?.trim().to_ascii_lowercase().as_str() {
+        "anthropic" => Some(ProviderKind::Anthropic),
+        "openai" => Some(ProviderKind::OpenAI),
+        "chatgpt" => Some(ProviderKind::ChatGPT),
+        "github-copilot" | "githubcopilot" => Some(ProviderKind::GitHubCopilot),
+        "openai-compatible" | "openai_compatible" | "openai compatible" => {
+            Some(ProviderKind::OpenAICompatible)
+        }
+        "minimax" => Some(ProviderKind::MiniMax),
+        "minimax-anthropic" => Some(ProviderKind::MiniMaxAnthropic),
+        "moonshot" => Some(ProviderKind::Moonshot),
+        "moonshot-anthropic" => Some(ProviderKind::MoonshotAnthropic),
+        "z-ai" | "zai" => Some(ProviderKind::ZAI),
+        "z-ai-anthropic" | "zai-anthropic" => Some(ProviderKind::ZAIAnthropic),
+        "deepseek" => Some(ProviderKind::DeepSeek),
+        "groq" => Some(ProviderKind::Groq),
+        "cohere" => Some(ProviderKind::Cohere),
+        "gemini" => Some(ProviderKind::Gemini),
+        "ollama" => Some(ProviderKind::Ollama),
+        "openrouter" => Some(ProviderKind::OpenRouter),
+        "perplexity" => Some(ProviderKind::Perplexity),
+        "mistral" => Some(ProviderKind::Mistral),
+        "together" => Some(ProviderKind::Together),
+        "xai" => Some(ProviderKind::XAI),
+        _ => None,
+    }
+}
+
+fn profile_input_history(history: Option<&GlobalHistoryState>) -> Vec<String> {
+    history
+        .map(|history| {
+            if !history.input_history.is_empty() {
+                history.input_history.clone()
+            } else {
+                history
+                    .global_shell_history
+                    .iter()
+                    .map(|entry| entry.command.clone())
+                    .filter(|command| !command.trim().is_empty())
+                    .collect()
+            }
+        })
+        .unwrap_or_default()
+}
+
+fn layout_cwd(cwd: Option<&str>, root: &Path) -> Option<String> {
+    let cwd = cwd?.trim();
+    if cwd.is_empty() {
+        return None;
+    }
+    let path = Path::new(cwd);
+    if path.is_absolute()
+        && let Ok(relative) = path.strip_prefix(root)
+    {
+        return Some(layout_path_string(relative));
+    }
+    Some(cwd.replace('\\', "/"))
+}
+
+fn resolved_layout_cwd(cwd: Option<&str>, root: &Path) -> Option<String> {
+    let cwd = cwd?.trim();
+    if cwd.is_empty() {
+        return None;
+    }
+    if cwd == "." {
+        return Some(root.to_string_lossy().to_string());
+    }
+
+    let path = Path::new(cwd);
+    if path.is_absolute() {
+        Some(path.to_string_lossy().to_string())
+    } else {
+        Some(root.join(path).to_string_lossy().to_string())
+    }
+}
+
+fn layout_path_string(path: &Path) -> String {
+    if path.as_os_str().is_empty() {
+        return ".".to_string();
+    }
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn slug_id(label: &str, fallback: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in label.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn unique_id(base: &str, used: &mut HashSet<String>) -> String {
+    let mut candidate = if base.trim().is_empty() {
+        "item".to_string()
+    } else {
+        base.to_string()
+    };
+    if used.insert(candidate.clone()) {
+        return candidate;
+    }
+
+    for suffix in 2usize.. {
+        candidate = format!("{base}-{suffix}");
+        if used.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    unreachable!("unbounded suffix search should always find a unique id")
 }
 
 fn validate_layout_node(
@@ -283,6 +847,7 @@ mod tests {
             version: 1,
             name: Some("con".to_string()),
             root: ".".to_string(),
+            active_tab: Some("dev".to_string()),
             defaults: WorkspaceDefaults {
                 shell: Some("login".to_string()),
                 agent_provider: Some("openai".to_string()),
@@ -343,6 +908,141 @@ mod tests {
 
         let decoded = WorkspaceLayout::from_toml_str(&toml).unwrap();
         assert_eq!(decoded, layout);
+    }
+
+    #[test]
+    fn workspace_layout_export_drops_private_runtime_state() {
+        let session = Session {
+            tabs: vec![TabState {
+                title: "Dev".to_string(),
+                cwd: Some("/tmp/project".to_string()),
+                layout: Some(PaneLayoutState::Leaf {
+                    pane_id: 7,
+                    cwd: Some("/tmp/project".to_string()),
+                    active_surface_id: Some(3),
+                    surfaces: vec![SurfaceState {
+                        surface_id: 3,
+                        title: Some("Server".to_string()),
+                        owner: Some("human".to_string()),
+                        cwd: Some("/tmp/project/crates/server".to_string()),
+                        close_pane_when_last: false,
+                        screen_text: vec!["secret output".to_string()],
+                    }],
+                }),
+                focused_pane_id: Some(7),
+                panes: vec![PaneState {
+                    cwd: Some("/tmp/project".to_string()),
+                }],
+                shell_history: vec![crate::session::PaneCommandHistoryState {
+                    pane_id: Some(7),
+                    entries: vec![CommandHistoryEntryState {
+                        command: "cargo run".to_string(),
+                        cwd: Some("/tmp/project".to_string()),
+                    }],
+                }],
+                conversation_id: Some("private-conversation".to_string()),
+                agent_routing: AgentRoutingState {
+                    provider: Some(ProviderKind::OpenAI),
+                    model_overrides: vec![AgentModelOverrideState {
+                        provider: ProviderKind::OpenAI,
+                        model: "gpt-5.2".to_string(),
+                    }],
+                },
+                user_label: Some("Dev".to_string()),
+            }],
+            active_tab: 0,
+            agent_panel_open: true,
+            agent_panel_width: Some(420.0),
+            input_bar_visible: false,
+            global_shell_history: vec![CommandHistoryEntryState {
+                command: "secret".to_string(),
+                cwd: None,
+            }],
+            input_history: vec!["ask secret".to_string()],
+            conversation_id: Some("legacy-private".to_string()),
+            vertical_tabs_pinned: true,
+            vertical_tabs_width: Some(250.0),
+        };
+
+        let layout = WorkspaceLayout::from_session(&session, "/tmp/project");
+        let toml = layout.to_toml_string().unwrap();
+
+        assert!(toml.contains("active_tab = \"dev\""));
+        assert!(toml.contains("cwd = \"crates/server\""));
+        assert!(toml.contains("provider = \"openai\""));
+        assert!(toml.contains("model = \"gpt-5.2\""));
+        assert!(!toml.contains("secret output"));
+        assert!(!toml.contains("cargo run"));
+        assert!(!toml.contains("private-conversation"));
+        assert!(!toml.contains("screen_text"));
+    }
+
+    #[test]
+    fn workspace_layout_import_creates_private_session_without_runtime_state() {
+        let layout = WorkspaceLayout {
+            format: WORKSPACE_LAYOUT_FORMAT.to_string(),
+            version: 1,
+            name: Some("Project".to_string()),
+            root: ".".to_string(),
+            active_tab: Some("dev".to_string()),
+            defaults: WorkspaceDefaults::default(),
+            tabs: vec![WorkspaceTab {
+                id: "dev".to_string(),
+                title: Some("Dev".to_string()),
+                cwd: Some(".".to_string()),
+                active_pane: Some("server".to_string()),
+                agent: WorkspaceTabAgent {
+                    provider: Some("openai".to_string()),
+                    model: Some("gpt-5.2".to_string()),
+                },
+                layout: Some(WorkspaceLayoutNode::Pane {
+                    id: "server".to_string(),
+                }),
+                panes: vec![WorkspacePane {
+                    id: "server".to_string(),
+                    title: Some("Server".to_string()),
+                    cwd: Some("crates/server".to_string()),
+                    active_surface: Some("shell".to_string()),
+                    surfaces: vec![WorkspaceSurface {
+                        id: "shell".to_string(),
+                        title: Some("Shell".to_string()),
+                        owner: None,
+                        cwd: Some("crates/server".to_string()),
+                        close_pane_when_last: false,
+                    }],
+                }],
+            }],
+        };
+        let history = GlobalHistoryState {
+            global_shell_history: vec![CommandHistoryEntryState {
+                command: "git status".to_string(),
+                cwd: None,
+            }],
+            input_history: Vec::new(),
+        };
+
+        let session = layout.to_session("/tmp/project", Some(&history)).unwrap();
+
+        assert_eq!(session.active_tab, 0);
+        assert_eq!(session.tabs[0].cwd.as_deref(), Some("/tmp/project"));
+        assert_eq!(session.tabs[0].focused_pane_id, Some(0));
+        assert!(session.tabs[0].conversation_id.is_none());
+        assert_eq!(session.tabs[0].shell_history[0].entries.len(), 0);
+        assert_eq!(session.global_shell_history[0].command, "git status");
+        assert_eq!(
+            session.tabs[0].agent_routing.provider,
+            Some(ProviderKind::OpenAI)
+        );
+        match session.tabs[0].layout.as_ref().unwrap() {
+            PaneLayoutState::Leaf { surfaces, .. } => {
+                assert_eq!(
+                    surfaces[0].cwd.as_deref(),
+                    Some("/tmp/project/crates/server")
+                );
+                assert!(surfaces[0].screen_text.is_empty());
+            }
+            PaneLayoutState::Split { .. } => panic!("expected leaf"),
+        }
     }
 
     #[test]
