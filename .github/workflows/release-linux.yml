@@ -106,13 +106,12 @@ jobs:
         id: package
         shell: bash
         # scripts/linux/release.sh:
-        #   - cargo build -p con --release with the channel + version
+        #   - cargo build -p con -p con-cli --release with the channel + version
         #     baked in via CON_RELEASE_CHANNEL / CON_RELEASE_VERSION
         #     (option_env! in con-core::release_channel reads them so
         #     the notify-only updater knows which appcast to poll),
-        #   - strip --strip-debug the ~300 MB debug-laden binary down
-        #     to ~80 MB,
-        #   - stage the binary + LICENSE + README.md + a .desktop
+        #   - strip --strip-debug the debug-laden binaries,
+        #   - stage con + con-cli + LICENSE + README.md + a .desktop
         #     entry + a 256x256 icon into a versioned dir,
         #   - tar -czf the staging dir into
         #     dist/con-<version>-linux-x86_64.tar.gz,

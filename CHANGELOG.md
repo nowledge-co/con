@@ -4,6 +4,21 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.58` - 2026-05-03
+
+### Added
+
+**Distribution**
+
+- Bundled `con-cli` with every release artifact. macOS now ships it inside the
+  app bundle and exposes it through Homebrew/script installs; Linux tarballs
+  install both `con` and `con-cli`; Windows ZIP/script installs include
+  `con-app.exe` and `con-cli.exe`.
+- Added release verification for the macOS app bundle so a signed/notarized
+  build cannot ship without the control-plane CLI.
+- Documented that `con-cli` is part of the normal install path for surface
+  orchestrators such as `pi-interactive-subagents`.
+
 ## `v0.1.0-beta.57` - 2026-05-03
 
 ### Added

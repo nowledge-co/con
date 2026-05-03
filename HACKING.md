@@ -105,7 +105,9 @@ cargo wtest -p con-core -p con-cli -p con-agent -p con-terminal   # Windows (por
 
 ```bash
 cargo build --release -p con                  # macOS / Linux
+cargo build --release -p con-cli              # control-plane CLI
 cargo wbuild -p con --release                 # Windows → target\release\con-app.exe
+cargo build --release -p con-cli              # Windows → target\release\con-cli.exe
 ```
 
 For signed macOS release artifacts, use:
@@ -113,6 +115,12 @@ For signed macOS release artifacts, use:
 ```bash
 ./scripts/macos/release.sh
 ```
+
+The macOS app bundle contains both `Contents/MacOS/con` and
+`Contents/MacOS/con-cli`; the release verifier fails if the CLI is
+missing. The Homebrew cask and Unix installer expose that bundled
+`con-cli` on PATH so orchestrators such as `pi-interactive-subagents`
+do not need a separate source checkout.
 
 For a Linux release tarball (un-signed; mirrors the Windows
 preview's distribution shape), use:

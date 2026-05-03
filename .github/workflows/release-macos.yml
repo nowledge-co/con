@@ -430,6 +430,7 @@ jobs:
             depends_on macos: ">= :catalina"
 
             app "${app_name}.app"
+            binary "#{appdir}/${app_name}.app/Contents/MacOS/con-cli", target: "con-cli"
 
             zap trash: [
               "~/.config/con",

@@ -140,6 +140,11 @@ jobs:
         run: |
           cargo wbuild -p con --release
 
+      - name: Build con-cli
+        shell: pwsh
+        run: |
+          cargo build -p con-cli --release
+
       - name: Diagnose build failure
         if: failure() && steps.build.conclusion == 'failure'
         shell: pwsh
@@ -246,6 +251,7 @@ jobs:
           $StagingDir = "dist\con-$Version-windows-x86_64"
           New-Item -ItemType Directory -Force -Path $StagingDir | Out-Null
           Copy-Item "target\release\con-app.exe" "$StagingDir\con-app.exe"
+          Copy-Item "target\release\con-cli.exe" "$StagingDir\con-cli.exe"
           if (Test-Path "README.md")  { Copy-Item "README.md"  $StagingDir }
           if (Test-Path "LICENSE")    { Copy-Item "LICENSE"    $StagingDir }
           if (Test-Path "LICENSE.md") { Copy-Item "LICENSE.md" $StagingDir }

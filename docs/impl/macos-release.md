@@ -3,6 +3,8 @@
 This repo now ships a first-pass macOS release pipeline for `con` that:
 
 - builds a native `.app` bundle without depending on `cargo-bundle`
+- embeds `con-cli` in the app bundle so installers and Homebrew can expose the
+  control-plane CLI without a separate source build
 - signs with a Developer ID Application certificate
 - notarizes with `notarytool`
 - staples the `.app`
@@ -15,9 +17,12 @@ This repo now ships a first-pass macOS release pipeline for `con` that:
 Scripts live in [`scripts/macos`](../../scripts/macos):
 
 - `build-app.sh` builds `con` and assembles `con.app`
+- `build-app.sh` also builds `con-cli` and places it at
+  `Contents/MacOS/con-cli`
 - `import-certificate.sh` imports the Developer ID cert into a temporary keychain for CI
 - `release.sh` runs build, sign, notarize, staple, package, and checksum generation
 - `verify.sh` runs `codesign`, `spctl`, and stapler validation checks
+- `verify.sh` fails the release if the bundled `con-cli` executable is missing
 
 GitHub Actions release workflow:
 
@@ -248,9 +253,11 @@ Before shipping a beta or stable build, verify these flows from the bundled app:
 
 1. Open the app from Finder and confirm the terminal renders normally.
 2. Open `About con` and confirm the app icon, version, build, and channel are visible.
-3. Open Settings → Updates and confirm the same version/build information is shown there.
-4. Run `Check for Updates…` against the intended channel and confirm Sparkle presents the expected UI.
-5. After installation, reopen `About con` and confirm the build number changed.
+3. Run `con-cli identify` from a new shell after installing by Homebrew or
+   `install.sh`; it should connect to the running app and print app identity.
+4. Open Settings → Updates and confirm the same version/build information is shown there.
+5. Run `Check for Updates…` against the intended channel and confirm Sparkle presents the expected UI.
+6. After installation, reopen `About con` and confirm the build number changed.
 
 ### Release Channel Runtime
 
