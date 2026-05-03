@@ -14,6 +14,8 @@
 mod agent_panel;
 mod assets;
 mod chat_markdown;
+#[cfg(target_os = "macos")]
+mod cli_shim;
 mod command_palette;
 #[cfg(target_os = "macos")]
 mod global_hotkey;
@@ -1383,6 +1385,8 @@ fn main() {
     if let Some(path) = log_file_path.as_ref() {
         log::info!("logging to {}", path.display());
     }
+    #[cfg(target_os = "macos")]
+    cli_shim::ensure_cli_shim();
     apply_linux_platform_override();
 
     let config = con_core::Config::load().unwrap_or_default();

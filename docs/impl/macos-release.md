@@ -24,6 +24,17 @@ Scripts live in [`scripts/macos`](../../scripts/macos):
 - `verify.sh` runs `codesign`, `spctl`, and stapler validation checks
 - `verify.sh` fails the release if the bundled `con-cli` executable is missing
 
+`con-cli` exposure is deliberately layered:
+
+- Homebrew casks install a `con-cli` binary shim from the app bundle.
+- `install.sh` links `~/.local/bin/con-cli` to the bundled CLI after copying
+  the app into `/Applications`.
+- Sparkle updates replace only the app bundle, so the app also performs a
+  conservative launch-time self-heal: it creates or repairs
+  `~/.local/bin/con-cli` only when the path is missing or already points to a
+  Con `.app` bundle. It never overwrites a real user-managed binary or an
+  unrelated symlink.
+
 GitHub Actions release workflow:
 
 - [`.github/workflows/release-macos.yml`](../../.github/workflows/release-macos.yml)
@@ -255,9 +266,11 @@ Before shipping a beta or stable build, verify these flows from the bundled app:
 2. Open `About con` and confirm the app icon, version, build, and channel are visible.
 3. Run `con-cli identify` from a new shell after installing by Homebrew or
    `install.sh`; it should connect to the running app and print app identity.
-4. Open Settings → Updates and confirm the same version/build information is shown there.
-5. Run `Check for Updates…` against the intended channel and confirm Sparkle presents the expected UI.
-6. After installation, reopen `About con` and confirm the build number changed.
+4. For a manual DMG/Sparkle-updated app, confirm launching the app creates or
+   repairs `~/.local/bin/con-cli` when that path is missing.
+5. Open Settings → Updates and confirm the same version/build information is shown there.
+6. Run `Check for Updates…` against the intended channel and confirm Sparkle presents the expected UI.
+7. After installation, reopen `About con` and confirm the build number changed.
 
 ### Release Channel Runtime
 

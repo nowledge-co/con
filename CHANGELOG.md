@@ -14,6 +14,10 @@ con is still pre-release, so entries may group related beta work while the produ
   app bundle and exposes it through Homebrew/script installs; Linux tarballs
   install both `con` and `con-cli`; Windows ZIP/script installs include
   `con-app.exe` and `con-cli.exe`.
+- Added a conservative macOS launch-time self-heal for `~/.local/bin/con-cli`
+  so manual-DMG installs and Sparkle-updated app bundles converge to the same
+  CLI availability as installer/Homebrew installs without overwriting
+  user-managed binaries.
 - Added release verification for the macOS app bundle so a signed/notarized
   build cannot ship without the control-plane CLI.
 - Documented that `con-cli` is part of the normal install path for surface
