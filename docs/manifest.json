@@ -3,7 +3,6 @@
   "repository": "nowledge-co/con-terminal",
   "defaultRef": "main",
   "extra": [
-    { "label": "README", "path": "README.md", "route": "/docs/readme/" },
     { "label": "License", "path": "LICENSE", "route": "/docs/license/" }
   ],
   "groups": [
@@ -13,7 +12,8 @@
         { "label": "Welcome", "path": "docs/README.md", "route": "/docs/" },
         { "label": "Install", "path": "docs/install.md" },
         { "label": "Quick controls", "path": "docs/quick-controls.md" },
-        { "label": "Built-in agent", "path": "docs/agent.md" }
+        { "label": "Built-in agent", "path": "docs/agent.md" },
+        { "label": "Settings", "path": "docs/settings.md" }
       ]
     },
     {

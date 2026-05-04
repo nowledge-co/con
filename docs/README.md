@@ -12,6 +12,7 @@ Choose the guide for what you want to do.
 | Install con | [Install](install.md) |
 | Learn the main controls | [Quick controls](quick-controls.md) |
 | Use the agent panel | [Built-in agent](agent.md) |
+| Tune providers, themes, skills, and shortcuts | [Settings](settings.md) |
 | Save a project layout | [Workspace profiles](workspace-layout-profiles-guide.md) |
 | See the app | [Screenshots](screenshots.md) |
 | See what changed | [Changelog](../CHANGELOG.md) |
@@ -19,8 +20,8 @@ Choose the guide for what you want to do.
 ## What belongs here
 
 These public docs are for people using con as their terminal. They cover
-installation, everyday controls, the agent panel, workspace profiles, and
-release notes.
+installation, everyday controls, the agent panel, Settings, workspace profiles,
+and release notes.
 
 If you want to build or change con itself, open the source repository from the
 GitHub link in the top navigation.

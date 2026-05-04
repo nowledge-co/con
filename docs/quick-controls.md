@@ -35,3 +35,8 @@ planning, code help, or a careful change made with your approval.
 4. Use Agent mode when you want con to reason over the visible pane and nearby
    context.
 5. Review tool actions before approving them.
+
+## Next
+
+When you want to tune providers, suggestions, themes, skills, or shortcuts, open
+[Settings](settings.md).

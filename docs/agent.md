@@ -15,6 +15,10 @@ Use the agent when you want help that depends on terminal context:
 
 Use the shell directly when you already know the command.
 
+Provider and model choices live in [Settings](settings.md). Keep the agent on a
+model you trust for reasoning, and use a faster model for inline suggestions if
+you want command help without slowing down the terminal.
+
 ## How it sees context
 
 The agent starts from the focused pane. It can use nearby terminal state, pane

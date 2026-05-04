@@ -1,8 +1,8 @@
-# Workspace Layout Profiles
+# Workspace layout profiles
 
-Con has two workspace promises.
+con has two workspace promises.
 
-The first is invisible: after rebooting, upgrading, or relaunching Con, your
+The first is invisible: after rebooting, upgrading, or relaunching con, your
 ordinary workspace should come back. Windows, tabs, panes, surfaces, working
 directories, and private terminal text history are continuity. You should not
 need a guide for that.
@@ -10,9 +10,9 @@ need a guide for that.
 The second is deliberate: when a workspace shape is worth keeping for a project,
 you can save it as a layout profile. This guide is for that explicit workflow.
 
-## What A Layout Profile Is
+## What a layout profile is
 
-A layout profile is a Con-generated `.con/workspace.toml` file.
+A layout profile is a con-generated `.con/workspace.toml` file.
 
 It describes workspace shape:
 
@@ -34,7 +34,7 @@ It does not contain private runtime state:
 Think of it as a profile for recreating a tuned workspace, not as a terminal
 session backup. It is safe to review because it describes shape, not activity.
 
-## The Aha Flow
+## The basic flow
 
 1. Tune the workspace visually until it feels right.
 2. Name the tabs, panes, and surfaces so the intent is obvious.
@@ -48,13 +48,13 @@ typed, what the agent said, or what processes were running.
 
 Private terminal text restore can be disabled in **Settings -> General ->
 Continuity**. Use **Clear Restored Terminal History** from Command Palette when
-you want to turn it off and wipe the saved terminal text already stored by Con.
+you want to turn it off and wipe the saved terminal text already stored by con.
 Continuity is default-on for new installs and existing beta users; the opt-out
-is explicit because restart continuity is part of Con's default workspace model.
+is explicit because restart continuity is part of con's default workspace model.
 
-## Save A Profile
+## Save a profile
 
-1. Open a project in Con.
+1. Open a project in con.
 2. Arrange tabs, panes, and surfaces visually.
 3. Rename tabs, panes, and surfaces so the layout is understandable.
 4. Choose **Save Layout Profile** from Command Palette or the Workspace menu.
@@ -86,7 +86,7 @@ cwd = "crates/server"
 
 That keeps the file stable in git diffs and usable across machines.
 
-## Open A Project Profile
+## Open a project profile
 
 Open a project profile explicitly:
 
@@ -94,8 +94,8 @@ Open a project profile explicitly:
 con ~/dev/app
 ```
 
-Con opens `~/dev/app/.con/workspace.toml` when it exists. If no profile exists,
-Con opens a fresh shell rooted at `~/dev/app`.
+con opens `~/dev/app/.con/workspace.toml` when it exists. If no profile exists,
+con opens a fresh shell rooted at `~/dev/app`.
 
 Open a profile file directly:
 
@@ -103,14 +103,14 @@ Open a profile file directly:
 con ~/dev/app/.con/workspace.toml
 ```
 
-If the requested profile is malformed, Con opens a fresh shell and shows the
+If the requested profile is malformed, con opens a fresh shell and shows the
 profile error in the terminal. It does not silently restore an unrelated
 workspace.
 
 Inside the app, use:
 
 - **Add Tabs from Layout Profile** to choose a project folder or profile file and add
-  its tabs to the current window. If the folder has no profile, Con adds one
+  its tabs to the current window. If the folder has no profile, con adds one
   fresh tab rooted there.
 - **Open Layout Profile in New Window** to choose a project folder or profile
   file and open it separately.
@@ -121,10 +121,10 @@ bring back the last private workspace, not silently replace it with a project
 profile because the process happened to start from a repo directory.
 
 The more aggressive `cd ~/dev/app && con` project-detection flow is deferred
-until Con has full single-instance forwarding and project-memory state. At that
-point Con can distinguish "open this project" from "restore my last app".
+until con has full single-instance forwarding and project-memory state. At that
+point con can distinguish "open this project" from "restore my last app".
 
-## Share A Profile
+## Share a profile
 
 Commit `.con/workspace.toml` when the layout is useful to other people on the
 project.
@@ -144,7 +144,7 @@ Bad shared profile content:
 - commands that run automatically
 - private agent conversations
 
-## New Tab, New Window, And Defaults
+## New tab, new window, and defaults
 
 Use these rules:
 
@@ -152,7 +152,7 @@ Use these rules:
   into a multi-pane project layout.
 - **Add Tabs from Layout Profile** is the explicit "new tab(s) from this profile"
   flow. If the profile contains one tab, it behaves like a new tab. If it
-  contains several tabs, Con adds all of them.
+  contains several tabs, con adds all of them.
 - **Open Layout Profile in New Window** is the explicit "new window from this
   profile" flow.
 - **New Window** stays scratch by default. A global "default new-window layout"
@@ -163,7 +163,7 @@ Use these rules:
 
 | Gesture | Result |
 | --- | --- |
-| Launch Con normally | Restore the private workspace you left behind. |
+| Launch con normally | Restore the private workspace you left behind. |
 | Cmd+N / New Window | Open one clean scratch shell with shared history. |
 | `con ~/dev/app` | Open the project's profile if present; otherwise one shell rooted there. |
 | `con ~/dev/app/.con/workspace.toml` | Open that profile directly. |
@@ -182,4 +182,4 @@ want processes to survive app restarts:
 tmux attach -t app || tmux new -s app
 ```
 
-Con restores the layout and directory. tmux restores the running session.
+con restores the layout and directory. tmux restores the running session.

@@ -1,0 +1,106 @@
+# Settings
+
+con should feel good before you change anything. Use Settings when you want to
+make the terminal fit your hands: choose a theme, connect an AI provider, tune
+suggestions, add skills, or change shortcuts.
+
+Open Settings from the app menu on macOS, the gear button on Windows and Linux,
+or the Command Palette.
+
+## Command Palette
+
+Press <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>P</kbd> on macOS, or
+<kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>P</kbd> on Windows and Linux.
+
+The Command Palette is the fastest way to find actions you do not use every
+minute. Search for Settings, workspace profiles, pane actions, updates, and
+other commands. When an action has a shortcut, con shows it beside the action.
+
+## Appearance
+
+Appearance controls the parts of con you look at all day:
+
+- terminal theme
+- terminal and UI fonts
+- terminal opacity and blur
+- background image
+- tab position
+
+Start with readability. Pick a theme with clear contrast, then adjust opacity or
+blur only if the terminal remains easy to scan.
+
+con can import Ghostty themes. Copy a theme, choose **Load from Clipboard**,
+preview it, then save it when it feels right.
+
+## AI providers
+
+The Providers section stores the connection details for the model hosts you use.
+The AI section chooses the active provider and model for the agent panel,
+Command Palette AI actions, and AI fallback suggestions.
+
+con supports Anthropic, OpenAI, ChatGPT, GitHub Copilot, OpenAI-compatible
+hosts, MiniMax, Moonshot, Z.AI, DeepSeek, Groq, Gemini, Ollama, OpenRouter,
+Mistral, Together, Cohere, Perplexity, and xAI.
+
+Use the strongest model for agent work when the answer matters. Use a faster or
+cheaper model for suggestions if you want inline help without slowing down the
+terminal.
+
+ChatGPT and GitHub Copilot can use OAuth, so you can leave the API key empty for
+those sign-in flows. OpenAI-compatible hosts can fetch models from `/models`
+when the host supports it, and you can still type a model ID manually.
+
+## Tool approval
+
+The agent should act in view. Leave tool approval on when you are in an
+unfamiliar repository, a production shell, or any session where mistakes are
+expensive.
+
+Auto-Approve Tools lets the agent run tools without asking for each action. Use
+it only in workspaces where you trust the task, the model, and the recovery
+path.
+
+## Command suggestions
+
+Suggestions are terminal help, not a second prompt.
+
+con checks local command history first. If history has no strong match, AI
+Command Suggestions can ask the configured suggestion provider for a fallback.
+You can turn this off, or route suggestions to a different provider and model
+from the main agent.
+
+Treat ghost text as a proposal. Accept it when it is what you meant, ignore it
+when it is not.
+
+## Skills
+
+Skills are slash commands backed by a `SKILL.md` file. They are useful for work
+you repeat: release checks, project playbooks, debugging routines, writing
+rules, or team-specific workflows.
+
+Type `/` in the input bar or agent panel to browse available skills.
+
+Project skills live with the current workspace:
+
+- `skills/`
+- `.agents/skills/`
+- `.con/skills/`
+
+Global skills follow you across projects:
+
+- `~/.config/con/skills`
+- `~/.agents/skills`
+
+On Windows, the config skills folder is `~/.config/con-terminal/skills`.
+
+Keep project skills for shared project habits. Keep global skills for personal
+habits. If names collide, the project skill wins so a repository can define its
+own local meaning.
+
+## Shortcuts
+
+The Keys section shows editable shortcuts and fixed shortcuts in one place.
+
+Change shortcuts when the default conflicts with muscle memory. Leave them alone
+when the built-in flow already works. A good setup should reduce decisions, not
+create a private language you have to remember.
