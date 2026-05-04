@@ -117,6 +117,8 @@ Keep project skills for shared project habits. Keep global skills for personal
 habits. If names collide, the project skill wins so a repository can define its
 own local meaning.
 
+For the workflow loop, see [Skills and workflows](skills-and-workflows.md).
+
 ## Shortcuts
 
 The Keys section shows editable shortcuts for app, pane, and surface actions.

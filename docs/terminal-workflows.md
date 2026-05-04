@@ -134,3 +134,6 @@ drop payloads through the terminal path.
 If a project has a workspace shape worth keeping, save it as a layout profile.
 Profiles are project files for recreating tabs, panes, surfaces, names, and
 working directories. See [Workspace profiles](workspace-layout-profiles-guide.md).
+
+If the behavior inside that layout becomes repeatable, turn it into a
+[skill](skills-and-workflows.md).

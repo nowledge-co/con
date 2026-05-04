@@ -5,8 +5,9 @@ feel like a fast, elegant terminal with nothing extra in the way.
 
 When you ask for AI, con uses the terminal objects you already work with:
 panes, SSH sessions, tmux panes, TUIs, visible output, and working directories.
-When you build on top of con, `con-cli` and surfaces give external agents a real
-terminal to drive.
+When a one-off routine becomes worth repeating, skills let you keep it as a
+slash command. When you build on top of con, `con-cli` and surfaces give
+external agents a real terminal to drive.
 
 Start with the page that matches what you are trying to do.
 
@@ -24,6 +25,7 @@ Start with the page that matches what you are trying to do.
 | Need | Read |
 | --- | --- |
 | Use the agent panel without leaving the terminal | [Built-in agent](agent.md) |
+| Turn a repeated terminal routine into a slash command | [Skills and workflows](skills-and-workflows.md) |
 | Save or share a project layout | [Workspace profiles](workspace-layout-profiles-guide.md) |
 | See the app | [Screenshots](screenshots.md) |
 | See what changed | [Changelog](../CHANGELOG.md) |

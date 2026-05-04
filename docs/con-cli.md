@@ -7,8 +7,8 @@ Most users do not need it. Use it when another program, script, test runner, or
 agent needs to inspect the visible terminal, create panes, drive pane-local
 surfaces, or ask con's built-in agent.
 
-The design goal is simple: external agents should get a real terminal to work
-with, not a headless shell that behaves differently from what the user sees.
+External agents should get a real terminal to work with, not a headless shell
+that behaves differently from what the user sees.
 
 ## Check that con is reachable
 

@@ -26,15 +26,11 @@
 
 If you're an old-school terminal user and only want enough AI harness when needed, nothing more or less, `con` is for you.
 
-With one tab open and the panels hidden, `con` is just a fast, quiet, beautiful terminal. No sidebar tax. No chat-first shell. No ceremony.
-
 ## What it does
 
-- a terminal that is fast, elegant, and good-looking out of the box
-- a three-mode input bar: Smart, Command, and Agent, so one surface can run commands, ask the agent, or choose for you
-- a built-in AI harness that understands terminal objects: panes, SSH sessions, tmux panes, TUIs, visible output, and current working directories
-- visible, approval-based agent work in the terminal you can already see
-- pane-local surfaces and `con-cli` for people building subagent orchestration on top of a real terminal
+- a terminal that is fast and elegant
+- a built-in AI harness that can read context, ask before acting, and work directly in the terminal you can already see
+- terminal-native workflows for CLI work, with `ssh`, `tmux`, and coding-agent-aware orchestration
 
 ## Status
 
@@ -138,6 +134,7 @@ Start here:
 - [Terminal workflows](docs/terminal-workflows.md): tabs, panes, broadcast, pane zoom, links, and surfaces.
 - [Built-in agent](docs/agent.md): use AI help without leaving the terminal.
 - [Settings](docs/settings.md): choose providers, themes, suggestions, skills, and shortcuts.
+- [Skills and workflows](docs/skills-and-workflows.md): turn repeated terminal routines into project or personal slash commands.
 - [Workspace layout profiles](docs/workspace-layout-profiles-guide.md): save a project layout, reopen it later, or share it with a team.
 - [con-cli and surfaces](docs/con-cli.md): build scripts, test runners, and external agent orchestrators on top of con.
 - [Screenshot gallery](docs/screenshots.md): a visual tour of the app.

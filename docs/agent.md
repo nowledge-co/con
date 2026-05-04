@@ -71,3 +71,7 @@ terminal sessions inside a pane without taking over the main terminal layout.
 The built-in agent harness and benchmark loop are open in the repository. They
 exist so terminal-native behavior can be tested and improved, not hidden behind
 a product claim.
+
+If you want to repeat a workflow through the built-in agent itself, write it as
+a [skill](skills-and-workflows.md). Skills are the user-facing way to keep a
+good terminal routine without turning it into a separate app.

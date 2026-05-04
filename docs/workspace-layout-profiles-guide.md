@@ -165,3 +165,12 @@ tmux attach -t app || tmux new -s app
 ```
 
 con recreates the layout and directory. tmux restores the running session.
+
+## Skills
+
+If a layout is the workspace shape, a skill is the routine that runs inside it.
+A release layout might open local tests, staging SSH, and logs. A `/release`
+skill can then decide which targets to reuse, which checks to run, and where it
+must stop for approval.
+
+See [Skills and workflows](skills-and-workflows.md).
