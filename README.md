@@ -121,7 +121,7 @@ scoop bucket add jam https://github.com/EFLKumo/jam
 scoop install jam/con-terminal
 ```
 
-This will make con portable and add `con-app` to your PATH.
+This will make con portable and add `con-app` and `con-cli` to your PATH.
 
 To build from source, see `HACKING.md`.
 
