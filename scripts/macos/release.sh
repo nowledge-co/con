@@ -88,9 +88,17 @@ sign_app_bundle() {
     done < <(find "$frameworks_dir" -maxdepth 1 -name '*.framework' -print0 2>/dev/null || true)
   fi
 
-  # 4. Sign loose executables in the app (the main binary, etc.),
-  #    excluding anything already covered by the framework pass.
+  # 4. Sign loose executables in the app, excluding anything already covered
+  #    by the framework pass. Sign auxiliary executables before the main app
+  #    binary: codesign validates nested/sibling executable code when signing
+  #    the bundle's main executable, so con-cli must already be signed.
+  local main_executable="$app_path/Contents/MacOS/con"
+  local has_main_executable=0
   while IFS= read -r nested; do
+    if [[ "$nested" == "$main_executable" ]]; then
+      has_main_executable=1
+      continue
+    fi
     sign_code "$nested"
   done < <(
     find "$app_path/Contents" -type f \
@@ -99,6 +107,10 @@ sign_app_bundle() {
       ! -path '*/Frameworks/*' \
       | sort
   )
+
+  if [[ "$has_main_executable" == "1" ]]; then
+    sign_code "$main_executable"
+  fi
 
   # 5. Sign the top-level app bundle.
   sign_code "$app_path"
