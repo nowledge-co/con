@@ -5054,6 +5054,8 @@ impl ConWorkspace {
         crate::bind_app_keybindings(cx, &kb);
         #[cfg(target_os = "macos")]
         crate::global_hotkey::update_from_keybindings(&kb);
+        #[cfg(target_os = "macos")]
+        crate::hotkey_window::update_from_keybindings(&kb);
 
         if restore_focus {
             self.focus_terminal(window, cx);

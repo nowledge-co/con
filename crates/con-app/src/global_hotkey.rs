@@ -12,6 +12,15 @@ unsafe extern "C" {
         callback: extern "C" fn(),
     ) -> bool;
     fn con_unregister_global_hotkey();
+    fn con_register_hotkey_window_hotkey(
+        key_code: u32,
+        shift: bool,
+        control: bool,
+        alt: bool,
+        command: bool,
+        callback: extern "C" fn(),
+    ) -> bool;
+    fn con_unregister_hotkey_window_hotkey();
     fn con_app_is_active() -> bool;
 }
 
@@ -23,14 +32,15 @@ pub fn init(cx: &App, keybindings: &KeybindingConfig) {
     GLOBAL_HOTKEY_APP.with(|app| {
         *app.borrow_mut() = Some(cx.to_async());
     });
-    update_registration(keybindings);
+    update_from_keybindings(keybindings);
 }
 
 pub fn update_from_keybindings(keybindings: &KeybindingConfig) {
-    update_registration(keybindings);
+    update_summon_registration(keybindings);
+    update_hotkey_window_registration(keybindings);
 }
 
-fn update_registration(keybindings: &KeybindingConfig) {
+fn update_summon_registration(keybindings: &KeybindingConfig) {
     if !keybindings.global_summon_enabled {
         unsafe { con_unregister_global_hotkey() };
         return;
@@ -75,6 +85,51 @@ fn update_registration(keybindings: &KeybindingConfig) {
     }
 }
 
+fn update_hotkey_window_registration(keybindings: &KeybindingConfig) {
+    if !keybindings.hotkey_window_enabled {
+        unsafe { con_unregister_hotkey_window_hotkey() };
+        return;
+    }
+
+    let binding = &keybindings.hotkey_window;
+    let Some(keystroke) = parse_global_hotkey(binding) else {
+        unsafe { con_unregister_hotkey_window_hotkey() };
+        if !binding.trim().is_empty() {
+            log::warn!(
+                "hotkey window: unsupported binding {:?}, disabling",
+                binding
+            );
+        }
+        return;
+    };
+
+    let Some(key_code) = gpui_key_to_keycode(&keystroke.key) else {
+        unsafe { con_unregister_hotkey_window_hotkey() };
+        log::warn!(
+            "hotkey window: unsupported key {:?} in binding {:?}, disabling",
+            keystroke.key,
+            binding
+        );
+        return;
+    };
+
+    let ok = unsafe {
+        con_register_hotkey_window_hotkey(
+            key_code,
+            keystroke.modifiers.shift,
+            keystroke.modifiers.control,
+            keystroke.modifiers.alt,
+            keystroke.modifiers.platform,
+            on_hotkey_window_pressed,
+        )
+    };
+
+    if !ok {
+        unsafe { con_unregister_hotkey_window_hotkey() };
+        log::warn!("hotkey window: failed to register binding {:?}", binding);
+    }
+}
+
 fn parse_global_hotkey(binding: &str) -> Option<Keystroke> {
     if binding.trim().is_empty() {
         return None;
@@ -96,6 +151,18 @@ extern "C" fn on_global_hotkey_pressed() {
 
         app.update(|cx| {
             crate::toggle_global_summon(cx);
+        });
+    });
+}
+
+extern "C" fn on_hotkey_window_pressed() {
+    GLOBAL_HOTKEY_APP.with(|app| {
+        let Some(app) = app.borrow().clone() else {
+            return;
+        };
+
+        app.update(|cx| {
+            crate::hotkey_window::toggle(cx);
         });
     });
 }
@@ -193,6 +260,13 @@ mod tests {
         let keystroke = parse_global_hotkey("alt-space").expect("alt-space should parse");
         assert!(keystroke.modifiers.alt);
         assert_eq!(keystroke.key, "space");
+    }
+
+    #[test]
+    fn parses_default_hotkey_window_hotkey() {
+        let keystroke = parse_global_hotkey("cmd-\\").expect("cmd-\\ should parse");
+        assert!(keystroke.modifiers.platform);
+        assert_eq!(keystroke.key, "\\");
     }
 
     #[test]
