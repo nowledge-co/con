@@ -450,7 +450,7 @@ This is where con has to be more deliberate than many reference products.
 
 ### Core rule
 
-These workflows must feel **enhanced**, not wrapped.
+These workflows should feel clearer in con, not wrapped by con.
 
 ### Expected behavior
 

@@ -190,7 +190,7 @@ That means:
 - it reuses the tab's focused-pane context and peer-pane summary
 - the response also appears in con's own agent UI for that tab
 
-This is the key step that makes CLI-driven end-to-end evaluation possible. A coding agent outside the app can now drive panes, inspect tmux state, call the built-in agent in a real tab session, and verify the visible result without a human acting as the bridge.
+This is what makes CLI-driven end-to-end evaluation possible. A coding agent outside the app can drive panes, inspect tmux state, call the built-in agent in a real tab session, and verify the visible result without a human acting as the bridge.
 
 ## Threading model
 
