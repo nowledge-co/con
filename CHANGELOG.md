@@ -42,6 +42,15 @@ con is still pre-release, so entries may group related beta work while the produ
 - Documented that `con-cli` is part of the normal install path for surface
   orchestrators such as `pi-interactive-subagents`.
 
+### Changed
+
+**Settings**
+
+- Settings header now shows last-saved time — "Saved just now", "Saved Xm ago", or "Saved Xh ago" with a check-circle icon after a successful save. The timestamp is seeded from `config.toml`'s modification time on init so the indicator persists across settings window reopens.
+- Added `cmd-s` (macOS) / `ctrl-s` (Windows/Linux) keybinding to trigger Save Changes from anywhere in the settings panel.
+- Added `cmd-w` (macOS) / `ctrl-w` (Windows/Linux) to close the standalone settings window or save-and-dismiss in panel mode. Closing via `cmd-w` now correctly reverts any unsaved standalone preview changes, matching the existing Escape path.
+- Save Changes button in the standalone settings window now shows a `⌘ S` / `Ctrl S` keycap hint.
+
 ## `v0.1.0-beta.57` - 2026-05-03
 
 ### Added
