@@ -290,6 +290,12 @@ struct TabRenameEditor {
     input: Entity<InputState>,
 }
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TabRenameStateSnapshot {
+    tab_index: usize,
+}
+
 struct Tab {
     pane_tree: PaneTree,
     title: String,
@@ -478,6 +484,9 @@ pub struct ConWorkspace {
     session_save_tx: crossbeam_channel::Sender<SessionSaveRequest>,
     /// Inline rename state for the horizontal tab strip.
     tab_rename: Option<TabRenameEditor>,
+    /// Escape-cancel marker so the subsequent input blur does not
+    /// auto-save the value we meant to discard.
+    tab_rename_cancelled_index: Option<usize>,
     /// Drop slot (0..=N) tracked while a DraggedTab is in flight over
     /// the horizontal tab strip. Slot K = "insert before tab K".
     tab_strip_drop_slot: Option<usize>,
@@ -1559,6 +1568,7 @@ impl ConWorkspace {
             window_close_prepared: false,
             session_save_tx,
             tab_rename: None,
+            tab_rename_cancelled_index: None,
             tab_strip_drop_slot: None,
         }
     }
@@ -1605,6 +1615,12 @@ impl ConWorkspace {
 
     fn active_terminal(&self) -> &TerminalPane {
         self.tabs[self.active_tab].pane_tree.focused_terminal()
+    }
+
+    fn refocus_active_terminal(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.get(self.active_tab) {
+            tab.pane_tree.focused_terminal().focus(window, cx);
+        }
     }
 
     fn sync_active_terminal_focus_states(&self, cx: &mut App) {
@@ -4601,16 +4617,10 @@ impl ConWorkspace {
         &mut self,
         _sidebar: &Entity<SessionSidebar>,
         event: &SidebarRename,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Empty / whitespace-only labels reset to smart auto-naming.
-        let new_label = event
-            .label
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
+        let new_label = event.label.as_deref().and_then(normalize_tab_user_label);
         let Some(index) = self
             .tabs
             .iter()
@@ -4624,6 +4634,7 @@ impl ConWorkspace {
         self.tabs[index].user_label = new_label;
         self.sync_sidebar(cx);
         self.save_session(cx);
+        self.refocus_active_terminal(window, cx);
         cx.notify();
     }
 
@@ -4765,6 +4776,8 @@ impl ConWorkspace {
             }
         }
 
+        self.remap_tab_rename_state_after_reorder(&old_order);
+
         // Re-locate the active tab by stable summary_id rather than
         // index arithmetic (which had its own off-by-one in the
         // previous version).
@@ -4845,6 +4858,8 @@ impl ConWorkspace {
             }
         }
 
+        self.remap_tab_rename_state_after_reorder(&old_order);
+
         if let Some(new_active) = self.tabs.iter().position(|t| t.summary_id == active_id) {
             self.active_tab = new_active;
         }
@@ -4874,33 +4889,99 @@ impl ConWorkspace {
         });
 
         cx.subscribe_in(&input, window, {
-            move |this, input_entity, event: &InputEvent, _window, cx| {
-                if !matches!(event, InputEvent::PressEnter { .. }) {
-                    return;
+            move |this, input_entity, event: &InputEvent, window, cx| match event {
+                InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                    let value = input_entity.read(cx).value().to_string();
+                    this.commit_tab_rename(index, value, window, cx);
                 }
-                let value = input_entity.read(cx).value().to_string();
-                let label = if value.trim().is_empty() {
-                    None
-                } else {
-                    Some(value.trim().to_string())
-                };
-                if let Some(tab) = this.tabs.get_mut(index) {
-                    tab.user_label = label;
-                }
-                this.tab_rename = None;
-                this.sync_sidebar(cx);
-                this.save_session(cx);
-                cx.notify();
+                _ => {}
             }
         })
         .detach();
 
-        input.update(cx, |state, cx| state.focus(window, cx));
         self.tab_rename = Some(TabRenameEditor {
             tab_index: index,
-            input,
+            input: input.clone(),
         });
+        self.tab_rename_cancelled_index = None;
+        input.update(cx, |state, cx| state.focus(window, cx));
+        window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
         cx.notify();
+    }
+
+    fn commit_tab_rename(
+        &mut self,
+        index: usize,
+        value: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.tab_rename_cancelled_index == Some(index) {
+            self.tab_rename_cancelled_index = None;
+            self.tab_rename = None;
+            cx.notify();
+            return;
+        }
+
+        let Some(tab) = self.tabs.get_mut(index) else {
+            self.tab_rename = None;
+            self.tab_rename_cancelled_index = None;
+            cx.notify();
+            return;
+        };
+
+        let label = normalize_tab_user_label(&value);
+        let changed = tab.user_label != label;
+        tab.user_label = label;
+        self.tab_rename = None;
+        self.tab_rename_cancelled_index = None;
+
+        if changed {
+            self.sync_sidebar(cx);
+            self.save_session(cx);
+        }
+        self.refocus_active_terminal(window, cx);
+        cx.notify();
+    }
+
+    fn remap_tab_rename_state_after_close(&mut self, closed_index: usize) {
+        self.tab_rename = self
+            .tab_rename
+            .take()
+            .and_then(|state| match state.tab_index.cmp(&closed_index) {
+                std::cmp::Ordering::Less => Some(state),
+                std::cmp::Ordering::Equal => None,
+                std::cmp::Ordering::Greater => Some(TabRenameEditor {
+                    tab_index: state.tab_index - 1,
+                    input: state.input,
+                }),
+            });
+        self.tab_rename_cancelled_index = self
+            .tab_rename_cancelled_index
+            .and_then(|idx| match idx.cmp(&closed_index) {
+                std::cmp::Ordering::Less => Some(idx),
+                std::cmp::Ordering::Equal => None,
+                std::cmp::Ordering::Greater => Some(idx - 1),
+            });
+    }
+
+    fn remap_tab_rename_state_after_reorder(&mut self, old_order: &[u64]) {
+        let rename_summary_id = self
+            .tab_rename
+            .as_ref()
+            .and_then(|state| old_order.get(state.tab_index))
+            .copied();
+        if let Some(summary_id) = rename_summary_id
+            && let Some(new_index) = self.tabs.iter().position(|tab| tab.summary_id == summary_id)
+            && let Some(state) = self.tab_rename.as_mut()
+        {
+            state.tab_index = new_index;
+        }
+
+        self.tab_rename_cancelled_index = self.tab_rename_cancelled_index.and_then(|idx| {
+            let summary_id = *old_order.get(idx)?;
+            self.tabs.iter().position(|tab| tab.summary_id == summary_id)
+        });
     }
 
     fn on_sidebar_close_others(
@@ -7915,6 +7996,7 @@ impl ConWorkspace {
         let was_active = index == self.active_tab;
         self.reindex_pending_control_agent_requests_after_tab_close(index);
         self.reindex_pending_surface_control_requests_after_tab_close(index);
+        self.remap_tab_rename_state_after_close(index);
         let removed = self.tabs.remove(index);
         // Drop the closed tab's cached AI summary so a future tab
         // assigned the same summary_id (which won't happen, since
@@ -10685,6 +10767,9 @@ impl Render for ConWorkspace {
                             .w_full()
                             .min_w_0()
                             .on_action(cx.listener(|this, _: &InputEscape, _, cx| {
+                                if let Some(editor) = this.tab_rename.as_ref() {
+                                    this.tab_rename_cancelled_index = Some(editor.tab_index);
+                                }
                                 this.tab_rename = None;
                                 cx.notify();
                             }))
@@ -12163,10 +12248,105 @@ fn horizontal_tab_slot_from_position(
     Some(if local_x < half { index } else { index + 1 })
 }
 
+fn normalize_tab_user_label(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+#[cfg(test)]
+fn remap_tab_rename_state_after_close(
+    rename: Option<TabRenameStateSnapshot>,
+    cancelled_index: Option<usize>,
+    closed_index: usize,
+) -> (Option<TabRenameStateSnapshot>, Option<usize>) {
+    let rename = rename.and_then(|state| match state.tab_index.cmp(&closed_index) {
+        std::cmp::Ordering::Less => Some(state),
+        std::cmp::Ordering::Equal => None,
+        std::cmp::Ordering::Greater => Some(TabRenameStateSnapshot {
+            tab_index: state.tab_index - 1,
+        }),
+    });
+    let cancelled_index = cancelled_index.and_then(|idx| match idx.cmp(&closed_index) {
+        std::cmp::Ordering::Less => Some(idx),
+        std::cmp::Ordering::Equal => None,
+        std::cmp::Ordering::Greater => Some(idx - 1),
+    });
+    (rename, cancelled_index)
+}
+
+#[cfg(test)]
+fn remap_tab_rename_state_after_reorder(
+    rename: Option<TabRenameStateSnapshot>,
+    cancelled_index: Option<usize>,
+    old_order: &[u64],
+    new_order: &[u64],
+) -> (Option<TabRenameStateSnapshot>, Option<usize>) {
+    let rename = rename.and_then(|state| {
+        let summary_id = *old_order.get(state.tab_index)?;
+        let tab_index = new_order.iter().position(|id| *id == summary_id)?;
+        Some(TabRenameStateSnapshot { tab_index })
+    });
+    let cancelled_index = cancelled_index.and_then(|idx| {
+        let summary_id = *old_order.get(idx)?;
+        new_order.iter().position(|id| *id == summary_id)
+    });
+    (rename, cancelled_index)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ConWorkspace, horizontal_tab_slot_from_position};
+    use super::{
+        ConWorkspace, TabRenameStateSnapshot, horizontal_tab_slot_from_position,
+        normalize_tab_user_label, remap_tab_rename_state_after_close,
+        remap_tab_rename_state_after_reorder,
+    };
     use gpui::{Bounds, Point, Size, px};
+
+    #[test]
+    fn normalize_tab_user_label_trims_and_clears_blank_values() {
+        assert_eq!(normalize_tab_user_label(""), None);
+        assert_eq!(normalize_tab_user_label("   \t  \n"), None);
+        assert_eq!(normalize_tab_user_label("  hello  "), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn remap_tab_rename_state_after_close_drops_closed_tab_and_shifts_later_indices() {
+        assert_eq!(
+            remap_tab_rename_state_after_close(
+                Some(TabRenameStateSnapshot { tab_index: 2 }),
+                Some(3),
+                2,
+            ),
+            (None, Some(2))
+        );
+        assert_eq!(
+            remap_tab_rename_state_after_close(
+                Some(TabRenameStateSnapshot { tab_index: 4 }),
+                Some(4),
+                1,
+            ),
+            (Some(TabRenameStateSnapshot { tab_index: 3 }), Some(3))
+        );
+    }
+
+    #[test]
+    fn remap_tab_rename_state_after_reorder_tracks_tab_identity() {
+        let old_order = vec![10_u64, 20, 30, 40];
+        let new_order = vec![30_u64, 10, 20, 40];
+        assert_eq!(
+            remap_tab_rename_state_after_reorder(
+                Some(TabRenameStateSnapshot { tab_index: 2 }),
+                Some(2),
+                &old_order,
+                &new_order,
+            ),
+            (Some(TabRenameStateSnapshot { tab_index: 0 }), Some(0))
+        );
+    }
 
     #[test]
     fn horizontal_tab_slot_ignores_cursor_outside_bounds() {
