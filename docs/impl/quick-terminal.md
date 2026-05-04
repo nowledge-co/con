@@ -1,8 +1,8 @@
-# Hotkey Window
+# Quick Terminal
 
 ## Overview
 
-Con now has a macOS-only hotkey window that behaves like a global hidden terminal for the current app run.
+Con now has a macOS-only quick terminal that behaves like a global hidden terminal for the current app run.
 
 It is intentionally implemented as a **single special Con window**, not a parallel terminal subsystem.
 
@@ -22,7 +22,7 @@ Core behavior:
 
 ## Product rules
 
-1. The hotkey window is a singleton within one running Con app instance.
+1. The quick terminal is a singleton within one running Con app instance.
 2. It is pre-created with the first normal Con window, not lazily created on first toggle.
 3. It starts hidden and is later controlled only by toggle show/hide.
 4. It owns its own long-lived terminal session for the lifetime of the app run.
@@ -37,11 +37,11 @@ Core behavior:
 
 ### Workspace model
 
-The hotkey window is a normal `ConWorkspace` with hotkey-specific creation and window behavior.
+The quick terminal is a normal `ConWorkspace` with hotkey-specific creation and window behavior.
 
 There is no second terminal model and no duplicate session model.
 
-This means the hotkey window naturally keeps:
+This means the quick terminal naturally keeps:
 
 - cwd
 - shell state
@@ -54,7 +54,7 @@ for as long as the app process remains alive.
 
 ### Rust controller
 
-`crates/con-app/src/hotkey_window.rs` is intentionally thin.
+`crates/con-app/src/quick_terminal.rs` is intentionally thin.
 
 It owns only runtime singleton control state:
 
@@ -68,7 +68,7 @@ It does **not** own mirrored terminal/session/geometry state.
 
 ### Native/AppKit layer
 
-`crates/con-app/src/objc/hotkey_window_trampoline.m` owns the macOS-specific window behavior:
+`crates/con-app/src/objc/quick_terminal_trampoline.m` owns the macOS-specific window behavior:
 
 - borderless configuration
 - slide-in / slide-out animation
@@ -78,7 +78,7 @@ It does **not** own mirrored terminal/session/geometry state.
 - full-width enforcement
 - minimum-height clamp
 
-A key implementation detail is that the hotkey layer must **not replace GPUI's own `NSWindowDelegate`**. Earlier versions did this and broke GPUI's activation / focus / layout lifecycle, which caused the hotkey window to appear visually present but behave as if input and top chrome were stalled until a manual resize happened.
+A key implementation detail is that the hotkey layer must **not replace GPUI's own `NSWindowDelegate`**. Earlier versions did this and broke GPUI's activation / focus / layout lifecycle, which caused the quick terminal to appear visually present but behave as if input and top chrome were stalled until a manual resize happened.
 
 The final implementation keeps GPUI's delegate chain intact.
 
@@ -89,27 +89,27 @@ The final implementation keeps GPUI's delegate chain intact.
 When the first normal Con window opens:
 
 1. Con opens the requested normal window.
-2. Con also opens the singleton hotkey window.
-3. The hotkey window uses `HOME` as its default cwd.
-4. The hotkey window is immediately configured as hidden.
+2. Con also opens the singleton quick terminal.
+3. The quick terminal uses `HOME` as its default cwd.
+4. The quick terminal is immediately configured as hidden.
 
 There is no `pending_show`, `creating`, or first-toggle creation flow in the final design.
 
 ### Show
 
-On global hotkey press, if the hotkey window is hidden:
+On global hotkey press, if the quick terminal is hidden:
 
 1. Capture the current frontmost app pid unless it is already Con.
 2. Recompute the window frame against the current screen.
 3. Force full visible width.
 4. Keep the current window height, clamped to screen bounds.
 5. Activate Con.
-6. Make the hotkey window key/front.
+6. Make the quick terminal key/front.
 7. Animate it downward from the top edge.
 
 ### Hide
 
-On global hotkey press, if the hotkey window is visible:
+On global hotkey press, if the quick terminal is visible:
 
 1. Animate it upward off-screen.
 2. Keep the window alive.
@@ -117,9 +117,9 @@ On global hotkey press, if the hotkey window is visible:
 
 ### Destruction
 
-The hotkey window lives only as long as the Con app process lives.
+The quick terminal lives only as long as the Con app process lives.
 
-When the app exits, the hotkey window exits too.
+When the app exits, the quick terminal exits too.
 
 ## Geometry
 
@@ -143,7 +143,7 @@ Before each show:
 - clamp height into valid screen bounds
 - place y so the top edge stays pinned
 
-This makes the hotkey window adapt automatically to display changes without extra persistence machinery.
+This makes the quick terminal adapt automatically to display changes without extra persistence machinery.
 
 ### Resize behavior
 
@@ -168,13 +168,13 @@ These settings are reapplied at runtime when settings are saved.
 
 What is intentionally **not** stored anymore:
 
-- saved hotkey window height
+- saved quick terminal height
 - extra hotkey geometry persistence fields
 - mirrored Rust-side remembered height state
 
 ## Tab and summarizer behavior
 
-The hotkey window uses the same tab model as normal windows.
+The quick terminal uses the same tab model as normal windows.
 
 Important rule:
 
@@ -191,7 +191,7 @@ During this work, `new_tab` behavior was also tightened so new-tab activation re
 
 This was the most important bug discovered during implementation.
 
-Replacing the native window delegate caused GPUI to miss key activation / resize / frame callbacks. The visible symptom was that the hotkey window appeared, but buttons, shortcuts, focus, and top chrome behaved as if they were stalled until a manual resize occurred.
+Replacing the native window delegate caused GPUI to miss key activation / resize / frame callbacks. The visible symptom was that the quick terminal appeared, but buttons, shortcuts, focus, and top chrome behaved as if they were stalled until a manual resize occurred.
 
 The correct fix was to keep GPUI's delegate ownership intact.
 
@@ -221,30 +221,30 @@ Primary files:
 - `crates/con-app/src/main.rs`
   - eager hotkey-window creation
   - hotkey-window options / initial bounds
-- `crates/con-app/src/hotkey_window.rs`
+- `crates/con-app/src/quick_terminal.rs`
   - singleton runtime controller
 - `crates/con-app/src/global_hotkey.rs`
   - hotkey registration and callback dispatch
-- `crates/con-app/src/objc/hotkey_window_trampoline.m`
+- `crates/con-app/src/objc/quick_terminal_trampoline.m`
   - AppKit show/hide/configure behavior
 - `crates/con-app/src/workspace.rs`
-  - shared workspace/tab behavior used by the hotkey window
+  - shared workspace/tab behavior used by the quick terminal
 
 ## Verification checklist
 
 Manual verification should cover:
 
-- open normal Con window → hotkey window is pre-created hidden
+- open normal Con window → quick terminal is pre-created hidden
 - `Cmd+\\` toggles show/hide
-- hotkey window focuses correctly on show
+- quick terminal focuses correctly on show
 - hide restores the previously frontmost app
 - default cwd is `HOME`
 - full-width top-pinned appearance
 - default half-screen height
 - bottom-edge height resize works
-- hotkey window keeps its session state across hide/show
+- quick terminal keeps its session state across hide/show
 - always-on-top setting applies correctly
-- add tab / `Cmd+T` works normally inside the hotkey window
+- add tab / `Cmd+T` works normally inside the quick terminal
 - tab UI renders without requiring a manual resize
 - changing tab layout does not trigger LLM summary requests
 
@@ -257,4 +257,4 @@ Non-goals for now:
 - cross-launch hotkey session persistence beyond existing Con session behavior
 - persistent geometry restoration across app relaunches
 - a background daemon or app-without-window resident mode
-- non-macOS hotkey window behavior
+- non-macOS quick terminal behavior

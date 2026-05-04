@@ -8,8 +8,8 @@ typedef void (*con_hotkey_callback_t)(void);
 static EventHotKeyRef g_con_hotkey_ref = NULL;
 static EventHandlerRef g_con_hotkey_handler = NULL;
 static con_hotkey_callback_t g_con_hotkey_callback = NULL;
-static EventHotKeyRef g_con_hw_hotkey_ref = NULL;
-static con_hotkey_callback_t g_con_hw_hotkey_callback = NULL;
+static EventHotKeyRef g_con_qt_hotkey_ref = NULL;
+static con_hotkey_callback_t g_con_qt_hotkey_callback = NULL;
 static id g_con_window_cycle_monitor = nil;
 static NSMutableArray<NSNumber *> *g_con_window_cycle_order = nil;
 static NSTimeInterval g_con_last_window_cycle_timestamp = 0;
@@ -37,8 +37,8 @@ static OSStatus con_hotkey_handler(EventHandlerCallRef nextHandler, EventRef eve
 
     if (hotkey_id.id == 1 && g_con_hotkey_callback != NULL) {
         g_con_hotkey_callback();
-    } else if (hotkey_id.id == 2 && g_con_hw_hotkey_callback != NULL) {
-        g_con_hw_hotkey_callback();
+    } else if (hotkey_id.id == 2 && g_con_qt_hotkey_callback != NULL) {
+        g_con_qt_hotkey_callback();
     }
     return noErr;
 }
@@ -103,7 +103,7 @@ bool con_register_global_hotkey(
     return status == noErr;
 }
 
-bool con_register_hotkey_window_hotkey(
+bool con_register_quick_terminal_hotkey(
     uint32_t key_code,
     bool shift,
     bool control,
@@ -111,9 +111,9 @@ bool con_register_hotkey_window_hotkey(
     bool command,
     con_hotkey_callback_t callback
 ) {
-    if (g_con_hw_hotkey_ref != NULL) {
-        UnregisterEventHotKey(g_con_hw_hotkey_ref);
-        g_con_hw_hotkey_ref = NULL;
+    if (g_con_qt_hotkey_ref != NULL) {
+        UnregisterEventHotKey(g_con_qt_hotkey_ref);
+        g_con_qt_hotkey_ref = NULL;
     }
 
     if (g_con_hotkey_handler == NULL) {
@@ -130,7 +130,7 @@ bool con_register_hotkey_window_hotkey(
         );
     }
 
-    g_con_hw_hotkey_callback = callback;
+    g_con_qt_hotkey_callback = callback;
 
     UInt32 modifiers = 0;
     if (shift) {
@@ -157,7 +157,7 @@ bool con_register_hotkey_window_hotkey(
         hotkey_id,
         GetApplicationEventTarget(),
         0,
-        &g_con_hw_hotkey_ref
+        &g_con_qt_hotkey_ref
     );
 
     return status == noErr;
@@ -171,12 +171,12 @@ void con_unregister_global_hotkey(void) {
     g_con_hotkey_callback = NULL;
 }
 
-void con_unregister_hotkey_window_hotkey(void) {
-    if (g_con_hw_hotkey_ref != NULL) {
-        UnregisterEventHotKey(g_con_hw_hotkey_ref);
-        g_con_hw_hotkey_ref = NULL;
+void con_unregister_quick_terminal_hotkey(void) {
+    if (g_con_qt_hotkey_ref != NULL) {
+        UnregisterEventHotKey(g_con_qt_hotkey_ref);
+        g_con_qt_hotkey_ref = NULL;
     }
-    g_con_hw_hotkey_callback = NULL;
+    g_con_qt_hotkey_callback = NULL;
 }
 
 bool con_app_is_active(void) {

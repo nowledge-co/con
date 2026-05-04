@@ -20,7 +20,7 @@ mod command_palette;
 #[cfg(target_os = "macos")]
 mod global_hotkey;
 #[cfg(target_os = "macos")]
-mod hotkey_window;
+mod quick_terminal;
 #[cfg(target_os = "macos")]
 mod macos_windowing;
 
@@ -363,7 +363,7 @@ fn default_window_options(config: &con_core::Config, cx: &mut App) -> WindowOpti
 }
 
 #[cfg(target_os = "macos")]
-fn hotkey_window_bounds(cx: &mut App) -> WindowBounds {
+fn quick_terminal_bounds(cx: &mut App) -> WindowBounds {
     let fallback_size = size(px(1440.0), px(480.0));
     let fallback_bounds = Bounds::centered(None, fallback_size, cx);
 
@@ -380,9 +380,9 @@ fn hotkey_window_bounds(cx: &mut App) -> WindowBounds {
 }
 
 #[cfg(target_os = "macos")]
-fn hotkey_window_options(config: &con_core::Config, cx: &mut App) -> WindowOptions {
+fn quick_terminal_options(config: &con_core::Config, cx: &mut App) -> WindowOptions {
     let mut options = default_window_options(config, cx);
-    options.window_bounds = Some(hotkey_window_bounds(cx));
+    options.window_bounds = Some(quick_terminal_bounds(cx));
     options.titlebar = None;
     options
 }
@@ -502,7 +502,7 @@ pub(crate) fn open_con_window(
     cx: &mut App,
 ) {
     #[cfg(target_os = "macos")]
-    crate::hotkey_window::ensure_created_for_app_run(cx);
+    crate::quick_terminal::ensure_created_for_app_run(cx);
 
     let window_options = default_window_options(&config, cx);
     cx.spawn(async move |cx| {
@@ -564,10 +564,10 @@ pub(crate) fn open_con_window(
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn open_hotkey_window(config: con_core::Config, session: Session, cx: &mut App) {
+pub(crate) fn open_quick_terminal(config: con_core::Config, session: Session, cx: &mut App) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-    let window_options = hotkey_window_options(&config, cx);
+    let window_options = quick_terminal_options(&config, cx);
     cx.spawn(async move |cx| {
         if let Err(err) = cx.open_window(window_options, |window, cx| {
             let restored_session = session.clone();
@@ -580,11 +580,11 @@ pub(crate) fn open_hotkey_window(config: con_core::Config, session: Session, cx:
                     RawWindowHandle::AppKit(handle) => Some(handle.ns_view.as_ptr().cast()),
                     _ => None,
                 })
-                .and_then(crate::hotkey_window::window_from_view_ptr);
+                .and_then(crate::quick_terminal::window_from_view_ptr);
             if let Some(raw_ptr) = raw_ptr {
-                crate::hotkey_window::store_window_ptr(
+                crate::quick_terminal::store_window_ptr(
                     raw_ptr,
-                    config.keybindings.hotkey_window_always_on_top,
+                    config.keybindings.quick_terminal_always_on_top,
                 );
             }
 
@@ -601,12 +601,12 @@ fn fresh_window_session_with_history() -> Session {
 }
 
 #[cfg(target_os = "macos")]
-fn default_hotkey_window_cwd() -> Option<std::path::PathBuf> {
+fn default_quick_terminal_cwd() -> Option<std::path::PathBuf> {
     dirs::home_dir()
 }
 
 #[cfg(not(target_os = "macos"))]
-fn default_hotkey_window_cwd() -> Option<std::path::PathBuf> {
+fn default_quick_terminal_cwd() -> Option<std::path::PathBuf> {
     None
 }
 
@@ -1515,7 +1515,7 @@ fn main() {
         #[cfg(target_os = "macos")]
         global_hotkey::init(cx, &config.keybindings);
         #[cfg(target_os = "macos")]
-        hotkey_window::init(cx, &config.keybindings);
+        quick_terminal::init(cx, &config.keybindings);
         #[cfg(target_os = "macos")]
         macos_windowing::install_window_cycle_shortcuts();
 
@@ -1528,7 +1528,7 @@ fn main() {
         });
         #[cfg(target_os = "macos")]
         cx.on_action(|_: &ToggleHotkeyWindow, cx: &mut App| {
-            hotkey_window::toggle(cx);
+            quick_terminal::toggle(cx);
         });
         #[cfg(target_os = "macos")]
         cx.on_action(|_: &NextWindow, _cx: &mut App| {

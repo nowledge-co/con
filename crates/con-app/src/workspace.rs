@@ -5055,7 +5055,7 @@ impl ConWorkspace {
         #[cfg(target_os = "macos")]
         crate::global_hotkey::update_from_keybindings(&kb);
         #[cfg(target_os = "macos")]
-        crate::hotkey_window::set_always_on_top(kb.hotkey_window_always_on_top);
+        crate::quick_terminal::set_always_on_top(kb.quick_terminal_always_on_top);
 
         if restore_focus {
             self.focus_terminal(window, cx);

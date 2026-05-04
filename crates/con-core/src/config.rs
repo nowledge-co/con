@@ -352,13 +352,13 @@ fn default_global_summon() -> String {
 fn default_global_summon_enabled() -> bool {
     false
 }
-fn default_hotkey_window_enabled() -> bool {
+fn default_quick_terminal_enabled() -> bool {
     false
 }
-fn default_hotkey_window() -> String {
+fn default_quick_terminal() -> String {
     "cmd-\\".into()
 }
-fn default_hotkey_window_always_on_top() -> bool {
+fn default_quick_terminal_always_on_top() -> bool {
     false
 }
 
@@ -392,9 +392,9 @@ pub struct KeybindingConfig {
     pub close_surface: String,
     pub global_summon_enabled: bool,
     pub global_summon: String,
-    pub hotkey_window_enabled: bool,
-    pub hotkey_window: String,
-    pub hotkey_window_always_on_top: bool,
+    pub quick_terminal_enabled: bool,
+    pub quick_terminal: String,
+    pub quick_terminal_always_on_top: bool,
 }
 
 impl Default for KeybindingConfig {
@@ -427,9 +427,9 @@ impl Default for KeybindingConfig {
             close_surface: default_close_surface(),
             global_summon_enabled: default_global_summon_enabled(),
             global_summon: default_global_summon(),
-            hotkey_window_enabled: default_hotkey_window_enabled(),
-            hotkey_window: default_hotkey_window(),
-            hotkey_window_always_on_top: default_hotkey_window_always_on_top(),
+            quick_terminal_enabled: default_quick_terminal_enabled(),
+            quick_terminal: default_quick_terminal(),
+            quick_terminal_always_on_top: default_quick_terminal_always_on_top(),
         }
     }
 }
@@ -675,15 +675,15 @@ restore_terminal_text = false
     }
 
     #[test]
-    fn default_keybindings_include_hotkey_window_fields() {
+    fn default_keybindings_include_quick_terminal_fields() {
         let config = Config::default();
-        assert!(!config.keybindings.hotkey_window_enabled);
-        assert_eq!(config.keybindings.hotkey_window, "cmd-\\");
-        assert!(!config.keybindings.hotkey_window_always_on_top);
+        assert!(!config.keybindings.quick_terminal_enabled);
+        assert_eq!(config.keybindings.quick_terminal, "cmd-\\");
+        assert!(!config.keybindings.quick_terminal_always_on_top);
     }
 
     #[test]
-    fn legacy_configs_receive_hotkey_window_defaults() {
+    fn legacy_configs_receive_quick_terminal_defaults() {
         let content = r#"
 [keybindings]
 global_summon_enabled = true
@@ -691,23 +691,23 @@ global_summon = "alt-space"
 "#;
         let config: Config = toml::from_str(content).unwrap();
 
-        assert!(!config.keybindings.hotkey_window_enabled);
-        assert_eq!(config.keybindings.hotkey_window, "cmd-\\");
-        assert!(!config.keybindings.hotkey_window_always_on_top);
+        assert!(!config.keybindings.quick_terminal_enabled);
+        assert_eq!(config.keybindings.quick_terminal, "cmd-\\");
+        assert!(!config.keybindings.quick_terminal_always_on_top);
     }
 
     #[test]
-    fn loaded_configs_preserve_explicit_hotkey_window_fields() {
+    fn loaded_configs_preserve_explicit_quick_terminal_fields() {
         let content = r#"
 [keybindings]
-hotkey_window_enabled = true
-hotkey_window = "cmd-\\"
-hotkey_window_always_on_top = true
+quick_terminal_enabled = true
+quick_terminal = "cmd-\\"
+quick_terminal_always_on_top = true
 "#;
         let config: Config = toml::from_str(content).unwrap();
 
-        assert!(config.keybindings.hotkey_window_enabled);
-        assert_eq!(config.keybindings.hotkey_window, "cmd-\\");
-        assert!(config.keybindings.hotkey_window_always_on_top);
+        assert!(config.keybindings.quick_terminal_enabled);
+        assert_eq!(config.keybindings.quick_terminal, "cmd-\\");
+        assert!(config.keybindings.quick_terminal_always_on_top);
     }
 }

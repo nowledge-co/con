@@ -12,7 +12,7 @@ unsafe extern "C" {
         callback: extern "C" fn(),
     ) -> bool;
     fn con_unregister_global_hotkey();
-    fn con_register_hotkey_window_hotkey(
+    fn con_register_quick_terminal_hotkey(
         key_code: u32,
         shift: bool,
         control: bool,
@@ -20,7 +20,7 @@ unsafe extern "C" {
         command: bool,
         callback: extern "C" fn(),
     ) -> bool;
-    fn con_unregister_hotkey_window_hotkey();
+    fn con_unregister_quick_terminal_hotkey();
     fn con_app_is_active() -> bool;
 }
 
@@ -47,14 +47,14 @@ pub fn update_from_keybindings(keybindings: &KeybindingConfig) {
         on_global_hotkey_pressed,
     );
     register_hotkey(
-        keybindings.hotkey_window_enabled,
-        &keybindings.hotkey_window,
-        "hotkey window",
-        || unsafe { con_unregister_hotkey_window_hotkey() },
+        keybindings.quick_terminal_enabled,
+        &keybindings.quick_terminal,
+        "quick terminal",
+        || unsafe { con_unregister_quick_terminal_hotkey() },
         |key_code, shift, control, alt, command, callback| unsafe {
-            con_register_hotkey_window_hotkey(key_code, shift, control, alt, command, callback)
+            con_register_quick_terminal_hotkey(key_code, shift, control, alt, command, callback)
         },
-        on_hotkey_window_pressed,
+        on_quick_terminal_pressed,
     );
 }
 
@@ -129,7 +129,7 @@ extern "C" fn on_global_hotkey_pressed() {
     });
 }
 
-extern "C" fn on_hotkey_window_pressed() {
+extern "C" fn on_quick_terminal_pressed() {
     GLOBAL_HOTKEY_APP.with(|app| {
         let Some(app) = app.borrow().clone() else {
             return;
@@ -137,7 +137,7 @@ extern "C" fn on_hotkey_window_pressed() {
 
         app.spawn(async move |cx| {
             cx.update(|cx| {
-                crate::hotkey_window::toggle(cx);
+                crate::quick_terminal::toggle(cx);
             });
         })
         .detach();
@@ -240,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_default_hotkey_window_hotkey() {
+    fn parses_default_quick_terminal_hotkey() {
         let keystroke = parse_global_hotkey("cmd-\\").expect("cmd-\\ should parse");
         assert!(keystroke.modifiers.platform);
         assert_eq!(keystroke.key, "\\");

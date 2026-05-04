@@ -2154,7 +2154,7 @@ impl SettingsPanel {
         // Write directly into config
         match field.as_str() {
             "global_summon" => self.config.keybindings.global_summon = binding,
-            "hotkey_window" => self.config.keybindings.hotkey_window = binding,
+            "quick_terminal" => self.config.keybindings.quick_terminal = binding,
             "new_window" => self.config.keybindings.new_window = binding,
             "new_tab" => self.config.keybindings.new_tab = binding,
             "close_tab" => self.config.keybindings.close_tab = binding,
@@ -2190,7 +2190,7 @@ impl SettingsPanel {
     fn binding_value(&self, field: &str) -> &str {
         match field {
             "global_summon" => &self.config.keybindings.global_summon,
-            "hotkey_window" => &self.config.keybindings.hotkey_window,
+            "quick_terminal" => &self.config.keybindings.quick_terminal,
             "new_window" => &self.config.keybindings.new_window,
             "new_tab" => &self.config.keybindings.new_tab,
             "close_tab" => &self.config.keybindings.close_tab,
@@ -4411,10 +4411,10 @@ impl SettingsPanel {
         let global_summon_enabled = self.config.keybindings.global_summon_enabled;
         let global_summon_value = self.config.keybindings.global_summon.clone();
         let global_summon_recording = recording.as_deref() == Some("global_summon");
-        let hotkey_window_enabled = self.config.keybindings.hotkey_window_enabled;
-        let hotkey_window_value = self.config.keybindings.hotkey_window.clone();
-        let hotkey_window_always_on_top = self.config.keybindings.hotkey_window_always_on_top;
-        let hotkey_window_recording = recording.as_deref() == Some("hotkey_window");
+        let quick_terminal_enabled = self.config.keybindings.quick_terminal_enabled;
+        let quick_terminal_value = self.config.keybindings.quick_terminal.clone();
+        let quick_terminal_always_on_top = self.config.keybindings.quick_terminal_always_on_top;
+        let quick_terminal_recording = recording.as_deref() == Some("quick_terminal");
         let theme = cx.theme();
 
         let fixed_tab_card = card(theme, card_opacity).child(
@@ -4599,7 +4599,7 @@ impl SettingsPanel {
                 ),
         );
 
-        let hotkey_window_badge = if hotkey_window_recording {
+        let quick_terminal_badge = if quick_terminal_recording {
             div()
                 .min_h(px(28.0))
                 .px(px(10.0))
@@ -4612,8 +4612,8 @@ impl SettingsPanel {
                 .font_weight(FontWeight::MEDIUM)
                 .child("Press shortcut…")
                 .into_any_element()
-        } else if !hotkey_window_value.trim().is_empty() {
-            crate::keycaps::keycaps_for_binding(&hotkey_window_value, theme)
+        } else if !quick_terminal_value.trim().is_empty() {
+            crate::keycaps::keycaps_for_binding(&quick_terminal_value, theme)
         } else {
             div()
                 .min_h(px(28.0))
@@ -4629,7 +4629,7 @@ impl SettingsPanel {
                 .into_any_element()
         };
 
-        let hotkey_window_card = card(theme, card_opacity)
+        let quick_terminal_card = card(theme, card_opacity)
             .child(
                 div()
                     .px(px(16.0))
@@ -4649,7 +4649,7 @@ impl SettingsPanel {
                                 div()
                                     .text_sm()
                                     .font_weight(FontWeight::MEDIUM)
-                                    .child("Hotkey Window"),
+                                    .child("Quick Terminal"),
                             )
                             .child(
                                 div()
@@ -4662,14 +4662,14 @@ impl SettingsPanel {
                     .child(
                         div().pt(px(1.0)).child(
                             Switch::new("hotkey-window-enabled")
-                                .checked(hotkey_window_enabled)
+                                .checked(quick_terminal_enabled)
                                 .small()
                                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    this.config.keybindings.hotkey_window_enabled = *checked;
+                                    this.config.keybindings.quick_terminal_enabled = *checked;
                                     if *checked
-                                        && this.config.keybindings.hotkey_window.trim().is_empty()
+                                        && this.config.keybindings.quick_terminal.trim().is_empty()
                                     {
-                                        this.config.keybindings.hotkey_window = "cmd-\\".to_string();
+                                        this.config.keybindings.quick_terminal = "cmd-\\".to_string();
                                     }
                                     cx.notify();
                                 })),
@@ -4685,7 +4685,7 @@ impl SettingsPanel {
                     .gap(px(16.0))
                     .px(px(16.0))
                     .py(px(11.0))
-                    .text_color(if hotkey_window_enabled {
+                    .text_color(if quick_terminal_enabled {
                         theme.foreground
                     } else {
                         theme.muted_foreground
@@ -4715,19 +4715,19 @@ impl SettingsPanel {
                             .min_w(px(112.0))
                             .flex()
                             .justify_end()
-                            .opacity(if hotkey_window_enabled { 1.0 } else { 0.45 })
+                            .opacity(if quick_terminal_enabled { 1.0 } else { 0.45 })
                             .cursor_pointer()
                             .rounded(px(7.0))
                             .px(px(4.0))
                             .py(px(3.0))
                             .hover(|s| s.bg(theme.muted.opacity(0.08)))
                             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                if this.config.keybindings.hotkey_window_enabled {
-                                    this.recording_key = Some("hotkey_window".to_string());
+                                if this.config.keybindings.quick_terminal_enabled {
+                                    this.recording_key = Some("quick_terminal".to_string());
                                     cx.notify();
                                 }
                             }))
-                            .child(hotkey_window_badge),
+                            .child(quick_terminal_badge),
                     ),
             )
             .child(row_separator(theme))
@@ -4755,17 +4755,17 @@ impl SettingsPanel {
                                     .text_size(px(10.5))
                                     .line_height(px(15.0))
                                     .text_color(theme.muted_foreground.opacity(0.62))
-                                    .child("Keep the hotkey window above other apps while it is visible."),
+                                    .child("Keep the quick terminal above other apps while it is visible."),
                             ),
                     )
                     .child(
                         Switch::new("hotkey-window-always-on-top")
-                            .checked(hotkey_window_always_on_top)
-                            .disabled(!hotkey_window_enabled)
+                            .checked(quick_terminal_always_on_top)
+                            .disabled(!quick_terminal_enabled)
                             .small()
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                this.config.keybindings.hotkey_window_always_on_top = *checked;
-                                crate::hotkey_window::set_always_on_top(*checked);
+                                this.config.keybindings.quick_terminal_always_on_top = *checked;
+                                crate::quick_terminal::set_always_on_top(*checked);
                                 cx.notify();
                             })),
                     ),
@@ -4783,7 +4783,7 @@ impl SettingsPanel {
                 .gap(px(8.0))
                 .child(group_label("Global", &theme))
                 .child(global_summon_card)
-                .child(hotkey_window_card)
+                .child(quick_terminal_card)
                 .child(div().h(px(8.0)))
                 .child(group_label("General", &theme))
                 .child(general_card),
