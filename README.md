@@ -131,10 +131,12 @@ Start here:
 
 - [Install](docs/install.md): get con on macOS, Windows, or Linux.
 - [Quick controls](docs/quick-controls.md): focus switching, agent panel, and command modes.
+- [Terminal workflows](docs/terminal-workflows.md): tabs, panes, broadcast, pane zoom, links, and surfaces.
 - [Built-in agent](docs/agent.md): use AI help without leaving the terminal.
 - [Settings](docs/settings.md): choose providers, themes, suggestions, skills, and shortcuts.
-- [Screenshot gallery](docs/screenshots.md): a visual tour of the app.
 - [Workspace layout profiles](docs/workspace-layout-profiles-guide.md): save a project layout, reopen it later, or share it with a team.
+- [con-cli and surfaces](docs/con-cli.md): drive con from scripts, test runners, and external agent orchestrators.
+- [Screenshot gallery](docs/screenshots.md): a visual tour of the app.
 - [Release notes](CHANGELOG.md): what changed in each beta.
 
 For contributors:

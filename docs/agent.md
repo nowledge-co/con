@@ -15,9 +15,9 @@ Use the agent when you want help that depends on terminal context:
 
 Use the shell directly when you already know the command.
 
-Provider and model choices live in [Settings](settings.md). Keep the agent on a
-model you trust for reasoning, and use a faster model for inline suggestions if
-you want command help without slowing down the terminal.
+Provider and model choices live in [Settings](settings.md). Each tab keeps its
+own active provider/model once you choose it. Global settings define the default
+for new sessions and the models available in the picker.
 
 ## How it sees context
 
@@ -27,6 +27,10 @@ metadata, and the current workflow to understand where you are.
 That context is useful, but it is not a license to act silently. Destructive or
 high-impact actions still require approval.
 
+When the agent streams markdown, con renders code, tables, math, and diagrams in
+the panel instead of treating the answer as a separate web page. Long responses
+stay scrollable so the terminal remains usable.
+
 ## Work with SSH and tmux
 
 con is built for terminal-native workflows. The agent can help while you are
@@ -35,6 +39,10 @@ inside SSH, tmux, shells, editors, and coding-agent CLIs.
 Keep the same rule in mind: the terminal remains the source of truth. If the
 agent needs to know what is happening, it should inspect the pane before making
 claims or taking action.
+
+For external coding-agent orchestrators, use [con-cli and surfaces](con-cli.md).
+That path lets other tools create pane-local worker sessions without changing
+the built-in agent's own workflow.
 
 ## Stay in control
 

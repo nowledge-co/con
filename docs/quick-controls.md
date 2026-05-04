@@ -16,6 +16,7 @@ Watch the short flow once, then use the table below as a reference.
 | Switch focus between terminal and input | <kbd>⌘</kbd> <kbd>I</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>I</kbd> |
 | Show or hide the bottom input bar | <kbd>⌃</kbd> <kbd>\`</kbd> | <kbd>⌃</kbd> <kbd>\`</kbd> |
 | Show or hide the agent panel | <kbd>⌘</kbd> <kbd>L</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>L</kbd> |
+| Show or hide vertical tabs | <kbd>⌘</kbd> <kbd>B</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>B</kbd> |
 | Cycle bottom-bar mode | <kbd>⌘</kbd> <kbd>;</kbd> | <kbd>⌃</kbd> <kbd>;</kbd> |
 
 ## Input modes
@@ -48,3 +49,6 @@ planning, code help, or a careful change made with your approval.
 
 When you want to tune providers, suggestions, themes, skills, or shortcuts, open
 [Settings](settings.md).
+
+For tabs, panes, broadcast, links, and pane-local surfaces, see
+[Terminal workflows](terminal-workflows.md).

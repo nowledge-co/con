@@ -3,6 +3,9 @@
 con is in beta. macOS is the primary supported platform today. Windows and Linux
 builds are available as previews.
 
+Every installer includes the app and `con-cli`. The CLI is used by scripts,
+test runners, and external agent orchestrators to talk to a running con session.
+
 ## macOS with Homebrew
 
 ```sh

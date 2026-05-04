@@ -1,11 +1,11 @@
 # Workspace layout profiles
 
-con has two workspace promises.
+con has two workspace behaviors.
 
-The first is invisible: after rebooting, upgrading, or relaunching con, your
+The first is automatic: after rebooting, upgrading, or relaunching con, your
 ordinary workspace should come back. Windows, tabs, panes, surfaces, working
 directories, and private terminal text history are continuity. You should not
-need a guide for that.
+need to manage it.
 
 The second is deliberate: when a workspace shape is worth keeping for a project,
 you can save it as a layout profile. This guide is for that explicit workflow.
@@ -109,9 +109,9 @@ workspace.
 
 Inside the app, use:
 
-- **Add Tabs from Layout Profile** to choose a project folder or profile file and add
-  its tabs to the current window. If the folder has no profile, con adds one
-  fresh tab rooted there.
+- **Add Tabs from Layout Profile** to choose a project folder or profile file
+  and add its tabs to the current window. If the folder has no profile, con adds
+  one fresh tab rooted there.
 - **Open Layout Profile in New Window** to choose a project folder or profile
   file and open it separately.
 
@@ -120,9 +120,8 @@ normal relaunch behavior predictable: quitting, upgrading, or rebooting should
 bring back the last private workspace, not silently replace it with a project
 profile because the process happened to start from a repo directory.
 
-The more aggressive `cd ~/dev/app && con` project-detection flow is deferred
-until con has full single-instance forwarding and project-memory state. At that
-point con can distinguish "open this project" from "restore my last app".
+To open a project profile, pass the project path or the profile file path
+explicitly.
 
 ## Share a profile
 
@@ -159,7 +158,7 @@ Use these rules:
   setting is intentionally deferred because it can fight with private restore
   and project memory.
 
-## Gesture Semantics
+## Entry points
 
 | Gesture | Result |
 | --- | --- |
@@ -173,7 +172,7 @@ Use these rules:
 This keeps every entry point legible: restore is automatic, scratch is fresh,
 and project layout is explicit.
 
-## Process Continuity
+## Process continuity
 
 Layout profiles do not resume running processes. Use tmux or zellij when you
 want processes to survive app restarts:
