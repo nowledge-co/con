@@ -143,9 +143,10 @@ git push origin v0.2.0-dev.1
 
 The workflow maps `*-beta.*` tags to the beta channel and `*-dev.*` tags to an
 internal dev channel. Dev releases are marked as GitHub prereleases and do not
-update public appcasts or Homebrew casks. Beta tags are not marked as
-prereleases while Con is still in the all-beta era, so fresh installs resolve
-to the newest public beta after the finalizer promotes the draft.
+embed or update public appcasts, and do not update Homebrew casks. Beta tags
+are not marked as prereleases while Con is still in the all-beta era, so fresh
+installs resolve to the newest public beta after the finalizer promotes the
+draft.
 
 ## Reusing Existing Apple Credentials
 

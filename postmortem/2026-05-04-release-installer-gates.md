@@ -30,7 +30,7 @@ The pipeline relied on several independent checks:
   workflow and installer script changes receive CI coverage in PRs.
 - Made internal `v*-dev.*` release handling explicit across the macOS release
   scripts, appcast jobs, Homebrew job, and final gate so a smoke tag cannot
-  accidentally move a public stable/beta update feed.
+  accidentally embed or move a public stable/beta update feed.
 
 ## What We Learned
 

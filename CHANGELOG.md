@@ -30,8 +30,9 @@ con is still pre-release, so entries may group related beta work while the produ
   from the tagged revision, and the macOS CLI shim ignores transient DMG/test
   app bundles.
 - Hardened internal `v*-dev.*` release behavior so dev smoke tags are scoped to
-  dev app names/bundle ids and never update stable/beta appcasts or Homebrew
-  casks while the final gate still validates their artifact shape.
+  dev app names/bundle ids, never embed/update stable/beta appcasts, and never
+  update Homebrew casks while the final gate still validates their artifact
+  shape.
 - Documented that `con-cli` is part of the normal install path for surface
   orchestrators such as `pi-interactive-subagents`.
 

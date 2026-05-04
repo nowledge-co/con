@@ -128,8 +128,8 @@ GitHub Release drafted unless all expected assets, appcasts, and
 gh-pages installer scripts are present for the same tag. A broken
 artifact should fail private, not become `/releases/latest`. Internal
 `v*-dev.*` smoke tags are prereleases, never update public
-stable/beta appcasts or Homebrew casks, and are only gated on artifact
-and installer-script shape.
+stable/beta appcasts or Homebrew casks, do not embed a Sparkle feed URL,
+and are only gated on artifact and installer-script shape.
 
 For a Linux release tarball (un-signed; mirrors the Windows
 preview's distribution shape), use:

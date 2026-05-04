@@ -121,7 +121,7 @@ fn is_con_app_cli_target(target: &Path) -> bool {
             .and_then(Path::parent)
             .and_then(Path::file_name)
             .and_then(|name| name.to_str()),
-        Some("con.app" | "con Beta.app")
+        Some("con.app" | "con Beta.app" | "con Dev.app")
     )
 }
 
@@ -169,6 +169,9 @@ mod tests {
         assert!(is_con_app_cli_target(Path::new(
             "/Applications/con Beta.app/Contents/MacOS/con-cli"
         )));
+        assert!(is_con_app_cli_target(Path::new(
+            "/Applications/con Dev.app/Contents/MacOS/con-cli"
+        )));
         assert!(!is_con_app_cli_target(Path::new(
             "/opt/homebrew/bin/con-cli"
         )));
@@ -184,6 +187,9 @@ mod tests {
     fn only_installed_con_app_cli_symlinks_are_managed() {
         assert!(is_installed_con_app_cli_target(Path::new(
             "/Applications/con Beta.app/Contents/MacOS/con-cli"
+        )));
+        assert!(is_installed_con_app_cli_target(Path::new(
+            "/Applications/con Dev.app/Contents/MacOS/con-cli"
         )));
         assert!(!is_installed_con_app_cli_target(Path::new(
             "/Volumes/con Beta/con Beta.app/Contents/MacOS/con-cli"
