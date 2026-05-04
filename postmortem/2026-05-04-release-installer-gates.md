@@ -29,6 +29,9 @@ The pipeline relied on several independent checks:
 - Made `release-finalize.yml` sync `install.sh` and `install.ps1` from the
   tagged commit to `gh-pages` before running the final gate, so dev smoke tags
   can exercise the hosted installer without appcast or Homebrew movement.
+- Fixed macOS app signing order so bundled auxiliary executables such as
+  `Contents/MacOS/con-cli` are signed before the main app executable and the
+  top-level bundle.
 - Extended portable CI path filters and added script/parser checks so release
   workflow and installer script changes receive CI coverage in PRs.
 - Made internal `v*-dev.*` release handling explicit across the macOS release

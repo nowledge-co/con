@@ -36,6 +36,9 @@ con is still pre-release, so entries may group related beta work while the produ
 - Made the release finalizer sync hosted installer scripts from the tagged
   commit before promotion, so dev smoke tags can test the real `install.sh` /
   `install.ps1` path without moving beta/stable appcasts or Homebrew casks.
+- Fixed macOS release signing order so the bundled `con-cli` executable is
+  signed before the main app executable and notarized DMGs are not blocked by
+  unsigned nested code.
 - Documented that `con-cli` is part of the normal install path for surface
   orchestrators such as `pi-interactive-subagents`.
 
