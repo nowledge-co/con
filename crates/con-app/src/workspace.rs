@@ -10320,6 +10320,15 @@ impl Render for ConWorkspace {
         {
             top_bar = top_bar
                 .window_control_area(WindowControlArea::Drag)
+                .on_mouse_down(MouseButton::Left, |_, window, _cx| {
+                    // NSWindow.isMovable is set to false so that GPUI
+                    // element drags (tab reorder, etc.) don't also move
+                    // the window. We restore the drag-to-move gesture
+                    // here on the top_bar background; child elements
+                    // with on_mouse_down (tabs, buttons) consume the
+                    // event before it reaches this handler.
+                    window.start_window_move();
+                })
                 .on_click(|event, window, _cx| {
                     if event.click_count() == 2 {
                         window.titlebar_double_click();
