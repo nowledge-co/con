@@ -284,9 +284,9 @@ target_bin="${bin_dir}/con"
 # directory entry; the running con keeps painting on the old
 # inode and the next launch picks up the new binary.
 tmp_bin="${bin_dir}/.con.tmp.$$"
-# Layer the tmp-bin cleanup on top of the existing tmpdir trap (set
-# above when we created `$tmpdir`), don't replace it. Both run on
-# any exit path; mv removes tmp_bin on success so the rm is a no-op.
+# Keep one EXIT trap that removes the download staging dir and any
+# partially staged binary. If con-cli is present below, the trap is
+# replaced once with the same cleanup plus tmp_cli.
 trap 'rm -rf "$tmpdir"; rm -f "$tmp_bin"' EXIT
 cp "$staged_root/con" "$tmp_bin" \
   || fail "could not copy con binary"
