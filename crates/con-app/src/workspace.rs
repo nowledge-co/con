@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -4870,7 +4870,6 @@ impl ConWorkspace {
     }
 
     /// Begin an inline rename for the tab at `index` in the horizontal strip.
-    /// Begin an inline rename for the tab at `index` in the horizontal strip.
     /// Creates a local InputState that replaces the tab title in the strip.
     fn begin_tab_rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.get(index) else {
@@ -4888,8 +4887,13 @@ impl ConWorkspace {
             state
         });
 
+        let select_all_on_focus = Rc::new(Cell::new(true));
         cx.subscribe_in(&input, window, {
+            let select_all_on_focus = select_all_on_focus.clone();
             move |this, input_entity, event: &InputEvent, window, cx| match event {
+                InputEvent::Focus if select_all_on_focus.replace(false) => {
+                    window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
+                }
                 InputEvent::PressEnter { .. } | InputEvent::Blur => {
                     let value = input_entity.read(cx).value().to_string();
                     this.commit_tab_rename(index, value, window, cx);
@@ -4905,7 +4909,6 @@ impl ConWorkspace {
         });
         self.tab_rename_cancelled_index = None;
         input.update(cx, |state, cx| state.focus(window, cx));
-        window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
         cx.notify();
     }
 

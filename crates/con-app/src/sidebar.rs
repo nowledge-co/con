@@ -51,6 +51,8 @@ use gpui_component::{
     input::{Escape as InputEscape, Input, InputEvent, InputState},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
 };
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 /// Width of the always-visible icon rail in collapsed mode.
@@ -335,8 +337,13 @@ impl SessionSidebar {
             s
         });
 
+        let select_all_on_focus = Rc::new(Cell::new(true));
         cx.subscribe_in(&input, window, {
-            move |this, input_entity, event: &InputEvent, _window, cx| match event {
+            let select_all_on_focus = select_all_on_focus.clone();
+            move |this, input_entity, event: &InputEvent, window, cx| match event {
+                InputEvent::Focus if select_all_on_focus.replace(false) => {
+                    window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
+                }
                 InputEvent::PressEnter { .. } | InputEvent::Blur => {
                     if this.rename_cancelled_session_id == Some(session_id) {
                         this.rename_cancelled_session_id = None;
