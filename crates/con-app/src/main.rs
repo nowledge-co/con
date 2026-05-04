@@ -20,6 +20,8 @@ mod command_palette;
 #[cfg(target_os = "macos")]
 mod global_hotkey;
 #[cfg(target_os = "macos")]
+mod hotkey_window;
+#[cfg(target_os = "macos")]
 mod macos_windowing;
 
 // The terminal-view module is selected per platform:
@@ -101,6 +103,7 @@ actions!(
         NextWindow,
         PreviousWindow,
         ToggleSummon,
+        ToggleHotkeyWindow,
         ToggleAgentPanel,
         ToggleInputBar,
         ToggleVerticalTabs,
@@ -1441,6 +1444,8 @@ fn main() {
         #[cfg(target_os = "macos")]
         global_hotkey::init(cx, &config.keybindings);
         #[cfg(target_os = "macos")]
+        hotkey_window::init(cx, &config.keybindings);
+        #[cfg(target_os = "macos")]
         macos_windowing::install_window_cycle_shortcuts();
 
         cx.on_action(|_: &NewWindow, cx: &mut App| {
@@ -1449,6 +1454,10 @@ fn main() {
         });
         cx.on_action(|_: &ToggleSummon, cx: &mut App| {
             toggle_global_summon(cx);
+        });
+        #[cfg(target_os = "macos")]
+        cx.on_action(|_: &ToggleHotkeyWindow, cx: &mut App| {
+            hotkey_window::toggle(cx);
         });
         #[cfg(target_os = "macos")]
         cx.on_action(|_: &NextWindow, _cx: &mut App| {
@@ -1564,6 +1573,8 @@ fn main() {
                 items: vec![
                     MenuItem::action("Toggle Agent Panel", ToggleAgentPanel),
                     MenuItem::action("Toggle Input Bar", ToggleInputBar),
+                    #[cfg(target_os = "macos")]
+                    MenuItem::action("Hotkey Window", ToggleHotkeyWindow),
                     MenuItem::action("Command Palette", command_palette::ToggleCommandPalette),
                     MenuItem::separator(),
                     MenuItem::action("Toggle Input / Terminal", FocusInput),
