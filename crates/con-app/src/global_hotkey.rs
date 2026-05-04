@@ -26,6 +26,7 @@ unsafe extern "C" {
 
 thread_local! {
     static GLOBAL_HOTKEY_APP: RefCell<Option<AsyncApp>> = const { RefCell::new(None) };
+    static HOTKEYS_SUSPENDED: RefCell<bool> = const { RefCell::new(false) };
 }
 
 pub fn init(cx: &App, keybindings: &KeybindingConfig) {
@@ -148,6 +149,23 @@ pub fn is_app_active() -> bool {
     unsafe { con_app_is_active() }
 }
 
+pub fn suspend_global_hotkeys(_keybindings: &KeybindingConfig) {
+    unsafe {
+        con_unregister_global_hotkey();
+        con_unregister_quick_terminal_hotkey();
+    }
+    HOTKEYS_SUSPENDED.with(|s| *s.borrow_mut() = true);
+}
+
+pub fn resume_global_hotkeys(keybindings: &KeybindingConfig) {
+    update_from_keybindings(keybindings);
+    HOTKEYS_SUSPENDED.with(|s| *s.borrow_mut() = false);
+}
+
+pub fn is_suspended() -> bool {
+    HOTKEYS_SUSPENDED.with(|s| *s.borrow())
+}
+
 // Keep this in sync with ghostty_view.rs.
 fn gpui_key_to_keycode(key: &str) -> Option<u32> {
     Some(match key {
@@ -231,6 +249,7 @@ fn gpui_key_to_keycode(key: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use con_core::config::KeybindingConfig;
 
     #[test]
     fn parses_default_summon_hotkey() {
@@ -249,5 +268,15 @@ mod tests {
     #[test]
     fn rejects_unmodified_keys() {
         assert!(parse_global_hotkey("space").is_none());
+    }
+
+    #[test]
+    fn suspend_global_hotkeys_sets_flag_and_allows_resume() {
+        let kb = KeybindingConfig::default();
+        assert!(!is_suspended());
+        suspend_global_hotkeys(&kb);
+        assert!(is_suspended());
+        resume_global_hotkeys(&kb);
+        assert!(!is_suspended());
     }
 }

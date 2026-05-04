@@ -1396,6 +1396,7 @@ impl SettingsPanel {
         if !self.standalone {
             return;
         }
+        self.set_recording_key(None);
         if let Some(snapshot) = self.preview_snapshot.take() {
             self.config = snapshot;
             cx.emit(AppearancePreview);
@@ -1534,7 +1535,7 @@ impl SettingsPanel {
         self.provider_model_fetching = false;
         self.provider_model_status = None;
         self.provider_model_status_error = false;
-        self.recording_key = None;
+        self.set_recording_key(None);
         self.focus_handle.focus(window, cx);
     }
 
@@ -2129,6 +2130,24 @@ impl SettingsPanel {
     }
 
     /// Record a keystroke for the binding currently being recorded.
+
+    fn set_recording_key(&mut self, key: Option<String>) {
+        let was_recording = self.recording_key.is_some();
+        let will_record = key.is_some();
+        self.recording_key = key;
+
+        #[cfg(target_os = "macos")]
+        match (was_recording, will_record) {
+            (false, true) => {
+                crate::global_hotkey::suspend_global_hotkeys(&self.config.keybindings);
+            }
+            (true, false) => {
+                crate::global_hotkey::resume_global_hotkeys(&self.config.keybindings);
+            }
+            _ => {}
+        }
+    }
+
     fn record_keystroke(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
         let field = match &self.recording_key {
             Some(f) => f.clone(),
@@ -2142,7 +2161,7 @@ impl SettingsPanel {
             "shift" | "control" | "alt" | "meta" | "fn" | "escape"
         ) {
             if key == "escape" {
-                self.recording_key = None;
+                self.set_recording_key(None);
                 cx.notify();
             }
             return;
@@ -2182,7 +2201,7 @@ impl SettingsPanel {
             "quit" => self.config.keybindings.quit = binding,
             _ => {}
         }
-        self.recording_key = None;
+        self.set_recording_key(None);
         cx.notify();
     }
 
@@ -4393,7 +4412,7 @@ impl SettingsPanel {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
-                                        this.recording_key = Some(field_str.clone());
+                                        this.set_recording_key(Some(field_str.clone()));
                                         cx.notify();
                                     }),
                                 )
@@ -4590,7 +4609,7 @@ impl SettingsPanel {
                             MouseButton::Left,
                             cx.listener(|this, _, _, cx| {
                                 if this.config.keybindings.global_summon_enabled {
-                                    this.recording_key = Some("global_summon".to_string());
+                                    this.set_recording_key(Some("global_summon".to_string()));
                                     cx.notify();
                                 }
                             }),
@@ -4723,7 +4742,7 @@ impl SettingsPanel {
                             .hover(|s| s.bg(theme.muted.opacity(0.08)))
                             .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
                                 if this.config.keybindings.quick_terminal_enabled {
-                                    this.recording_key = Some("quick_terminal".to_string());
+                                    this.set_recording_key(Some("quick_terminal".to_string()));
                                     cx.notify();
                                 }
                             }))
