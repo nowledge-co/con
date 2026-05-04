@@ -139,6 +139,7 @@ pub struct SettingsPanel {
     background_image_fit_select: Entity<SelectState<Vec<String>>>,
     background_image_repeat: bool,
     save_error: Option<String>,
+    last_saved_at: Option<std::time::SystemTime>,
 
     // Theme import
     custom_theme_name_input: Entity<InputState>,
@@ -1358,6 +1359,9 @@ impl SettingsPanel {
             background_image_fit_select,
             background_image_repeat: config.appearance.background_image_repeat,
             save_error: None,
+            last_saved_at: std::fs::metadata(Config::config_path())
+                .and_then(|m| m.modified())
+                .ok(),
             custom_theme_name_input,
             custom_theme_preview: None,
             custom_theme_status: None,
@@ -2107,6 +2111,7 @@ impl SettingsPanel {
         match self.persist_config() {
             Ok(()) => {
                 self.save_error = None;
+                self.last_saved_at = Some(std::time::SystemTime::now());
                 self.preview_snapshot = Some(self.config.clone());
                 if !self.standalone {
                     self.visible = false;
@@ -4859,6 +4864,17 @@ impl Render for SettingsPanel {
                     "enter" if event.keystroke.modifiers.platform => {
                         this.save(window, cx);
                     }
+                    "s" if event.keystroke.modifiers.platform => {
+                        this.save(window, cx);
+                    }
+                    "w" if event.keystroke.modifiers.platform => {
+                        if this.standalone {
+                            this.revert_standalone_preview(cx);
+                            window.remove_window();
+                        } else {
+                            this.save(window, cx);
+                        }
+                    }
                     _ => {}
                 }
             }))
@@ -4931,17 +4947,55 @@ impl Render for SettingsPanel {
                                             )
                                             .child("config.toml"),
                                     )
+                                    .children(self.last_saved_at.map(|saved_at| {
+                                        let elapsed = saved_at
+                                            .elapsed()
+                                            .unwrap_or_default()
+                                            .as_secs();
+                                        let label = if elapsed < 60 {
+                                            "Saved just now".to_string()
+                                        } else if elapsed < 3600 {
+                                            format!("Saved {}m ago", elapsed / 60)
+                                        } else {
+                                            format!("Saved {}h ago", elapsed / 3600)
+                                        };
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(4.0))
+                                            .child(
+                                                svg()
+                                                    .path("phosphor/check-circle-fill.svg")
+                                                    .size(px(11.0))
+                                                    .text_color(theme.muted_foreground.opacity(0.45)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(10.5))
+                                                    .text_color(theme.muted_foreground.opacity(0.45))
+                                                    .child(label),
+                                            )
+                                    }))
                                     .children(self.standalone.then(|| {
-                                        Button::new("settings-apply")
-                                            .small()
-                                            .compact()
-                                            .rounded(px(8.0))
-                                            .custom(save_button_style)
-                                            .icon(Icon::default().path("phosphor/check.svg"))
-                                            .label("Save Changes")
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.save(window, cx);
-                                            }))
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.0))
+                                            .child(
+                                                crate::keycaps::keycaps_for_binding("cmd-s", theme),
+                                            )
+                                            .child(
+                                                Button::new("settings-apply")
+                                                    .small()
+                                                    .compact()
+                                                    .rounded(px(8.0))
+                                                    .custom(save_button_style)
+                                                    .icon(Icon::default().path("phosphor/check.svg"))
+                                                    .label("Save Changes")
+                                                    .on_click(cx.listener(|this, _, window, cx| {
+                                                        this.save(window, cx);
+                                                    })),
+                                            )
                                     })),
                             ),
                     )
