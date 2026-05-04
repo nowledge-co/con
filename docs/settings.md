@@ -5,7 +5,22 @@ make the terminal fit your hands: choose a theme, connect an AI provider, tune
 suggestions, add skills, or change shortcuts.
 
 Open Settings from the app menu on macOS, the gear button on Windows and Linux,
-or the Command Palette.
+or the Command Palette. Appearance changes apply as you tune them, so you can
+leave Settings open while checking opacity, blur, fonts, and background images.
+
+## General
+
+General contains app-level behavior:
+
+- update channel and version
+- manual update check when the current channel supports it
+- saved terminal text privacy
+- skill source folders
+
+If you prefer con not to save terminal text between launches, turn off
+**Restore Terminal Text** in General. Layout profiles never include terminal
+text. To wipe terminal text already saved on disk, run **Clear Restored Terminal
+History** from Command Palette.
 
 ## Command Palette
 
@@ -13,8 +28,9 @@ Press <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>P</kbd> on macOS, or
 <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>P</kbd> on Windows and Linux.
 
 The Command Palette is the fastest way to find actions you do not use every
-minute. Search for Settings, workspace profiles, pane actions, updates, and
-other commands. When an action has a shortcut, con shows it beside the action.
+minute. Search for Settings, workspace profiles, pane actions, surface actions,
+updates, privacy actions, and other commands. When an action has a shortcut,
+con shows it beside the action.
 
 ## Appearance
 
@@ -48,7 +64,11 @@ terminal.
 
 ChatGPT and GitHub Copilot can use OAuth, so you can leave the API key empty for
 those sign-in flows. OpenAI-compatible hosts can fetch models from `/models`
-when the host supports it, and you can still type a model ID manually.
+when the host supports it. If the host has no models endpoint, type the model ID
+manually and save it.
+
+The provider picker in the agent panel shows configured providers. If a provider
+is missing there, configure it first in Settings.
 
 ## Tool approval
 
@@ -97,9 +117,14 @@ Keep project skills for shared project habits. Keep global skills for personal
 habits. If names collide, the project skill wins so a repository can define its
 own local meaning.
 
+For the workflow loop, see [Skills and workflows](skills-and-workflows.md).
+
 ## Shortcuts
 
-The Keys section shows editable shortcuts and fixed shortcuts in one place.
+The Keys section shows editable shortcuts for app, pane, and surface actions.
+It also includes the optional global Summon / Hide Con shortcut. That shortcut
+is off by default because global hotkeys can conflict with launchers and window
+managers.
 
 Change shortcuts when the default conflicts with muscle memory. Leave them alone
 when the built-in flow already works. A good setup should reduce decisions, not

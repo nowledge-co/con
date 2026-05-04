@@ -16,6 +16,7 @@ Watch the short flow once, then use the table below as a reference.
 | Switch focus between terminal and input | <kbd>⌘</kbd> <kbd>I</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>I</kbd> |
 | Show or hide the bottom input bar | <kbd>⌃</kbd> <kbd>\`</kbd> | <kbd>⌃</kbd> <kbd>\`</kbd> |
 | Show or hide the agent panel | <kbd>⌘</kbd> <kbd>L</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>L</kbd> |
+| Show or hide vertical tabs | <kbd>⌘</kbd> <kbd>B</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>B</kbd> |
 | Cycle bottom-bar mode | <kbd>⌘</kbd> <kbd>;</kbd> | <kbd>⌃</kbd> <kbd>;</kbd> |
 
 ## Input modes
@@ -23,7 +24,8 @@ Watch the short flow once, then use the table below as a reference.
 ### Smart
 
 Smart mode decides whether your text should run as a shell command or go to the
-agent. Use it when you want con to choose the obvious path.
+agent. Use it when you want con to choose the obvious path without making you
+switch surfaces first.
 
 ### Command
 
@@ -34,6 +36,10 @@ lets you choose the focused pane, all panes, or a selected set.
 
 Agent mode sends text to the built-in agent. Use it when you want explanation,
 planning, code help, or a careful change made with your approval.
+
+These modes are why the input bar exists. It is not a second terminal prompt and
+not a chat box glued to the side. It is a short path from what you are looking at
+to the next action.
 
 ## A good default flow
 
@@ -48,3 +54,6 @@ planning, code help, or a careful change made with your approval.
 
 When you want to tune providers, suggestions, themes, skills, or shortcuts, open
 [Settings](settings.md).
+
+For tabs, panes, broadcast, links, and pane-local surfaces, see
+[Terminal workflows](terminal-workflows.md).

@@ -1,30 +1,57 @@
 # con docs
 
-con is a terminal first, with agent help only when you ask for it. The agent
-works from the terminal context you already have on screen.
+con is a terminal first. If you hide the input bar and agent panel, it should
+feel like a fast, elegant terminal with nothing extra in the way.
 
-Choose the guide for what you want to do.
+When you ask for AI, con uses the terminal objects you already work with:
+panes, SSH sessions, tmux panes, TUIs, visible output, and working directories.
+When a one-off routine becomes worth repeating, skills let you keep it as a
+slash command. When you build on top of con, `con-cli` and surfaces give
+external agents a real terminal to drive.
 
-## Get started
+Start with the page that matches what you are trying to do.
+
+## Start
 
 | Need | Read |
 | --- | --- |
 | Install con | [Install](install.md) |
 | Learn the main controls | [Quick controls](quick-controls.md) |
-| Use the agent panel | [Built-in agent](agent.md) |
-| Tune providers, themes, skills, and shortcuts | [Settings](settings.md) |
-| Save a project layout | [Workspace profiles](workspace-layout-profiles-guide.md) |
+| Work with tabs, panes, broadcast, links, and pane zoom | [Terminal workflows](terminal-workflows.md) |
+| Connect providers, tune appearance, and edit shortcuts | [Settings](settings.md) |
+
+## Use con every day
+
+| Need | Read |
+| --- | --- |
+| Use the agent panel without leaving the terminal | [Built-in agent](agent.md) |
+| Turn a repeated terminal routine into a slash command | [Skills and workflows](skills-and-workflows.md) |
+| Save or share a project layout | [Workspace profiles](workspace-layout-profiles-guide.md) |
 | See the app | [Screenshots](screenshots.md) |
 | See what changed | [Changelog](../CHANGELOG.md) |
 
-## What belongs here
+## Build on con
 
-These public docs are for people using con as their terminal. They cover
-installation, everyday controls, the agent panel, Settings, workspace profiles,
-and release notes.
+| Need | Read |
+| --- | --- |
+| Drive con from scripts, test runners, or external agents | [con-cli and surfaces](con-cli.md) |
 
-If you want to build or change con itself, open the source repository from the
-GitHub link in the top navigation.
+## Platform status
+
+- macOS is the primary beta platform.
+- Windows is in preview.
+- Linux is in preview.
+
+Platform-specific limits are tracked in the source repository:
+[Windows](https://github.com/nowledge-co/con-terminal/issues/34) and
+[Linux](https://github.com/nowledge-co/con-terminal/issues/18).
+
+## Contributor docs
+
+These public docs are for people using con. If you want to build or change con
+itself, start with the contributor quickstart in the source repository. The
+implementation notes in `docs/impl/` and `docs/study/` are written for
+contributors, not for the hosted docs navigation.
 
 ## Source of truth
 
