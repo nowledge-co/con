@@ -38,12 +38,7 @@ void con_quick_terminal_configure(void *window_ptr, bool always_on_top) {
         return;
     }
 
-    if ([NSThread isMainThread]) {
-        con_quick_terminal_apply_configuration(window, always_on_top);
-        return;
-    }
-
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    dispatch_async(dispatch_get_main_queue(), ^{
         con_quick_terminal_apply_configuration(window, always_on_top);
     });
 }

@@ -162,6 +162,7 @@ pub fn resume_global_hotkeys(keybindings: &KeybindingConfig) {
     HOTKEYS_SUSPENDED.with(|s| *s.borrow_mut() = false);
 }
 
+#[cfg(test)]
 pub fn is_suspended() -> bool {
     HOTKEYS_SUSPENDED.with(|s| *s.borrow())
 }
