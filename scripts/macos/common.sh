@@ -137,8 +137,12 @@ setup_release_env() {
   export CON_APP_NAME="${CON_APP_NAME:-$default_app_name}"
 
   # Derive Sparkle feed URL from channel + arch if not explicitly set.
+  # Dev builds never poll and must not inherit a public feed URL from
+  # the caller's environment.
   # Pattern: https://con-releases.nowledge.co/appcast/{channel}-macos-{arch}.xml
-  if [[ "$CON_CHANNEL" != "dev" && -z "${CON_SPARKLE_FEED_URL:-}" && -n "${CON_SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
+  if [[ "$CON_CHANNEL" == "dev" ]]; then
+    unset CON_SPARKLE_FEED_URL
+  elif [[ -z "${CON_SPARKLE_FEED_URL:-}" && -n "${CON_SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
     export CON_SPARKLE_FEED_URL="https://con-releases.nowledge.co/appcast/${CON_CHANNEL}-macos-${CON_ARCH}.xml"
   fi
 
