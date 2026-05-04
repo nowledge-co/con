@@ -362,6 +362,13 @@ fn default_window_options(config: &con_core::Config, cx: &mut App) -> WindowOpti
     }
 }
 
+#[cfg(target_os = "macos")]
+fn hotkey_window_options(config: &con_core::Config, cx: &mut App) -> WindowOptions {
+    let mut options = default_window_options(config, cx);
+    options.titlebar = None;
+    options
+}
+
 fn default_window_background(
     config: &con_core::Config,
     transparent: bool,
@@ -530,6 +537,39 @@ pub(crate) fn open_con_window(
             } else {
                 log::error!("Failed to open window: {err}");
             }
+        }
+    })
+    .detach();
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn open_hotkey_window(config: con_core::Config, session: Session, cx: &mut App) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let window_options = hotkey_window_options(&config, cx);
+    cx.spawn(async move |cx| {
+        if let Err(err) = cx.open_window(window_options, |window, cx| {
+            let restored_session = session.clone();
+            let view = cx
+                .new(|cx| ConWorkspace::from_session(config.clone(), restored_session, window, cx));
+
+            let raw_ptr = HasWindowHandle::window_handle(window)
+                .ok()
+                .and_then(|handle| match handle.as_raw() {
+                    RawWindowHandle::AppKit(handle) => Some(handle.ns_view.as_ptr().cast()),
+                    _ => None,
+                })
+                .and_then(crate::hotkey_window::window_from_view_ptr);
+            if let Some(raw_ptr) = raw_ptr {
+                crate::hotkey_window::store_window_ptr(
+                    raw_ptr,
+                    config.keybindings.hotkey_window_always_on_top,
+                );
+            }
+
+            cx.new(|cx| gpui_component::Root::new(view, window, cx).bg(cx.theme().transparent))
+        }) {
+            log::error!("Failed to open hotkey window: {err}");
         }
     })
     .detach();

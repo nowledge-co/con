@@ -7,6 +7,7 @@ unsafe extern "C" {
     fn con_hotkey_window_set_level(window_ptr: *mut std::ffi::c_void, always_on_top: bool);
     fn con_hotkey_window_slide_in(window_ptr: *mut std::ffi::c_void);
     fn con_hotkey_window_slide_out(window_ptr: *mut std::ffi::c_void);
+    fn con_hotkey_window_window_from_view(view_ptr: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
 }
 
 thread_local! {
@@ -22,7 +23,19 @@ pub fn init(cx: &App, keybindings: &KeybindingConfig) {
     update_from_keybindings(keybindings);
 }
 
-pub fn update_from_keybindings(_keybindings: &KeybindingConfig) {}
+pub fn update_from_keybindings(keybindings: &KeybindingConfig) {
+    set_always_on_top(keybindings.hotkey_window_always_on_top);
+}
+
+pub fn ensure_hotkey_window(cx: &mut App) {
+    let already_exists = HOTKEY_WINDOW_RAW_PTR.with(|slot| slot.borrow().is_some());
+    if already_exists {
+        return;
+    }
+
+    let config = con_core::Config::load().unwrap_or_default();
+    crate::open_hotkey_window(config.clone(), crate::fresh_window_session_with_history(), cx);
+}
 
 pub fn store_window_ptr(window_ptr: *mut std::ffi::c_void, always_on_top: bool) {
     HOTKEY_WINDOW_RAW_PTR.with(|slot| {
@@ -31,7 +44,13 @@ pub fn store_window_ptr(window_ptr: *mut std::ffi::c_void, always_on_top: bool) 
     unsafe { con_hotkey_window_configure(window_ptr, always_on_top) };
 }
 
-pub fn toggle(_cx: &mut App) {
+pub fn window_from_view_ptr(view_ptr: *mut std::ffi::c_void) -> Option<*mut std::ffi::c_void> {
+    let window_ptr = unsafe { con_hotkey_window_window_from_view(view_ptr) };
+    (!window_ptr.is_null()).then_some(window_ptr)
+}
+
+pub fn toggle(cx: &mut App) {
+    ensure_hotkey_window(cx);
     HOTKEY_WINDOW_RAW_PTR.with(|slot| {
         let Some(window_ptr) = *slot.borrow() else {
             return;

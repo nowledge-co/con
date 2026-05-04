@@ -48,6 +48,15 @@ void con_hotkey_window_set_level(void *window_ptr, bool always_on_top) {
     window.level = always_on_top ? NSFloatingWindowLevel : NSNormalWindowLevel;
 }
 
+void *con_hotkey_window_window_from_view(void *view_ptr) {
+    NSView *view = (__bridge NSView *)view_ptr;
+    if (view == nil) {
+        return NULL;
+    }
+
+    return (__bridge void *)view.window;
+}
+
 void con_hotkey_window_slide_in(void *window_ptr) {
     NSWindow *window = (__bridge NSWindow *)window_ptr;
     if (window == nil) {
