@@ -3,6 +3,11 @@
 This is the map for Con's docs. Start with the user guides unless you are
 building or changing Con itself.
 
+The source of truth for the public docs navigation is
+[`docs/manifest.json`](manifest.json). When you add, rename, or remove a page,
+update that manifest in the same PR. CI validates the manifest, and changes
+merged to `main` trigger a rebuild of `con.nowledge.co/docs`.
+
 ## User Guides
 
 | Need | Read |

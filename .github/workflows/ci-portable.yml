@@ -23,6 +23,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "assets/**"
+      - "docs/**"
       - "crates/**"
       - "scripts/**"
   pull_request:
@@ -33,6 +34,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "assets/**"
+      - "docs/**"
       - "crates/**"
       - "scripts/**"
 
@@ -112,6 +114,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Docs manifest validation
+        run: python3 scripts/docs/validate-manifest.py
       - name: Release script syntax checks
         shell: bash
         run: |
