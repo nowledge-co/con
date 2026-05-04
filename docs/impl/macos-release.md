@@ -148,6 +148,11 @@ are not marked as prereleases while Con is still in the all-beta era, so fresh
 installs resolve to the newest public beta after the finalizer promotes the
 draft.
 
+The release finalizer always syncs `install.sh` and `install.ps1` from the
+tagged commit to `gh-pages` before it promotes the draft. This keeps internal dev
+smoke tags useful for installer E2E without moving beta/stable appcasts or
+Homebrew casks.
+
 ## Reusing Existing Apple Credentials
 
 If your existing `nowledge-identities.p12` contains the same Apple team's `Developer ID Application` identity, it can be reused for `con`.
