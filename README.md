@@ -114,6 +114,15 @@ This installs `con-app.exe` and `con-cli.exe` into the same PATH directory.
 Or download `con-windows-x86_64.zip` from the latest
 [Release](https://github.com/nowledge-co/con-terminal/releases).
 
+For Scoop users, here's how to install:
+
+```powershell
+scoop bucket add jam https://github.com/EFLKumo/jam
+scoop install jam/con-terminal
+```
+
+This will make con portable and add `con-app` to your PATH.
+
 To build from source, see `HACKING.md`.
 
 ## Docs
