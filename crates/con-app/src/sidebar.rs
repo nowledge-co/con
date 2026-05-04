@@ -527,6 +527,9 @@ impl SessionSidebar {
                     MouseButton::Middle,
                     cx.listener(move |_this, _, _, cx| cx.emit(SidebarCloseTab { session_id })),
                 )
+                .on_double_click(cx.listener(move |this, _, window, cx| {
+                    this.start_rename_by_id(session_id, window, cx);
+                }))
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     let want = if *hovered { Some(i) } else { None };
                     if this.hovered_rail != want {
