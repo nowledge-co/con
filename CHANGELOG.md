@@ -8,6 +8,12 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Added
 
+**Settings**
+
+- Added a save-status indicator in the settings header that shows "Saved just now", "Saved Xm ago", or "Saved Xh ago" with a check-circle icon after a successful save. The timestamp is seeded from `config.toml`'s modification time on open, so the indicator persists correctly across settings window reopens.
+- Added `cmd-s` (macOS) / `ctrl-s` (Windows/Linux) keyboard shortcut to save settings from anywhere in the settings panel. A `⌘ S` / `Ctrl S` keycap hint is shown next to the Save Changes button in the standalone settings window.
+- Added `cmd-w` (macOS) / `ctrl-w` (Windows/Linux) to close the standalone settings window or save-and-dismiss the settings panel. Closing via `cmd-w` correctly reverts any unsaved appearance/theme preview changes, matching the existing Escape behavior.
+
 **Distribution**
 
 - Bundled `con-cli` with every release artifact. macOS now ships it inside the
