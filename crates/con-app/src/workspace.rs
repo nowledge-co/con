@@ -244,8 +244,9 @@ use crate::settings_panel::{
     self, AppearancePreview, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
 };
 use crate::sidebar::{
-    NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry, SessionSidebar, SidebarCloseOthers,
-    SidebarCloseTab, SidebarDuplicate, SidebarRename, SidebarReorder, SidebarSelect,
+    DraggedTab, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry, SessionSidebar,
+    SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate, SidebarRename, SidebarReorder,
+    SidebarSelect,
 };
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use con_terminal::TerminalTheme;
@@ -469,6 +470,9 @@ pub struct ConWorkspace {
     window_close_prepared: bool,
     /// Ordered, coalescing session persistence worker.
     session_save_tx: crossbeam_channel::Sender<SessionSaveRequest>,
+    /// Drop slot (0..=N) tracked while a DraggedTab is in flight over
+    /// the horizontal tab strip. Slot K = "insert before tab K".
+    tab_strip_drop_slot: Option<usize>,
 }
 
 #[derive(Clone)]
@@ -1546,6 +1550,7 @@ impl ConWorkspace {
             workspace_handle: cx.weak_entity(),
             window_close_prepared: false,
             session_save_tx,
+            tab_strip_drop_slot: None,
         }
     }
 
@@ -4761,6 +4766,96 @@ impl ConWorkspace {
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
+    }
+
+    /// Reorder a tab identified by `session_id` to drop slot `to`
+    /// (0..=tabs.len()). Called from the horizontal tab strip drag/drop.
+    fn reorder_tab_by_id(&mut self, session_id: u64, to: usize, cx: &mut Context<Self>) {
+        let Some(from) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.summary_id == session_id)
+        else {
+            return;
+        };
+        if from >= self.tabs.len() || to > self.tabs.len() {
+            return;
+        }
+        if from == to || from + 1 == to {
+            return;
+        }
+        let old_order: Vec<u64> = self.tabs.iter().map(|tab| tab.summary_id).collect();
+        let active_id = self.tabs[self.active_tab].summary_id;
+        let insert_at = if from < to { to - 1 } else { to };
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(insert_at, tab);
+
+        let new_positions: HashMap<u64, usize> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(idx, tab)| (tab.summary_id, idx))
+            .collect();
+        let mut remapped_pending = HashMap::new();
+        for (old_idx, pending) in std::mem::take(&mut self.pending_control_agent_requests) {
+            if let Some(summary_id) = old_order.get(old_idx)
+                && let Some(&new_idx) = new_positions.get(summary_id)
+            {
+                remapped_pending.insert(new_idx, pending);
+            }
+        }
+        self.pending_control_agent_requests = remapped_pending;
+
+        for pending in &mut self.pending_create_pane_requests {
+            if let Some(summary_id) = old_order.get(pending.tab_idx)
+                && let Some(&new_idx) = new_positions.get(summary_id)
+            {
+                pending.tab_idx = new_idx;
+            }
+        }
+
+        for pending in &mut self.pending_window_control_requests {
+            if let PendingWindowControlRequest::TabsClose { tab_idx, .. } = pending
+                && let Some(summary_id) = old_order.get(*tab_idx)
+                && let Some(&new_idx) = new_positions.get(summary_id)
+            {
+                *tab_idx = new_idx;
+            }
+        }
+
+        for pending in &mut self.pending_surface_control_requests {
+            let tab_idx = match pending {
+                PendingSurfaceControlRequest::Create { tab_idx, .. }
+                | PendingSurfaceControlRequest::Split { tab_idx, .. }
+                | PendingSurfaceControlRequest::Close { tab_idx, .. } => tab_idx,
+            };
+            if let Some(summary_id) = old_order.get(*tab_idx)
+                && let Some(&new_idx) = new_positions.get(summary_id)
+            {
+                *tab_idx = new_idx;
+            }
+        }
+
+        if let Some(new_active) = self.tabs.iter().position(|t| t.summary_id == active_id) {
+            self.active_tab = new_active;
+        }
+
+        self.sync_sidebar(cx);
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    /// Begin an inline rename for the tab at `index` in the horizontal strip.
+    /// Delegates to the sidebar's rename flow (which handles the input widget
+    /// and emits `SidebarRename` when confirmed).
+    fn begin_tab_rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        let session_id = tab.summary_id;
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.start_rename_by_id(session_id, window, cx);
+        });
     }
 
     fn on_sidebar_close_others(
@@ -10250,8 +10345,42 @@ impl Render for ConWorkspace {
         // Tabs container — appears only when there is real tab selection to do.
         // In vertical-tabs mode the side panel owns the tab list so we keep
         // this strip empty even with multiple tabs.
+        // Clear stale drop indicator when no drag is in flight.
+        if self.tab_strip_drop_slot.is_some() && !cx.has_active_drag() {
+            self.tab_strip_drop_slot = None;
+        }
+
         let show_horizontal_tabs = self.horizontal_tabs_visible();
-        let mut tabs_container = div().flex().flex_1().min_w_0().items_end();
+        let tab_count = self.tabs.len();
+        let tab_strip_drop_slot = self.tab_strip_drop_slot;
+        let mut tabs_container = div()
+            .id("tab-strip-container")
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .items_end()
+            // Container-level drop fallback — catches drops in the gaps
+            // between tabs and after the last tab.
+            .on_drag_move::<DraggedTab>(cx.listener(
+                move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                    // Promote to slot=N when cursor is past the last tab.
+                    let approx_tab_w = 120.0_f32;
+                    let last_tab_right_estimate =
+                        f32::from(event.bounds.origin.x) + (tab_count as f32) * approx_tab_w;
+                    if f32::from(event.event.position.x) >= last_tab_right_estimate
+                        && this.tab_strip_drop_slot != Some(tab_count)
+                    {
+                        this.tab_strip_drop_slot = Some(tab_count);
+                        cx.notify();
+                    }
+                },
+            ))
+            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                let to = this.tab_strip_drop_slot.unwrap_or(tab_count);
+                this.tab_strip_drop_slot = None;
+                this.reorder_tab_by_id(dragged.session_id, to, cx);
+                cx.notify();
+            }));
 
         if show_horizontal_tabs {
             for (index, tab) in self.tabs.iter().enumerate() {
@@ -10259,6 +10388,22 @@ impl Render for ConWorkspace {
                 let needs_attention = tab.needs_attention && !is_active;
                 let terminal = tab.pane_tree.focused_terminal();
                 let title = terminal.title(cx).unwrap_or_else(|| tab.title.clone());
+                let session_id = tab.summary_id;
+                let terminal_for_icon = tab.pane_tree.focused_terminal();
+                let hostname_for_icon =
+                    self.effective_remote_host_for_tab(index, terminal_for_icon, cx);
+                let title_for_icon = terminal_for_icon.title(cx);
+                let dir_for_icon = terminal_for_icon.current_dir(cx);
+                let tab_icon = smart_tab_presentation(
+                    tab.user_label.as_deref(),
+                    tab.ai_label.as_deref(),
+                    tab.ai_icon.map(|k| k.svg_path()),
+                    hostname_for_icon.as_deref(),
+                    title_for_icon.as_deref(),
+                    dir_for_icon.as_deref(),
+                    index,
+                )
+                .icon;
 
                 let display_title: String = if title.chars().count() > 24 {
                     format!("{}…", &title[..title.floor_char_boundary(22)])
@@ -10299,9 +10444,26 @@ impl Render for ConWorkspace {
                             .text_color(theme.muted_foreground.opacity(0.5)),
                     );
 
+                // Drop indicator: 2px vertical line on the left edge of
+                // this tab when drop_slot == index, or on the right edge
+                // of the last tab when drop_slot == tab_count.
+                let show_indicator_left =
+                    tab_strip_drop_slot == Some(index) && cx.has_active_drag();
+                let show_indicator_right = index + 1 == tab_count
+                    && tab_strip_drop_slot == Some(tab_count)
+                    && cx.has_active_drag();
+                let indicator_color = theme.primary;
+
+                let dragged = DraggedTab {
+                    session_id,
+                    label: display_title.clone().into(),
+                    icon: tab_icon,
+                };
+
                 let mut tab_el = div()
                     .id(ElementId::Name(format!("tab-{}", index).into()))
                     .group("tab")
+                    .relative()
                     .flex()
                     .flex_1()
                     .min_w_0()
@@ -10318,15 +10480,39 @@ impl Render for ConWorkspace {
                     // activates. Same treatment as the `+`, caption
                     // buttons, and tab-close controls in this file.
                     .occlude()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.activate_tab(index, window, cx);
+                    .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                        if event.click_count() == 2 {
+                            this.begin_tab_rename(index, window, cx);
+                        } else {
+                            this.activate_tab(index, window, cx);
+                        }
                     }))
                     .on_mouse_down(
                         MouseButton::Middle,
                         cx.listener(move |this, _, window, cx| {
                             this.close_tab_by_index(index, window, cx);
                         }),
-                    );
+                    )
+                    .on_drag(dragged, |dragged: &DraggedTab, _offset, _window, cx: &mut App| {
+                        cx.new(|_| dragged.clone())
+                    })
+                    .on_drag_move::<DraggedTab>(cx.listener(
+                        move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                            let local_x = event.event.position.x - event.bounds.origin.x;
+                            let half = event.bounds.size.width / 2.0;
+                            let slot = if local_x < half { index } else { index + 1 };
+                            if this.tab_strip_drop_slot != Some(slot) {
+                                this.tab_strip_drop_slot = Some(slot);
+                                cx.notify();
+                            }
+                        },
+                    ))
+                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                        let to = this.tab_strip_drop_slot.unwrap_or(index);
+                        this.tab_strip_drop_slot = None;
+                        this.reorder_tab_by_id(dragged.session_id, to, cx);
+                        cx.notify();
+                    }));
 
                 if is_active {
                     tab_el = tab_el
@@ -10339,10 +10525,37 @@ impl Render for ConWorkspace {
                         .rounded_t(px(6.0))
                         .bg(theme.background.opacity(0.14))
                         .text_color(theme.muted_foreground.opacity(0.72))
-                        .hover(|s| {
+                        .hover(|s: gpui::StyleRefinement| {
                             s.bg(theme.background.opacity(0.20))
                                 .text_color(theme.foreground.opacity(0.82))
                         });
+                }
+
+                // Left drop indicator line
+                if show_indicator_left {
+                    tab_el = tab_el.child(
+                        div()
+                            .absolute()
+                            .top(px(4.0))
+                            .bottom(px(4.0))
+                            .left(px(-1.0))
+                            .w(px(2.0))
+                            .rounded(px(1.0))
+                            .bg(indicator_color),
+                    );
+                }
+                // Right drop indicator line (after last tab)
+                if show_indicator_right {
+                    tab_el = tab_el.child(
+                        div()
+                            .absolute()
+                            .top(px(4.0))
+                            .bottom(px(4.0))
+                            .right(px(-1.0))
+                            .w(px(2.0))
+                            .rounded(px(1.0))
+                            .bg(indicator_color),
+                    );
                 }
 
                 let mut tab_content = div().flex().items_center().gap(px(5.0)).w_full().min_w_0();
