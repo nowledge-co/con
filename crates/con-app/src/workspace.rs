@@ -10535,6 +10535,26 @@ impl Render for ConWorkspace {
                     // activates. Same treatment as the `+`, caption
                     // buttons, and tab-close controls in this file.
                     .occlude()
+                    // Left mouse-down: stop propagation so the event
+                    // doesn't bubble to top_bar's start_window_move()
+                    // on macOS (which steals mouseDragged events and
+                    // prevents on_drag from firing). pending_mouse_down
+                    // is registered after mouse_down_listeners in GPUI
+                    // and runs first in bubble phase (rev order), so
+                    // on_click / on_drag still work correctly.
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            // Cancel rename on another tab click.
+                            if let Some(state) = &this.tab_rename {
+                                if state.tab_index != index {
+                                    this.tab_rename = None;
+                                    cx.notify();
+                                }
+                            }
+                            cx.stop_propagation();
+                        }),
+                    )
                     .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                         if event.click_count() == 2 {
                             this.begin_tab_rename(index, window, cx);
