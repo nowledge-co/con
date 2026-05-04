@@ -1359,7 +1359,9 @@ impl SettingsPanel {
             background_image_fit_select,
             background_image_repeat: config.appearance.background_image_repeat,
             save_error: None,
-            last_saved_at: None,
+            last_saved_at: std::fs::metadata(Config::config_path())
+                .and_then(|m| m.modified())
+                .ok(),
             custom_theme_name_input,
             custom_theme_preview: None,
             custom_theme_status: None,
