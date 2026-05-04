@@ -161,6 +161,8 @@ jobs:
 
       - uses: actions/checkout@v5
         if: steps.gate.outputs.ready == 'true'
+        with:
+          ref: ${{ steps.ctx.outputs.sha }}
 
       - name: Checkout gh-pages for release gate
         if: steps.gate.outputs.ready == 'true'

@@ -141,6 +141,7 @@ jobs:
           cargo wbuild -p con --release
 
       - name: Build con-cli
+        id: build_cli
         shell: pwsh
         env:
           CON_RELEASE_CHANNEL: ${{ steps.meta.outputs.channel }}
@@ -149,7 +150,7 @@ jobs:
           cargo build -p con-cli --release
 
       - name: Diagnose build failure
-        if: failure() && steps.build.conclusion == 'failure'
+        if: failure() && (steps.build.conclusion == 'failure' || steps.build_cli.conclusion == 'failure')
         shell: pwsh
         # Zig reports `FileNotFound` for any CreateProcess failure,
         # including `STATUS_DLL_NOT_FOUND` and other loader errors. That

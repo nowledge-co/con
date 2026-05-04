@@ -25,6 +25,10 @@ con is still pre-release, so entries may group related beta work while the produ
   ZIP contains both `con-app.exe` and `con-cli.exe`; the finalizer refuses to
   publish a draft unless all expected assets, appcasts, and gh-pages installer
   scripts are present and point at the same tag.
+- Tightened those release gates after review: appcasts are now parsed as XML,
+  each macOS architecture publishes its own checksum asset, the finalizer runs
+  from the tagged revision, and the macOS CLI shim ignores transient DMG/test
+  app bundles.
 - Documented that `con-cli` is part of the normal install path for surface
   orchestrators such as `pi-interactive-subagents`.
 

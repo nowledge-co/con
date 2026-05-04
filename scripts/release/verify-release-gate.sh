@@ -45,8 +45,10 @@ fi
 required_assets=(
   "${mac_prefix}-${version}-macos-arm64.dmg"
   "${mac_prefix}-${version}-macos-arm64.zip"
+  "SHA256SUMS-macos-arm64.txt"
   "${mac_prefix}-${version}-macos-x86_64.dmg"
   "${mac_prefix}-${version}-macos-x86_64.zip"
+  "SHA256SUMS-macos-x86_64.txt"
   "con-${version}-linux-x86_64.tar.gz"
   "SHA256SUMS-linux.txt"
   "con-${version}-windows-x86_64.zip"
@@ -70,10 +72,16 @@ trap 'rm -rf "$tmp"' EXIT
 
 log "checking checksum manifests"
 gh release download "$tag" \
+  --pattern "SHA256SUMS-macos-arm64.txt" \
+  --pattern "SHA256SUMS-macos-x86_64.txt" \
   --pattern "SHA256SUMS-linux.txt" \
   --pattern "SHA256SUMS-windows.txt" \
   --dir "$tmp" >/dev/null
 
+grep -F "${mac_prefix}-${version}-macos-arm64" "$tmp/SHA256SUMS-macos-arm64.txt" >/dev/null \
+  || fail "SHA256SUMS-macos-arm64.txt does not reference arm64 macOS artifacts"
+grep -F "${mac_prefix}-${version}-macos-x86_64" "$tmp/SHA256SUMS-macos-x86_64.txt" >/dev/null \
+  || fail "SHA256SUMS-macos-x86_64.txt does not reference x86_64 macOS artifacts"
 grep -F "con-${version}-linux-x86_64.tar.gz" "$tmp/SHA256SUMS-linux.txt" >/dev/null \
   || fail "SHA256SUMS-linux.txt does not reference the Linux tarball"
 grep -F "con-${version}-windows-x86_64.zip" "$tmp/SHA256SUMS-windows.txt" >/dev/null \
@@ -97,14 +105,39 @@ require_appcast() {
   local short_version="$3"
 
   [[ -f "$file" ]] || fail "missing appcast: $file"
-  grep -F "$asset" "$file" >/dev/null \
-    || fail "$(basename "$file") does not point at $asset"
-  grep -F "sparkle:shortVersionString=\"$short_version\"" "$file" >/dev/null \
-    || fail "$(basename "$file") does not carry shortVersionString=$short_version"
-  grep -F 'sparkle:edSignature="' "$file" >/dev/null \
-    || fail "$(basename "$file") is missing an Ed25519 signature"
-  grep -F 'length="' "$file" >/dev/null \
-    || fail "$(basename "$file") is missing enclosure length"
+  python3 - "$file" "$asset" "$short_version" <<'PYTHON'
+import sys
+import xml.etree.ElementTree as ET
+
+file, asset, short_version = sys.argv[1:]
+sparkle = "http://www.andymatuschak.org/xml-namespaces/sparkle"
+
+try:
+    root = ET.parse(file).getroot()
+except Exception as err:
+    raise SystemExit(f"{file} is not valid XML: {err}")
+
+for item in root.findall("./channel/item"):
+    short = item.find(f"{{{sparkle}}}shortVersionString")
+    enclosure = item.find("enclosure")
+    if short is None or short.text != short_version or enclosure is None:
+        continue
+
+    url = enclosure.get("url") or ""
+    signature = enclosure.get(f"{{{sparkle}}}edSignature") or ""
+    length = enclosure.get("length") or ""
+    if asset not in url:
+        continue
+    if not signature:
+        raise SystemExit(f"{file} item for {asset} is missing edSignature")
+    if not length or int(length) <= 0:
+        raise SystemExit(f"{file} item for {asset} is missing positive length")
+    break
+else:
+    raise SystemExit(
+        f"{file} does not contain {asset} with shortVersionString={short_version}"
+    )
+PYTHON
 
   log "appcast OK: $(basename "$file") -> $asset"
 }

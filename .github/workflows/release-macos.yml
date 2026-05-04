@@ -197,7 +197,7 @@ jobs:
             echo "Uploading: $file"
             gh release upload "$tag" "$file" --clobber
           done < <(find release-artifacts -type f \
-            \( -name '*.zip' -o -name '*.dmg' -o -name 'SHA256SUMS.txt' \) \
+            \( -name '*.zip' -o -name '*.dmg' -o -name 'SHA256SUMS-macos-*.txt' \) \
             -print0)
 
   update-appcast:

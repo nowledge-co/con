@@ -23,6 +23,13 @@ fn ensure_cli_shim_inner() -> Result<(), String> {
     if !cli.is_file() {
         return Ok(());
     }
+    if !is_installed_con_app_cli_target(&cli) {
+        log::info!(
+            "con-cli shim: not linking from transient app bundle at {}",
+            cli.display()
+        );
+        return Ok(());
+    }
 
     let Some(home) = dirs::home_dir() else {
         return Ok(());
@@ -37,7 +44,7 @@ fn ensure_cli_shim_inner() -> Result<(), String> {
             if target == cli {
                 return Ok(());
             }
-            if !is_con_app_cli_target(&target) {
+            if !is_installed_con_app_cli_target(&target) {
                 log::info!(
                     "con-cli shim: preserving user-managed symlink at {} -> {}",
                     link.display(),
@@ -118,6 +125,28 @@ fn is_con_app_cli_target(target: &Path) -> bool {
     )
 }
 
+fn is_installed_con_app_cli_target(target: &Path) -> bool {
+    if !is_con_app_cli_target(target) {
+        return false;
+    }
+
+    let Some(app_bundle) = target
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+    else {
+        return false;
+    };
+
+    // Only app bundles in normal install locations are considered managed.
+    // A mounted DMG or copied test bundle with the same app name must not steal
+    // ~/.local/bin/con-cli away from the installed app.
+    app_bundle.starts_with("/Applications")
+        || dirs::home_dir()
+            .map(|home| app_bundle.starts_with(home.join("Applications")))
+            .unwrap_or(false)
+}
+
 #[cfg(target_family = "unix")]
 fn symlink_file(src: &Path, dst: &Path) -> std::io::Result<()> {
     unix_fs::symlink(src, dst)
@@ -148,6 +177,19 @@ mod tests {
         )));
         assert!(!is_con_app_cli_target(Path::new(
             "/Applications/Other.app/Contents/MacOS/con-cli"
+        )));
+    }
+
+    #[test]
+    fn only_installed_con_app_cli_symlinks_are_managed() {
+        assert!(is_installed_con_app_cli_target(Path::new(
+            "/Applications/con Beta.app/Contents/MacOS/con-cli"
+        )));
+        assert!(!is_installed_con_app_cli_target(Path::new(
+            "/Volumes/con Beta/con Beta.app/Contents/MacOS/con-cli"
+        )));
+        assert!(!is_installed_con_app_cli_target(Path::new(
+            "/tmp/con Beta.app/Contents/MacOS/con-cli"
         )));
     }
 }

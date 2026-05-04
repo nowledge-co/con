@@ -142,7 +142,7 @@ setup_release_env() {
   export CON_APP_BUNDLE_PATH="$CON_DIST_ROOT/$CON_APP_NAME.app"
   export CON_APP_ZIP_PATH="$CON_DIST_ROOT/${CON_APP_NAME// /-}-${CON_APP_VERSION}-macos-${CON_ARCH}.zip"
   export CON_DMG_PATH="$CON_DIST_ROOT/${CON_APP_NAME// /-}-${CON_APP_VERSION}-macos-${CON_ARCH}.dmg"
-  export CON_CHECKSUM_PATH="$CON_DIST_ROOT/SHA256SUMS.txt"
+  export CON_CHECKSUM_PATH="$CON_DIST_ROOT/SHA256SUMS-macos-$CON_ARCH.txt"
 }
 
 signing_identity() {
