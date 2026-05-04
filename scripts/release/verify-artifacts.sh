@@ -61,8 +61,13 @@ verify_linux() {
   trap 'rm -rf "$tmp"' RETURN
 
   tar -xzf "$tarball" -C "$tmp"
+  local root_count
+  root_count="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d '[:space:]')"
+  [[ "$root_count" == "1" ]] \
+    || fail "$tarball_name must extract to exactly one top-level directory, found $root_count"
+
   local root
-  root="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -1)"
+  root="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d -print -quit)"
   [[ -n "$root" ]] || fail "$tarball_name did not extract to a top-level directory"
 
   require_executable "$root/con"

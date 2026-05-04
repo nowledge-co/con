@@ -25,6 +25,15 @@ log() {
   printf '[release-gate] %s\n' "$*"
 }
 
+require_line() {
+  local file="$1"
+  local needle="$2"
+  local description="$3"
+
+  grep -F "$needle" "$file" >/dev/null \
+    || fail "$file does not contain expected installer wiring: $description"
+}
+
 tag="${1:?usage: verify-release-gate.sh <tag> <gh-pages-dir>}"
 pages_dir="${2:?usage: verify-release-gate.sh <tag> <gh-pages-dir>}"
 repo="${GH_REPO:-${GITHUB_REPOSITORY:-}}"
@@ -89,10 +98,18 @@ grep -F "con-${version}-windows-x86_64.zip" "$tmp/SHA256SUMS-windows.txt" >/dev/
 
 [[ -f "$pages_dir/install.sh" ]] || fail "gh-pages install.sh missing"
 [[ -f "$pages_dir/install.ps1" ]] || fail "gh-pages install.ps1 missing"
-grep -F "con-cli" "$pages_dir/install.sh" >/dev/null \
-  || fail "gh-pages install.sh does not expose con-cli"
-grep -F "con-cli.exe" "$pages_dir/install.ps1" >/dev/null \
-  || fail "gh-pages install.ps1 does not expose con-cli.exe"
+require_line "$pages_dir/install.sh" 'cli_src="${target}/Contents/MacOS/con-cli"' \
+  "macOS bundled con-cli source"
+require_line "$pages_dir/install.sh" 'ln -sf "$cli_src" "${bin_dir}/con-cli"' \
+  "macOS PATH symlink"
+require_line "$pages_dir/install.sh" 'target_cli="${bin_dir}/con-cli"' \
+  "Linux con-cli install target"
+require_line "$pages_dir/install.sh" 'mv -f "$tmp_cli" "$target_cli"' \
+  "Linux atomic con-cli install"
+require_line "$pages_dir/install.ps1" "\$cliPath = Join-Path \$InstallRoot 'con-cli.exe'" \
+  "Windows con-cli install path"
+require_line "$pages_dir/install.ps1" 'if (Test-Path $cliPath)' \
+  "Windows con-cli archive verification"
 
 if [[ "$channel" == "dev" ]]; then
   log "dev tag: appcast promotion checks skipped"
