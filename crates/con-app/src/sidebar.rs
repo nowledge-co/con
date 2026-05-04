@@ -158,6 +158,9 @@ pub struct SessionSidebar {
     effective_panel_max_width: f32,
     /// Inline rename state, `Some` while the user is editing a label.
     rename: Option<RenameState>,
+    /// Escape-cancel marker so a subsequent blur from the old input
+    /// does not commit the just-cancelled rename.
+    rename_cancelled_session_id: Option<u64>,
     /// The rail-icon index currently under the cursor. Drives the
     /// floating hover card. Cleared on rail mouse-leave.
     hovered_rail: Option<usize>,
@@ -228,6 +231,7 @@ impl SessionSidebar {
             panel_width: PANEL_WIDTH,
             effective_panel_max_width: PANEL_MAX_WIDTH,
             rename: None,
+            rename_cancelled_session_id: None,
             hovered_rail: None,
             drop_slot: None,
             rail_drag_origin_y: None,
@@ -333,14 +337,13 @@ impl SessionSidebar {
 
         cx.subscribe_in(&input, window, {
             move |this, input_entity, event: &InputEvent, _window, cx| match event {
-                InputEvent::PressEnter { .. } => {
+                InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                    if this.rename_cancelled_session_id == Some(session_id) {
+                        this.rename_cancelled_session_id = None;
+                        return;
+                    }
                     let value = input_entity.read(cx).value().to_string();
-                    let value = value.trim();
-                    let label = if value.is_empty() {
-                        None
-                    } else {
-                        Some(value.to_string())
-                    };
+                    let label = normalize_sidebar_rename_label(&value);
                     cx.emit(SidebarRename { session_id, label });
                     this.rename = None;
                     cx.notify();
@@ -350,6 +353,7 @@ impl SessionSidebar {
         })
         .detach();
 
+        self.rename_cancelled_session_id = None;
         input.update(cx, |state, cx| state.focus(window, cx));
         self.rename = Some(RenameState {
             index,
@@ -360,7 +364,8 @@ impl SessionSidebar {
     }
 
     fn cancel_rename(&mut self, cx: &mut Context<Self>) {
-        if self.rename.take().is_some() {
+        if let Some(rename) = self.rename.take() {
+            self.rename_cancelled_session_id = Some(rename.session_id);
             cx.notify();
         }
     }
@@ -1448,4 +1453,25 @@ where
                 .text_color(theme.muted_foreground.opacity(0.72)),
         )
         .on_mouse_down(MouseButton::Left, handler)
+}
+
+fn normalize_sidebar_rename_label(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_sidebar_rename_label;
+
+    #[test]
+    fn normalize_sidebar_rename_label_trims_and_clears_blank_values() {
+        assert_eq!(normalize_sidebar_rename_label(""), None);
+        assert_eq!(normalize_sidebar_rename_label("   \t  \n"), None);
+        assert_eq!(normalize_sidebar_rename_label("  hello  "), Some("hello".to_string()));
+    }
 }
