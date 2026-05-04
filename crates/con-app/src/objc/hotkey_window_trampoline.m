@@ -1,7 +1,6 @@
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 #include <dispatch/dispatch.h>
-#include <stdbool.h>
 
 static const CGFloat CON_HOTKEY_WINDOW_MIN_HEIGHT = 280.0;
 

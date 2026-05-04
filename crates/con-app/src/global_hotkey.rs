@@ -36,97 +36,71 @@ pub fn init(cx: &App, keybindings: &KeybindingConfig) {
 }
 
 pub fn update_from_keybindings(keybindings: &KeybindingConfig) {
-    update_summon_registration(keybindings);
-    update_hotkey_window_registration(keybindings);
+    register_hotkey(
+        keybindings.global_summon_enabled,
+        &keybindings.global_summon,
+        "global hotkey",
+        || unsafe { con_unregister_global_hotkey() },
+        |key_code, shift, control, alt, command, callback| unsafe {
+            con_register_global_hotkey(key_code, shift, control, alt, command, callback)
+        },
+        on_global_hotkey_pressed,
+    );
+    register_hotkey(
+        keybindings.hotkey_window_enabled,
+        &keybindings.hotkey_window,
+        "hotkey window",
+        || unsafe { con_unregister_hotkey_window_hotkey() },
+        |key_code, shift, control, alt, command, callback| unsafe {
+            con_register_hotkey_window_hotkey(key_code, shift, control, alt, command, callback)
+        },
+        on_hotkey_window_pressed,
+    );
 }
 
-fn update_summon_registration(keybindings: &KeybindingConfig) {
-    if !keybindings.global_summon_enabled {
-        unsafe { con_unregister_global_hotkey() };
+fn register_hotkey(
+    enabled: bool,
+    binding: &str,
+    label: &str,
+    unregister: impl Fn(),
+    register: impl Fn(u32, bool, bool, bool, bool, extern "C" fn()) -> bool,
+    callback: extern "C" fn(),
+) {
+    if !enabled {
+        unregister();
         return;
     }
 
-    let binding = &keybindings.global_summon;
     let Some(keystroke) = parse_global_hotkey(binding) else {
-        unsafe { con_unregister_global_hotkey() };
+        unregister();
         if !binding.trim().is_empty() {
-            log::warn!(
-                "global hotkey: unsupported binding {:?}, disabling",
-                binding
-            );
+            log::warn!("{label}: unsupported binding {:?}, disabling", binding);
         }
         return;
     };
 
     let Some(key_code) = gpui_key_to_keycode(&keystroke.key) else {
-        unsafe { con_unregister_global_hotkey() };
+        unregister();
         log::warn!(
-            "global hotkey: unsupported key {:?} in binding {:?}, disabling",
+            "{label}: unsupported key {:?} in binding {:?}, disabling",
             keystroke.key,
             binding
         );
         return;
     };
 
-    let ok = unsafe {
-        con_register_global_hotkey(
-            key_code,
-            keystroke.modifiers.shift,
-            keystroke.modifiers.control,
-            keystroke.modifiers.alt,
-            keystroke.modifiers.platform,
-            on_global_hotkey_pressed,
-        )
-    };
+    let ok = register(
+        key_code,
+        keystroke.modifiers.shift,
+        keystroke.modifiers.control,
+        keystroke.modifiers.alt,
+        keystroke.modifiers.platform,
+        callback,
+    );
 
     if !ok {
-        unsafe { con_unregister_global_hotkey() };
-        log::warn!("global hotkey: failed to register binding {:?}", binding);
-    }
-}
-
-fn update_hotkey_window_registration(keybindings: &KeybindingConfig) {
-    if !keybindings.hotkey_window_enabled {
-        unsafe { con_unregister_hotkey_window_hotkey() };
-        return;
-    }
-
-    let binding = &keybindings.hotkey_window;
-    let Some(keystroke) = parse_global_hotkey(binding) else {
-        unsafe { con_unregister_hotkey_window_hotkey() };
-        if !binding.trim().is_empty() {
-            log::warn!(
-                "hotkey window: unsupported binding {:?}, disabling",
-                binding
-            );
-        }
-        return;
-    };
-
-    let Some(key_code) = gpui_key_to_keycode(&keystroke.key) else {
-        unsafe { con_unregister_hotkey_window_hotkey() };
-        log::warn!(
-            "hotkey window: unsupported key {:?} in binding {:?}, disabling",
-            keystroke.key,
-            binding
-        );
-        return;
-    };
-
-    let ok = unsafe {
-        con_register_hotkey_window_hotkey(
-            key_code,
-            keystroke.modifiers.shift,
-            keystroke.modifiers.control,
-            keystroke.modifiers.alt,
-            keystroke.modifiers.platform,
-            on_hotkey_window_pressed,
-        )
-    };
-
-    if !ok {
-        unsafe { con_unregister_hotkey_window_hotkey() };
-        log::warn!("hotkey window: failed to register binding {:?}", binding);
+        unregister();
+        log::warn!("{label}: failed to register binding {:?}", binding);
     }
 }
 

@@ -1,5 +1,5 @@
 use con_core::config::KeybindingConfig;
-use gpui::{App, AsyncApp};
+use gpui::App;
 use std::cell::RefCell;
 
 unsafe extern "C" {
@@ -12,20 +12,12 @@ unsafe extern "C" {
 }
 
 thread_local! {
-    static HOTKEY_WINDOW_APP: RefCell<Option<AsyncApp>> = const { RefCell::new(None) };
     static HOTKEY_WINDOW_RAW_PTR: RefCell<Option<usize>> = const { RefCell::new(None) };
     static HOTKEY_WINDOW_VISIBLE: RefCell<bool> = const { RefCell::new(false) };
     static HOTKEY_WINDOW_RETURN_PID: RefCell<Option<i32>> = const { RefCell::new(None) };
 }
 
-pub fn init(cx: &App, keybindings: &KeybindingConfig) {
-    HOTKEY_WINDOW_APP.with(|app| {
-        *app.borrow_mut() = Some(cx.to_async());
-    });
-    update_from_keybindings(keybindings);
-}
-
-pub fn update_from_keybindings(keybindings: &KeybindingConfig) {
+pub fn init(_cx: &App, keybindings: &KeybindingConfig) {
     set_always_on_top(keybindings.hotkey_window_always_on_top);
 }
 
@@ -43,7 +35,7 @@ pub fn ensure_created_for_app_run(cx: &mut App) {
 
     let config = con_core::Config::load().unwrap_or_default();
     crate::open_hotkey_window(
-        config.clone(),
+        config,
         crate::fresh_window_session_with_history_for_cwd(crate::default_hotkey_window_cwd()),
         cx,
     );
@@ -113,27 +105,16 @@ fn take_return_pid(slot: &mut Option<i32>) -> Option<i32> {
 }
 
 #[cfg(test)]
-fn hotkey_window_enabled(binding_enabled: bool, binding: &str) -> bool {
-    binding_enabled && !binding.trim().is_empty()
-}
-
-#[cfg(test)]
-fn hotkey_window_default_cwd_is_home(path: Option<&std::path::Path>) -> bool {
-    path.is_some()
-}
-
-#[cfg(test)]
 mod tests {
     use super::{
-        hotkey_window_default_cwd_is_home, hotkey_window_enabled, remember_return_pid,
-        should_create_with_first_normal_window, take_return_pid,
+        remember_return_pid, should_create_with_first_normal_window, take_return_pid,
     };
 
     #[test]
     fn disabled_or_empty_binding_disables_hotkey_window_registration() {
-        assert!(!hotkey_window_enabled(false, "cmd-\\"));
-        assert!(!hotkey_window_enabled(true, "   "));
-        assert!(hotkey_window_enabled(true, "cmd-\\"));
+        assert!(!(false && !"cmd-\\".trim().is_empty()));
+        assert!(!(true && !"   ".trim().is_empty()));
+        assert!(true && !"cmd-\\".trim().is_empty());
     }
 
     #[test]
@@ -156,6 +137,6 @@ mod tests {
     #[test]
     fn hotkey_window_uses_a_dedicated_default_cwd() {
         let home = dirs::home_dir();
-        assert!(hotkey_window_default_cwd_is_home(home.as_deref()));
+        assert!(home.is_some());
     }
 }
