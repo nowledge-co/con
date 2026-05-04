@@ -22,9 +22,8 @@ These public docs are for people using con as their terminal. They cover
 installation, everyday controls, the agent panel, workspace profiles, and
 release notes.
 
-Contributor setup, design notes, implementation records, benchmarks, and
-research notes stay in the source repo. They are useful for building con, but
-they are not part of the end-user docs path.
+If you want to build or change con itself, open the source repository from the
+GitHub link in the top navigation.
 
 ## Source of truth
 
