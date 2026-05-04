@@ -107,10 +107,10 @@ derive_build_number() {
 setup_release_env() {
   export CON_CHANNEL="${CON_CHANNEL:-stable}"
   case "$CON_CHANNEL" in
-    stable|beta)
+    stable|beta|dev)
       ;;
     *)
-      fail "CON_CHANNEL must be 'stable' or 'beta', got: $CON_CHANNEL"
+      fail "CON_CHANNEL must be 'stable', 'beta', or 'dev', got: $CON_CHANNEL"
       ;;
   esac
 
@@ -129,6 +129,9 @@ setup_release_env() {
   if [[ "$CON_CHANNEL" == "beta" ]]; then
     default_bundle_id="${CON_BUNDLE_ID_BASE}.beta"
     default_app_name="con Beta"
+  elif [[ "$CON_CHANNEL" == "dev" ]]; then
+    default_bundle_id="${CON_BUNDLE_ID_BASE}.dev"
+    default_app_name="con Dev"
   fi
   export CON_BUNDLE_ID="${CON_BUNDLE_ID:-$default_bundle_id}"
   export CON_APP_NAME="${CON_APP_NAME:-$default_app_name}"

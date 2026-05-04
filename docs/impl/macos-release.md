@@ -134,7 +134,18 @@ git tag v0.2.0-beta.1
 git push origin v0.2.0-beta.1
 ```
 
-The workflow maps `*-beta.*` tags to the beta channel and marks the GitHub Release as a prerelease.
+Dev smoke release:
+
+```bash
+git tag v0.2.0-dev.1
+git push origin v0.2.0-dev.1
+```
+
+The workflow maps `*-beta.*` tags to the beta channel and `*-dev.*` tags to an
+internal dev channel. Dev releases are marked as GitHub prereleases and do not
+update public appcasts or Homebrew casks. Beta tags are not marked as
+prereleases while Con is still in the all-beta era, so fresh installs resolve
+to the newest public beta after the finalizer promotes the draft.
 
 ## Reusing Existing Apple Credentials
 
@@ -285,6 +296,8 @@ Release safety is enforced in two layers:
    expected GitHub Release assets exist, stable/beta appcasts point at the
    same tag's artifacts, and the gh-pages installer scripts expose `con-cli`
    / `con-cli.exe`.
+   Dev tags skip appcast/Homebrew publication entirely and are only checked for
+   artifact and installer-script shape.
 
 This means a failed or incomplete platform build can upload nothing more than
 a private draft. Fresh installs keep resolving the previous public release, and
@@ -294,7 +307,7 @@ older clients keep polling the previous valid appcast entry.
 
 `con-core/src/release_channel.rs` provides a cross-platform `ReleaseChannel` enum:
 
-- `Dev` — local builds, never polls for updates
+- `Dev` — local or internal smoke builds, never polls for updates
 - `Beta` — pre-release, polls `beta-macos-{arch}.xml`
 - `Stable` — GA builds, polls `stable-macos-{arch}.xml`
 

@@ -28,6 +28,9 @@ The pipeline relied on several independent checks:
   `release-finalize.yml` before publishing a draft.
 - Extended portable CI path filters and added script/parser checks so release
   workflow and installer script changes receive CI coverage in PRs.
+- Made internal `v*-dev.*` release handling explicit across the macOS release
+  scripts, appcast jobs, Homebrew job, and final gate so a smoke tag cannot
+  accidentally move a public stable/beta update feed.
 
 ## What We Learned
 
@@ -35,3 +38,8 @@ Release safety needs a final promotion gate, not just platform-local checks. The
 public release boundary is where fresh installers and older clients converge, so
 that boundary must verify the exact assets and appcast entries users will
 consume.
+
+Channel handling must be explicit in every release job. A review comment can be
+wrong about one symptom and still point near a real class of failure: internal
+smoke tags must never inherit public-channel publishing behavior by falling
+through a default `stable` branch.

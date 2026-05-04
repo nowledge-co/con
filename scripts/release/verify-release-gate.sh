@@ -49,6 +49,8 @@ esac
 mac_prefix="con"
 if [[ "$channel" == "beta" ]]; then
   mac_prefix="con-Beta"
+elif [[ "$channel" == "dev" ]]; then
+  mac_prefix="con-Dev"
 fi
 
 required_assets=(

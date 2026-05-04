@@ -36,6 +36,8 @@ jobs:
           channel="stable"
           if [[ "$version" == *"-beta."* ]]; then
             channel="beta"
+          elif [[ "$version" == *"-dev."* ]]; then
+            channel="dev"
           fi
           echo "version=$version" >>"$GITHUB_OUTPUT"
           echo "channel=$channel" >>"$GITHUB_OUTPUT"
@@ -217,6 +219,8 @@ jobs:
           channel="stable"
           if [[ "$version" == *"-beta."* ]]; then
             channel="beta"
+          elif [[ "$version" == *"-dev."* ]]; then
+            channel="dev"
           fi
           marketing="${version%%[-+]*}"
           echo "version=$version" >>"$GITHUB_OUTPUT"
@@ -225,6 +229,7 @@ jobs:
 
       - name: Check Sparkle signing key
         id: sparkle
+        if: steps.meta.outputs.channel != 'dev'
         shell: bash
         env:
           SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
@@ -237,18 +242,18 @@ jobs:
           fi
 
       - name: Download Sparkle tools
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: ./scripts/sparkle/download.sh
 
       - name: Download release artifacts
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         uses: actions/download-artifact@v5
         with:
           path: release-artifacts
 
       - name: Checkout gh-pages
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -270,7 +275,7 @@ jobs:
           }
 
       - name: Sign artifacts and update appcasts
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         env:
           SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
@@ -328,7 +333,7 @@ jobs:
           done
 
       - name: Push appcast to gh-pages
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -362,16 +367,20 @@ jobs:
           channel="stable"
           if [[ "$version" == *"-beta."* ]]; then
             channel="beta"
+          elif [[ "$version" == *"-dev."* ]]; then
+            channel="dev"
           fi
           echo "version=$version" >>"$GITHUB_OUTPUT"
           echo "channel=$channel" >>"$GITHUB_OUTPUT"
 
       - name: Download release artifacts
+        if: steps.meta.outputs.channel != 'dev'
         uses: actions/download-artifact@v5
         with:
           path: release-artifacts
 
       - name: Update cask formula
+        if: steps.meta.outputs.channel != 'dev'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

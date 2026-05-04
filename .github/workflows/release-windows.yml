@@ -389,6 +389,8 @@ jobs:
           channel="stable"
           if [[ "$version" == *"-beta."* ]]; then
             channel="beta"
+          elif [[ "$version" == *"-dev."* ]]; then
+            channel="dev"
           fi
           marketing="${version%%[-+]*}"
           echo "version=$version"     >>"$GITHUB_OUTPUT"
@@ -397,6 +399,7 @@ jobs:
 
       - name: Check Sparkle signing key
         id: sparkle
+        if: steps.meta.outputs.channel != 'dev'
         shell: bash
         env:
           SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
@@ -409,19 +412,19 @@ jobs:
           fi
 
       - name: Download Sparkle tools
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: ./scripts/sparkle/download.sh
 
       - name: Download Windows release artifact
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         uses: actions/download-artifact@v5
         with:
           name: windows-x86_64
           path: release-artifacts
 
       - name: Checkout gh-pages
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -441,7 +444,7 @@ jobs:
           }
 
       - name: Sign ZIP and update Windows appcast
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         env:
           SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
@@ -503,7 +506,7 @@ jobs:
           echo "Updated appcast: ${channel}-windows-x86_64.xml (build $build_number)"
 
       - name: Push appcast to gh-pages
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
