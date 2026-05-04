@@ -1,14 +1,8 @@
 # Workspace layout profiles
 
-con has two workspace behaviors.
-
-The first is automatic: after rebooting, upgrading, or relaunching con, your
-ordinary workspace should come back. Windows, tabs, panes, surfaces, working
-directories, and private terminal text history are continuity. You should not
-need to manage it.
-
-The second is deliberate: when a workspace shape is worth keeping for a project,
-you can save it as a layout profile. This guide is for that explicit workflow.
+When a workspace shape is worth keeping for a project, save it as a layout
+profile. A profile is for starting a project in the right shape again, or for
+sharing that shape with a team.
 
 ## What a layout profile is
 
@@ -46,11 +40,8 @@ session backup. It is safe to review because it describes shape, not activity.
 The profile captures the workspace you designed. It does not capture what you
 typed, what the agent said, or what processes were running.
 
-Private terminal text restore can be disabled in **Settings -> General ->
-Continuity**. Use **Clear Restored Terminal History** from Command Palette when
-you want to turn it off and wipe the saved terminal text already stored by con.
-Continuity is default-on for new installs and existing beta users; the opt-out
-is explicit because restart continuity is part of con's default workspace model.
+Private terminal text settings live in **Settings -> General**. Layout profiles
+never include terminal text, regardless of that setting.
 
 ## Save a profile
 
@@ -104,8 +95,7 @@ con ~/dev/app/.con/workspace.toml
 ```
 
 If the requested profile is malformed, con opens a fresh shell and shows the
-profile error in the terminal. It does not silently restore an unrelated
-workspace.
+profile error in the terminal. It does not silently open an unrelated workspace.
 
 Inside the app, use:
 
@@ -114,11 +104,6 @@ Inside the app, use:
   one fresh tab rooted there.
 - **Open Layout Profile in New Window** to choose a project folder or profile
   file and open it separately.
-
-Plain `con` without a path still favors private session restore. That keeps
-normal relaunch behavior predictable: quitting, upgrading, or rebooting should
-bring back the last private workspace, not silently replace it with a project
-profile because the process happened to start from a repo directory.
 
 To open a project profile, pass the project path or the profile file path
 explicitly.
@@ -155,22 +140,20 @@ Use these rules:
 - **Open Layout Profile in New Window** is the explicit "new window from this
   profile" flow.
 - **New Window** stays scratch by default. A global "default new-window layout"
-  setting is intentionally deferred because it can fight with private restore
-  and project memory.
+  setting is intentionally deferred because it can fight with project memory.
 
 ## Entry points
 
 | Gesture | Result |
 | --- | --- |
-| Launch con normally | Restore the private workspace you left behind. |
 | Cmd+N / New Window | Open one clean scratch shell with shared history. |
 | `con ~/dev/app` | Open the project's profile if present; otherwise one shell rooted there. |
 | `con ~/dev/app/.con/workspace.toml` | Open that profile directly. |
 | Add Tabs from Layout Profile | Add the selected project/profile into the current window. |
 | Open Layout Profile in New Window | Open the selected project/profile separately. |
 
-This keeps every entry point legible: restore is automatic, scratch is fresh,
-and project layout is explicit.
+This keeps every entry point legible: scratch is fresh, and project layout is
+explicit.
 
 ## Process continuity
 
@@ -181,4 +164,4 @@ want processes to survive app restarts:
 tmux attach -t app || tmux new -s app
 ```
 
-con restores the layout and directory. tmux restores the running session.
+con recreates the layout and directory. tmux restores the running session.

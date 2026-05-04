@@ -1,8 +1,12 @@
 # con docs
 
-con is a terminal with an agent built into the work surface. The terminal stays
-the center of the app; the agent, input bar, workspace restore, and automation
-tools are there when they make the terminal easier to use.
+con is a terminal first. If you hide the input bar and agent panel, it should
+feel like a fast, elegant terminal with nothing extra in the way.
+
+When you ask for AI, con uses the terminal objects you already work with:
+panes, SSH sessions, tmux panes, TUIs, visible output, and working directories.
+When you build on top of con, `con-cli` and surfaces give external agents a real
+terminal to drive.
 
 Start with the page that matches what you are trying to do.
 
@@ -12,7 +16,7 @@ Start with the page that matches what you are trying to do.
 | --- | --- |
 | Install con | [Install](install.md) |
 | Learn the main controls | [Quick controls](quick-controls.md) |
-| Work with tabs, panes, broadcast, and surfaces | [Terminal workflows](terminal-workflows.md) |
+| Work with tabs, panes, broadcast, links, and pane zoom | [Terminal workflows](terminal-workflows.md) |
 | Connect providers, tune appearance, and edit shortcuts | [Settings](settings.md) |
 
 ## Use con every day
@@ -21,9 +25,14 @@ Start with the page that matches what you are trying to do.
 | --- | --- |
 | Use the agent panel without leaving the terminal | [Built-in agent](agent.md) |
 | Save or share a project layout | [Workspace profiles](workspace-layout-profiles-guide.md) |
-| Drive con from scripts or external agents | [con-cli and surfaces](con-cli.md) |
 | See the app | [Screenshots](screenshots.md) |
 | See what changed | [Changelog](../CHANGELOG.md) |
+
+## Build on con
+
+| Need | Read |
+| --- | --- |
+| Drive con from scripts, test runners, or external agents | [con-cli and surfaces](con-cli.md) |
 
 ## Platform status
 

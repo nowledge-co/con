@@ -1,8 +1,9 @@
 # Terminal workflows
 
-con is still a terminal when every AI feature is hidden. Start there. Use the
-agent panel, input bar, surfaces, and automation only when they fit the work in
-front of you.
+con should disappear until you need it. With one tab open and the panels hidden,
+the app is a clean terminal surface. The extra controls are there for the
+moments when they save movement: running a command across panes, asking the
+agent, opening a split, or focusing a worker.
 
 ## The workspace model
 
@@ -15,8 +16,8 @@ con uses a few names consistently:
 | Pane | A visible split region inside a tab | Side-by-side shells, servers, logs, editors |
 | Surface | A terminal session inside one pane | Multiple agent or worker sessions without adding more visible splits |
 
-Most terminal work only needs tabs and panes. Surfaces are for the cases where a
-single visible pane should host several terminal sessions.
+Most terminal work only needs tabs and panes. Surfaces are advanced; they are
+there when one visible pane should host several terminal sessions.
 
 ## Focus without reaching for the mouse
 
@@ -61,20 +62,26 @@ one terminal at once.
 Pane zoom is for short bursts of focus. It does not stop sibling panes; it only
 gives the active pane the full terminal area.
 
-## Command input and broadcast
+## The input bar
 
-The bottom input bar has three modes:
+The input bar is one surface with three modes:
 
-- **Smart** chooses between shell command and agent request.
+- **Smart** decides whether your text is a shell command or an agent request.
 - **Command** sends text to the terminal.
 - **Agent** sends text to the built-in agent.
+
+This keeps con from becoming a chat app wrapped around a shell. You can hide the
+bar when you want a plain terminal, bring it back when you need a command or
+question, and switch modes without changing context.
+
+## Broadcast commands
 
 Command mode can target more than one pane. Use the pane picker to send a
 command to the focused pane, every pane, or a selected set. The picker mirrors
 the current pane layout, so you can choose by position instead of remembering
 pane numbers.
 
-## Surfaces
+## Advanced: surfaces
 
 A surface is a terminal session inside one pane. Think of it as a pane-local
 tab.
@@ -122,10 +129,8 @@ Paste text normally. Dragging files into the terminal sends their paths. When a
 TUI supports image/file paste protocols, con forwards compatible clipboard and
 drop payloads through the terminal path.
 
-## Restore and profiles
+## Project layouts
 
-Normal relaunch restore is automatic: con brings back windows, tabs, panes,
-working directories, and bounded private terminal text.
-
-Layout profiles are different. They are project files for recreating a workspace
-shape later or sharing it with a team. See [Workspace profiles](workspace-layout-profiles-guide.md).
+If a project has a workspace shape worth keeping, save it as a layout profile.
+Profiles are project files for recreating tabs, panes, surfaces, names, and
+working directories. See [Workspace profiles](workspace-layout-profiles-guide.md).

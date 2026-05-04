@@ -3,8 +3,12 @@
 `con-cli` is the command-line handle for a running con app. It is installed with
 con on macOS, Windows, and Linux.
 
-Use it when another program, script, or agent needs to inspect the visible
-terminal, create panes, drive pane-local surfaces, or ask con's built-in agent.
+Most users do not need it. Use it when another program, script, test runner, or
+agent needs to inspect the visible terminal, create panes, drive pane-local
+surfaces, or ask con's built-in agent.
+
+The design goal is simple: external agents should get a real terminal to work
+with, not a headless shell that behaves differently from what the user sees.
 
 ## Check that con is reachable
 
@@ -114,7 +118,7 @@ con-cli --json surfaces close \
   --close-empty-owned-pane
 ```
 
-## Ask the built-in agent
+## Ask the built-in agent from a script
 
 `agent ask` uses the same in-app agent session you see in the side panel:
 

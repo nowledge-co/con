@@ -14,12 +14,12 @@ General contains app-level behavior:
 
 - update channel and version
 - manual update check when the current channel supports it
-- restart continuity
+- saved terminal text privacy
 - skill source folders
 
-Continuity controls whether con stores bounded private terminal text for normal
-relaunch restore. Layout profiles never include that text. If you want to turn
-continuity off and wipe saved terminal text, run **Clear Restored Terminal
+If you prefer con not to save terminal text between launches, turn off
+**Restore Terminal Text** in General. Layout profiles never include terminal
+text. To wipe terminal text already saved on disk, run **Clear Restored Terminal
 History** from Command Palette.
 
 ## Command Palette

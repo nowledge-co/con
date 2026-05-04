@@ -24,7 +24,8 @@ Watch the short flow once, then use the table below as a reference.
 ### Smart
 
 Smart mode decides whether your text should run as a shell command or go to the
-agent. Use it when you want con to choose the obvious path.
+agent. Use it when you want con to choose the obvious path without making you
+switch surfaces first.
 
 ### Command
 
@@ -35,6 +36,10 @@ lets you choose the focused pane, all panes, or a selected set.
 
 Agent mode sends text to the built-in agent. Use it when you want explanation,
 planning, code help, or a careful change made with your approval.
+
+These modes are why the input bar exists. It is not a second terminal prompt and
+not a chat box glued to the side. It is a short path from what you are looking at
+to the next action.
 
 ## A good default flow
 
