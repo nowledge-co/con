@@ -10573,9 +10573,13 @@ impl Render for ConWorkspace {
                     })
                     .on_drag_move::<DraggedTab>(cx.listener(
                         move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
-                            let local_x = event.event.position.x - event.bounds.origin.x;
-                            let half = event.bounds.size.width / 2.0;
-                            let slot = if local_x < half { index } else { index + 1 };
+                            let Some(slot) = horizontal_tab_slot_from_position(
+                                event.event.position,
+                                event.bounds,
+                                index,
+                            ) else {
+                                return;
+                            };
                             if this.tab_strip_drop_slot != Some(slot) {
                                 this.tab_strip_drop_slot = Some(slot);
                                 cx.notify();
@@ -12139,9 +12143,82 @@ fn longest_common_prefix<'a>(values: impl IntoIterator<Item = &'a str>) -> Strin
     prefix
 }
 
+fn point_in_bounds(p: &gpui::Point<gpui::Pixels>, b: &gpui::Bounds<gpui::Pixels>) -> bool {
+    p.x >= b.origin.x
+        && p.x < b.origin.x + b.size.width
+        && p.y >= b.origin.y
+        && p.y < b.origin.y + b.size.height
+}
+
+fn horizontal_tab_slot_from_position(
+    cursor: gpui::Point<gpui::Pixels>,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    index: usize,
+) -> Option<usize> {
+    if !point_in_bounds(&cursor, &bounds) {
+        return None;
+    }
+    let local_x = cursor.x - bounds.origin.x;
+    let half = bounds.size.width / 2.0;
+    Some(if local_x < half { index } else { index + 1 })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::ConWorkspace;
+    use super::{ConWorkspace, horizontal_tab_slot_from_position};
+    use gpui::{Bounds, Point, Size, px};
+
+    #[test]
+    fn horizontal_tab_slot_ignores_cursor_outside_bounds() {
+        let bounds = Bounds {
+            origin: Point {
+                x: px(100.0),
+                y: px(20.0),
+            },
+            size: Size {
+                width: px(80.0),
+                height: px(30.0),
+            },
+        };
+        assert_eq!(
+            horizontal_tab_slot_from_position(Point { x: px(90.0), y: px(25.0) }, bounds, 3),
+            None
+        );
+        assert_eq!(
+            horizontal_tab_slot_from_position(Point { x: px(181.0), y: px(25.0) }, bounds, 3),
+            None
+        );
+        assert_eq!(
+            horizontal_tab_slot_from_position(Point { x: px(120.0), y: px(10.0) }, bounds, 3),
+            None
+        );
+        assert_eq!(
+            horizontal_tab_slot_from_position(Point { x: px(120.0), y: px(51.0) }, bounds, 3),
+            None
+        );
+    }
+
+    #[test]
+    fn horizontal_tab_slot_uses_left_and_right_halves() {
+        let bounds = Bounds {
+            origin: Point {
+                x: px(100.0),
+                y: px(20.0),
+            },
+            size: Size {
+                width: px(80.0),
+                height: px(30.0),
+            },
+        };
+        assert_eq!(
+            horizontal_tab_slot_from_position(Point { x: px(110.0), y: px(25.0) }, bounds, 3),
+            Some(3)
+        );
+        assert_eq!(
+            horizontal_tab_slot_from_position(Point { x: px(150.0), y: px(25.0) }, bounds, 3),
+            Some(4)
+        );
+    }
 
     #[test]
     fn surface_key_bytes_preserves_literal_character_case() {
