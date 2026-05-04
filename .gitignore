@@ -40,3 +40,4 @@ docs/**/*.gif
 docs/**/*.webp
 docs/**/*.mp4
 docs/**/*.mov
+.worktrees/
