@@ -3,6 +3,14 @@
 con keeps the terminal in front. The main controls help you move between the
 terminal, command input, and the agent panel without changing context.
 
+## Two-minute demo
+
+Watch the short flow once, then use the table below as a reference.
+
+<video controls muted playsinline preload="metadata" width="100%" aria-label="Two-minute con quick controls demo" src="https://github.com/user-attachments/assets/2b6f6145-e400-4a74-a951-cd8221493a17"></video>
+
+## Shortcuts
+
 | Action | macOS | Windows / Linux |
 | --- | --- | --- |
 | Switch focus between terminal and input | <kbd>⌘</kbd> <kbd>I</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>I</kbd> |

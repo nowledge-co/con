@@ -26,4 +26,4 @@ The README shows one representative view. This page keeps the full gallery in on
 
 ## Demo
 
-https://github.com/user-attachments/assets/2b6f6145-e400-4a74-a951-cd8221493a17
+<video controls muted playsinline preload="metadata" width="100%" aria-label="Two-minute con quick controls demo" src="https://github.com/user-attachments/assets/2b6f6145-e400-4a74-a951-cd8221493a17"></video>
