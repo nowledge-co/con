@@ -352,6 +352,15 @@ fn default_global_summon() -> String {
 fn default_global_summon_enabled() -> bool {
     false
 }
+fn default_hotkey_window_enabled() -> bool {
+    false
+}
+fn default_hotkey_window() -> String {
+    "cmd-\\".into()
+}
+fn default_hotkey_window_always_on_top() -> bool {
+    false
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -383,6 +392,9 @@ pub struct KeybindingConfig {
     pub close_surface: String,
     pub global_summon_enabled: bool,
     pub global_summon: String,
+    pub hotkey_window_enabled: bool,
+    pub hotkey_window: String,
+    pub hotkey_window_always_on_top: bool,
 }
 
 impl Default for KeybindingConfig {
@@ -415,6 +427,9 @@ impl Default for KeybindingConfig {
             close_surface: default_close_surface(),
             global_summon_enabled: default_global_summon_enabled(),
             global_summon: default_global_summon(),
+            hotkey_window_enabled: default_hotkey_window_enabled(),
+            hotkey_window: default_hotkey_window(),
+            hotkey_window_always_on_top: default_hotkey_window_always_on_top(),
         }
     }
 }
@@ -657,5 +672,42 @@ restore_terminal_text = false
         let config: Config = toml::from_str(content).unwrap();
 
         assert!(!config.appearance.restore_terminal_text);
+    }
+
+    #[test]
+    fn default_keybindings_include_hotkey_window_fields() {
+        let config = Config::default();
+        assert!(!config.keybindings.hotkey_window_enabled);
+        assert_eq!(config.keybindings.hotkey_window, "cmd-\\");
+        assert!(!config.keybindings.hotkey_window_always_on_top);
+    }
+
+    #[test]
+    fn legacy_configs_receive_hotkey_window_defaults() {
+        let content = r#"
+[keybindings]
+global_summon_enabled = true
+global_summon = "alt-space"
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+
+        assert!(!config.keybindings.hotkey_window_enabled);
+        assert_eq!(config.keybindings.hotkey_window, "cmd-\\");
+        assert!(!config.keybindings.hotkey_window_always_on_top);
+    }
+
+    #[test]
+    fn loaded_configs_preserve_explicit_hotkey_window_fields() {
+        let content = r#"
+[keybindings]
+hotkey_window_enabled = true
+hotkey_window = "cmd-\\"
+hotkey_window_always_on_top = true
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+
+        assert!(config.keybindings.hotkey_window_enabled);
+        assert_eq!(config.keybindings.hotkey_window, "cmd-\\");
+        assert!(config.keybindings.hotkey_window_always_on_top);
     }
 }
