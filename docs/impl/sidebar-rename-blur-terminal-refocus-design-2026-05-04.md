@@ -1,4 +1,4 @@
-# 2026-05-04 Sidebar Rename Blur + Terminal Refocus Design
+# 2026-05-04 Sidebar Rename Blur + Terminal Refocus
 
 ## Goal
 
@@ -6,7 +6,7 @@ Make sidebar tab rename behave like horizontal tab-strip rename by saving on blu
 
 ## Scope
 
-This design covers two behavior changes only:
+This note covers two behavior changes only:
 
 1. Sidebar rename saves on blur, matching Enter behavior.
 2. Successful rename returns focus to the current tab’s focused terminal.
@@ -53,12 +53,14 @@ The sidebar rename currently has:
    - sidebar
    must return focus to the active tab’s focused terminal.
 6. Empty or whitespace-only names must continue clearing the custom label.
+7. Entering rename should select the existing tab name so replacement is immediate.
 
 ### UX
 
 1. Rename completion should feel terminal-first: the next keystroke should go to the active terminal.
 2. Sidebar and horizontal rename should have aligned commit/cancel semantics.
 3. Escape remains the dedicated cancel gesture.
+4. Rename should begin in replace mode, not append mode.
 
 ## Recommended Approach
 
@@ -68,12 +70,14 @@ The sidebar rename currently has:
 - Add Escape-vs-blur cancellation protection in sidebar state.
 - Keep persistence centralized in workspace through `SidebarRename`.
 - Move terminal refocus responsibility to workspace rename commit handlers, because workspace owns the active terminal.
+- Trigger select-all from the input’s first `Focus` event rather than from rename setup time, so the input is already the active focus target.
 
 Why this is best:
 
 - Preserves current boundaries: sidebar emits rename intent; workspace persists tab state.
 - Keeps the focus target authoritative in one place.
 - Minimizes new surface area and follows the existing horizontal rename pattern.
+- Avoids brittle timing assumptions around GPUI action dispatch.
 
 ### Option B — Make sidebar own more rename lifecycle and request refocus externally
 
@@ -97,7 +101,7 @@ Why not recommended now:
 
 ### 1. Sidebar rename lifecycle
 
-`SessionSidebar::begin_rename` will treat `InputEvent::PressEnter` and `InputEvent::Blur` as the same commit path. That path will:
+`SessionSidebar::begin_rename` treats `InputEvent::PressEnter` and `InputEvent::Blur` as the same commit path. That path will:
 
 - read the input value
 - trim it
@@ -105,7 +109,7 @@ Why not recommended now:
 - emit `SidebarRename { session_id, label }`
 - clear the local rename state
 
-To preserve Escape semantics, the sidebar will store a small cancel marker for the active rename session. If Escape is pressed, the sidebar clears the inline editor and records that the session was canceled. If a subsequent blur arrives for the same rename session, that blur handler becomes a no-op.
+To preserve Escape semantics, the sidebar stores a small cancel marker for the active rename session. If Escape is pressed, the sidebar clears the inline editor and records that the session was canceled. If a subsequent blur arrives for the same rename session, that blur handler becomes a no-op.
 
 This mirrors the protection already used in horizontal tab rename, but remains sidebar-local because the sidebar owns that input entity and its blur lifecycle.
 
@@ -116,7 +120,7 @@ The workspace remains the persistence authority.
 - `on_sidebar_rename` continues to normalize and persist `user_label`
 - `commit_tab_rename` continues to normalize and persist `user_label`
 
-Both successful commit paths will explicitly focus the active tab’s focused terminal after the rename is committed. This keeps behavior consistent regardless of where rename started.
+Both successful commit paths explicitly focus the active tab’s focused terminal after the rename is committed. This keeps behavior consistent regardless of where rename started.
 
 The focus target is always:
 
@@ -136,16 +140,42 @@ Both rename entry points continue using:
 
 `normalize_tab_user_label` in `workspace.rs` remains the semantic source of truth for workspace-side persistence. Sidebar may continue local trimming before event emission, but the workspace remains tolerant and authoritative.
 
+### 4. Focus-time select-all
+
+Rename should enter with the old label selected. In practice, dispatching `SelectAll` during rename setup was unreliable because the new input was not always the active focus target yet.
+
+The stable pattern is:
+
+- create the rename input
+- focus it
+- listen for the input’s first `InputEvent::Focus`
+- dispatch `SelectAll` once from that focus event
+
+This keeps selection behavior aligned for both sidebar and horizontal rename flows and avoids append-mode entry.
+
+### 5. Rename-state remapping during close/reorder
+
+Horizontal tab rename state is index-based in the render layer, so tab close/reorder flows must remap the active rename editor and cancel marker as tab indices move.
+
+That remap logic should:
+
+- drop rename state if the renamed tab is closed
+- shift later indices left after a close
+- track tab identity across reorder by stable `summary_id`
+
+This avoids stale rename/editor state after drag-reorder or close actions.
+
 ## Data Flow
 
 ### Sidebar rename success
 
 1. User enters sidebar rename.
-2. Input emits `PressEnter` or `Blur`.
-3. Sidebar converts input to `Option<String>` and emits `SidebarRename`.
-4. Workspace `on_sidebar_rename` updates the tab model.
-5. Workspace syncs sidebar/session save.
-6. Workspace focuses the active terminal.
+2. Input emits `Focus`, causing one-time select-all.
+3. Input emits `PressEnter` or `Blur`.
+4. Sidebar converts input to `Option<String>` and emits `SidebarRename`.
+5. Workspace `on_sidebar_rename` updates the tab model.
+6. Workspace syncs sidebar/session save.
+7. Workspace focuses the active terminal.
 
 ### Sidebar rename cancel
 
@@ -158,10 +188,56 @@ Both rename entry points continue using:
 ### Horizontal rename success
 
 1. User enters tab-strip rename.
-2. Input emits `PressEnter` or `Blur`.
-3. Workspace `commit_tab_rename` updates the tab model.
-4. Workspace syncs sidebar/session save.
-5. Workspace focuses the active terminal.
+2. Input emits `Focus`, causing one-time select-all.
+3. Input emits `PressEnter` or `Blur`.
+4. Workspace `commit_tab_rename` updates the tab model.
+5. Workspace syncs sidebar/session save.
+6. Workspace focuses the active terminal.
+
+## File Map
+
+- Modify: `crates/con-app/src/sidebar.rs`
+  - add blur-save handling to sidebar rename
+  - add Escape-vs-blur cancel protection for sidebar rename input
+  - normalize sidebar rename labels before emission
+  - select all on the first rename input focus event
+- Modify: `crates/con-app/src/workspace.rs`
+  - refocus active terminal after successful horizontal tab rename
+  - refocus active terminal after successful sidebar rename persistence
+  - normalize horizontal rename labels before persistence
+  - keep rename state stable across close/reorder
+  - select all on the first rename input focus event
+- Test: `crates/con-app/src/workspace.rs` test module
+  - tab-slot geometry tests for browser-style reorder semantics
+  - rename-state remap helper tests for close/reorder behavior
+  - rename normalization tests
+- Test: `crates/con-app/src/sidebar.rs` test module
+  - rename normalization helper tests
+
+## Implementation Notes
+
+### Sidebar rename changes
+
+- Add `rename_cancelled_session_id: Option<u64>` to `SessionSidebar`.
+- Add `normalize_sidebar_rename_label(value: &str) -> Option<String>`.
+- In `begin_rename`, use one commit path for `PressEnter` and `Blur`.
+- Ignore blur commits that belong to an Escape-canceled rename.
+- On the first `InputEvent::Focus`, dispatch `SelectAll` once.
+
+### Workspace rename changes
+
+- Keep horizontal rename persistence in `commit_tab_rename`.
+- Refocus the active terminal after successful sidebar or horizontal rename commits.
+- Keep rename display aligned with `smart_tab_presentation` so updated user labels show immediately.
+- Remap `tab_rename` and `tab_rename_cancelled_index` after tab close/reorder.
+
+### Horizontal tab reorder semantics
+
+- Use browser-style left/right half drop slots.
+- Dropping on the left half inserts before the target tab.
+- Dropping on the right half inserts after the target tab.
+- Support dragging later tabs forward as well as earlier tabs backward.
+- Avoid triggering whole-window drag while tab drag is active on macOS.
 
 ## Error Handling
 
@@ -172,6 +248,7 @@ Expected defensive behavior:
 - If the target tab/session no longer exists by commit time, drop the rename gracefully.
 - If blur arrives after cancel, ignore it.
 - If focus restoration cannot resolve a terminal, do nothing rather than panic.
+- If a reordered/closed tab invalidates transient rename indices, remap or drop that state instead of keeping stale indices.
 
 ## Testing Strategy
 
@@ -179,43 +256,45 @@ Expected defensive behavior:
 
 In `workspace.rs` tests:
 
-- keep existing normalization tests
-- add a small pure helper test if terminal-refocus gating or cancel-remap logic needs isolation
+- keep normalization tests
+- cover tab-slot helper behavior for left/right-half insertion semantics
+- cover rename-state remap helpers for close/reorder behavior
 
-In `sidebar.rs` tests, if lightweight testing is practical:
+In `sidebar.rs` tests:
 
 - cover blur-save normalization helper
-- cover cancel-marker behavior preventing blur save after Escape
 
-If sidebar view testing is too heavy, extract a small pure helper for commit/cancel state transitions and test that helper instead.
+If sidebar view testing is too heavy, keep coverage focused on pure helper behavior and verify focus-side effects manually.
 
 ### Verification
 
-- `cargo test -p con workspace::tests`
-- targeted sidebar tests if added
+- `cargo test -p con`
 - `cargo build -p con`
 
 ### Manual checks
 
-1. Sidebar rename → type new name → click elsewhere → name saves.
-2. Sidebar rename → clear name → click elsewhere → custom label clears.
-3. Sidebar rename → type text → press Escape → no save.
-4. Horizontal rename → Enter/blur → name saves and terminal receives next keystroke.
-5. Sidebar rename → Enter/blur → terminal receives next keystroke.
+1. Horizontal tab rename enters with the old name selected.
+2. Sidebar rename enters with the old name selected.
+3. Sidebar rename → type new name → click elsewhere → name saves.
+4. Sidebar rename → clear name → click elsewhere → custom label clears.
+5. Sidebar rename → type text → press Escape → no save.
+6. Horizontal rename → Enter/blur → name saves and terminal receives next keystroke.
+7. Sidebar rename → Enter/blur → terminal receives next keystroke.
+8. Horizontal tab drag reorder works in both directions.
+9. Dragging a tab does not drag the whole window on macOS.
 
-## Files Expected to Change
+## Files Changed
 
 - `crates/con-app/src/sidebar.rs`
-  - sidebar rename blur-save semantics
-  - Escape-vs-blur cancel protection
 - `crates/con-app/src/workspace.rs`
-  - terminal refocus after successful rename commits
-  - possible small helper for active-terminal refocus reuse
 
 ## Acceptance Criteria
 
 1. Sidebar rename saves on blur.
 2. Sidebar Escape cancels without later blur-save.
 3. Horizontal rename still supports Enter/blur save and Escape cancel.
-4. Successful rename from sidebar or horizontal strip restores focus to the active terminal.
-5. Build and targeted tests pass.
+4. Rename from sidebar or horizontal strip starts with the old name selected.
+5. Successful rename from sidebar or horizontal strip restores focus to the active terminal.
+6. Horizontal tab drag reorder works with browser-style before/after insertion semantics.
+7. Dragging tabs does not move the whole window on macOS.
+8. Build and tests pass.
