@@ -18,19 +18,23 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/ci-portable.yml"
+      - ".github/workflows/release-*.yml"
       - ".cargo/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "assets/**"
       - "crates/**"
+      - "scripts/**"
   pull_request:
     paths:
       - ".github/workflows/ci-portable.yml"
+      - ".github/workflows/release-*.yml"
       - ".cargo/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "assets/**"
       - "crates/**"
+      - "scripts/**"
 
 env:
   CARGO_TERM_COLOR: always
@@ -78,6 +82,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: C:\src\repo
+      - name: PowerShell installer parse check
+        shell: pwsh
+        run: |
+          $errors = $null
+          $tokens = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "scripts/install.ps1",
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Host
+            throw "PowerShell parse errors in scripts/install.ps1"
+          }
       - name: cargo check — portable crates
         run: cargo check -p con-core -p con-cli -p con-agent -p con-terminal -p con-ghostty
       - name: cargo check — UI binary (stub terminal backend)
@@ -94,6 +112,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Release script syntax checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n scripts/install.sh
+          bash -n scripts/linux/release.sh
+          bash -n scripts/release/verify-artifacts.sh
+          bash -n scripts/release/verify-release-gate.sh
+          for script in scripts/macos/*.sh scripts/sparkle/*.sh; do
+            bash -n "$script"
+          done
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install Zig 0.15.2

@@ -12,6 +12,11 @@ require_cmd codesign
 require_cmd spctl
 require_cmd xcrun
 
+cli_binary="$CON_APP_BUNDLE_PATH/Contents/MacOS/con-cli"
+if [[ ! -x "$cli_binary" ]]; then
+  fail "con-cli missing from app bundle: $cli_binary"
+fi
+
 log "Verifying code signature for $CON_APP_BUNDLE_PATH"
 codesign --verify --deep --strict --verbose=2 "$CON_APP_BUNDLE_PATH"
 

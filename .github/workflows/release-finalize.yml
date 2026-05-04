@@ -29,10 +29,11 @@ name: Finalize release
 # behave as if the tag does not exist yet, which is the correct
 # answer while assets are still uploading.
 #
-# This workflow watches the three release workflows and flips the
-# draft to public via `gh release edit --draft=false` only after all
-# three have a `success` workflow_run for the same `head_sha`. If
-# one platform fails, the draft stays a draft (intentional — better
+# This workflow watches the three release workflows, verifies the
+# release assets/appcasts/installers still agree on the same tag,
+# and only then flips the draft to public via
+# `gh release edit --draft=false`. If one platform or the final
+# release gate fails, the draft stays a draft (intentional — better
 # to block than to ship an incomplete release; the maintainer can
 # either re-run the failing job or flip the draft manually via the
 # UI once the situation is understood).
@@ -157,6 +158,51 @@ jobs:
             echo "ready=false" >>"$GITHUB_OUTPUT"
             echo "Not all platforms have succeeded yet; waiting for the next sibling's completion."
           fi
+
+      - uses: actions/checkout@v5
+        if: steps.gate.outputs.ready == 'true'
+        with:
+          ref: ${{ steps.ctx.outputs.sha }}
+
+      - name: Checkout gh-pages for release gate
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git clone --single-branch --branch gh-pages \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
+            gh-pages
+
+      - name: Sync public installer scripts
+        if: steps.gate.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+
+          cp scripts/install.sh gh-pages/install.sh
+          cp scripts/install.ps1 gh-pages/install.ps1
+
+          cd gh-pages
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add install.sh install.ps1
+          if git diff --cached --quiet; then
+            echo "Installer scripts are already current."
+            exit 0
+          fi
+
+          git commit -m "Sync installer scripts for ${{ steps.ctx.outputs.tag }}"
+          git pull --rebase origin gh-pages
+          git push origin gh-pages
+
+      - name: Verify release payload before promotion
+        if: steps.gate.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ./scripts/release/verify-release-gate.sh "${{ steps.ctx.outputs.tag }}" gh-pages
 
       - name: Promote draft to public release
         if: steps.gate.outputs.ready == 'true'

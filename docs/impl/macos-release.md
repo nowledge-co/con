@@ -3,6 +3,8 @@
 This repo now ships a first-pass macOS release pipeline for `con` that:
 
 - builds a native `.app` bundle without depending on `cargo-bundle`
+- embeds `con-cli` in the app bundle so installers and Homebrew can expose the
+  control-plane CLI without a separate source build
 - signs with a Developer ID Application certificate
 - notarizes with `notarytool`
 - staples the `.app`
@@ -15,9 +17,23 @@ This repo now ships a first-pass macOS release pipeline for `con` that:
 Scripts live in [`scripts/macos`](../../scripts/macos):
 
 - `build-app.sh` builds `con` and assembles `con.app`
+- `build-app.sh` also builds `con-cli` and places it at
+  `Contents/MacOS/con-cli`
 - `import-certificate.sh` imports the Developer ID cert into a temporary keychain for CI
 - `release.sh` runs build, sign, notarize, staple, package, and checksum generation
 - `verify.sh` runs `codesign`, `spctl`, and stapler validation checks
+- `verify.sh` fails the release if the bundled `con-cli` executable is missing
+
+`con-cli` exposure is deliberately layered:
+
+- Homebrew casks install a `con-cli` binary shim from the app bundle.
+- `install.sh` links `~/.local/bin/con-cli` to the bundled CLI after copying
+  the app into `/Applications`.
+- Sparkle updates replace only the app bundle, so the app also performs a
+  conservative launch-time self-heal: it creates or repairs
+  `~/.local/bin/con-cli` only when the path is missing or already points to a
+  Con `.app` bundle. It never overwrites a real user-managed binary or an
+  unrelated symlink.
 
 GitHub Actions release workflow:
 
@@ -118,7 +134,24 @@ git tag v0.2.0-beta.1
 git push origin v0.2.0-beta.1
 ```
 
-The workflow maps `*-beta.*` tags to the beta channel and marks the GitHub Release as a prerelease.
+Dev smoke release:
+
+```bash
+git tag v0.2.0-dev.1
+git push origin v0.2.0-dev.1
+```
+
+The workflow maps `*-beta.*` tags to the beta channel and `*-dev.*` tags to an
+internal dev channel. Dev releases are marked as GitHub prereleases and do not
+embed or update public appcasts, and do not update Homebrew casks. Beta tags
+are not marked as prereleases while Con is still in the all-beta era, so fresh
+installs resolve to the newest public beta after the finalizer promotes the
+draft.
+
+The release finalizer always syncs `install.sh` and `install.ps1` from the
+tagged commit to `gh-pages` before it promotes the draft. This keeps internal dev
+smoke tags useful for installer E2E without moving beta/stable appcasts or
+Homebrew casks.
 
 ## Reusing Existing Apple Credentials
 
@@ -248,15 +281,39 @@ Before shipping a beta or stable build, verify these flows from the bundled app:
 
 1. Open the app from Finder and confirm the terminal renders normally.
 2. Open `About con` and confirm the app icon, version, build, and channel are visible.
-3. Open Settings → Updates and confirm the same version/build information is shown there.
-4. Run `Check for Updates…` against the intended channel and confirm Sparkle presents the expected UI.
-5. After installation, reopen `About con` and confirm the build number changed.
+3. Run `con-cli identify` from a new shell after installing by Homebrew or
+   `install.sh`; it should connect to the running app and print app identity.
+4. For a manual DMG/Sparkle-updated app, confirm launching the app creates or
+   repairs `~/.local/bin/con-cli` when that path is missing.
+5. Open Settings → Updates and confirm the same version/build information is shown there.
+6. Run `Check for Updates…` against the intended channel and confirm Sparkle presents the expected UI.
+7. After installation, reopen `About con` and confirm the build number changed.
+
+### Automated Release Gates
+
+Release safety is enforced in two layers:
+
+1. Platform release jobs verify artifact shape before upload. macOS checks the
+   app bundle, ZIP, DMG, checksums, and bundled `con-cli`; Linux checks the
+   tarball layout, checksum, and `con-cli --help`; Windows expands the ZIP,
+   verifies `con-app.exe` and `con-cli.exe`, runs `con-cli.exe --help`, and
+   checks `SHA256SUMS-windows.txt`.
+2. `release-finalize.yml` refuses to promote the draft release unless the
+   expected GitHub Release assets exist, stable/beta appcasts point at the
+   same tag's artifacts, and the gh-pages installer scripts expose `con-cli`
+   / `con-cli.exe`.
+   Dev tags skip appcast/Homebrew publication entirely and are only checked for
+   artifact and installer-script shape.
+
+This means a failed or incomplete platform build can upload nothing more than
+a private draft. Fresh installs keep resolving the previous public release, and
+older clients keep polling the previous valid appcast entry.
 
 ### Release Channel Runtime
 
 `con-core/src/release_channel.rs` provides a cross-platform `ReleaseChannel` enum:
 
-- `Dev` — local builds, never polls for updates
+- `Dev` — local or internal smoke builds, never polls for updates
 - `Beta` — pre-release, polls `beta-macos-{arch}.xml`
 - `Stable` — GA builds, polls `stable-macos-{arch}.xml`
 

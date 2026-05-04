@@ -105,7 +105,9 @@ cargo wtest -p con-core -p con-cli -p con-agent -p con-terminal   # Windows (por
 
 ```bash
 cargo build --release -p con                  # macOS / Linux
+cargo build --release -p con-cli              # control-plane CLI
 cargo wbuild -p con --release                 # Windows → target\release\con-app.exe
+cargo build --release -p con-cli              # Windows → target\release\con-cli.exe
 ```
 
 For signed macOS release artifacts, use:
@@ -113,6 +115,21 @@ For signed macOS release artifacts, use:
 ```bash
 ./scripts/macos/release.sh
 ```
+
+The macOS app bundle contains both `Contents/MacOS/con` and
+`Contents/MacOS/con-cli`; the release verifier fails if the CLI is
+missing. The Homebrew cask and Unix installer expose that bundled
+`con-cli` on PATH so orchestrators such as `pi-interactive-subagents`
+do not need a separate source checkout.
+
+Release CI also has a final promotion gate. Platform jobs verify the
+artifact shape before upload, and `release-finalize.yml` keeps the
+GitHub Release drafted unless all expected assets, appcasts, and
+gh-pages installer scripts are present for the same tag. A broken
+artifact should fail private, not become `/releases/latest`. Internal
+`v*-dev.*` smoke tags are prereleases, never update public
+stable/beta appcasts or Homebrew casks, do not embed a Sparkle feed URL,
+and are only gated on artifact and installer-script shape.
 
 For a Linux release tarball (un-signed; mirrors the Windows
 preview's distribution shape), use:

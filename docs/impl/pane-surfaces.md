@@ -162,6 +162,11 @@ backend that uses `con-cli --json` instead of parsing cmux text handles:
 This avoids cmux's `identify --surface` round trip because Con returns the
 worker pane id directly from `surfaces split`.
 
+Release artifacts now include `con-cli` as part of the core install. Homebrew
+and the one-line installers expose it on PATH, so an orchestrator adapter can
+depend on `con-cli` being present after a normal Con install instead of asking
+users to build the workspace from source.
+
 ## CLI Examples
 
 First create a visible worker pane:

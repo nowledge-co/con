@@ -106,13 +106,12 @@ jobs:
         id: package
         shell: bash
         # scripts/linux/release.sh:
-        #   - cargo build -p con --release with the channel + version
+        #   - cargo build -p con -p con-cli --release with the channel + version
         #     baked in via CON_RELEASE_CHANNEL / CON_RELEASE_VERSION
         #     (option_env! in con-core::release_channel reads them so
         #     the notify-only updater knows which appcast to poll),
-        #   - strip --strip-debug the ~300 MB debug-laden binary down
-        #     to ~80 MB,
-        #   - stage the binary + LICENSE + README.md + a .desktop
+        #   - strip --strip-debug the debug-laden binaries,
+        #   - stage con + con-cli + LICENSE + README.md + a .desktop
         #     entry + a 256x256 icon into a versioned dir,
         #   - tar -czf the staging dir into
         #     dist/con-<version>-linux-x86_64.tar.gz,
@@ -122,6 +121,9 @@ jobs:
           CON_RELEASE_VERSION: ${{ steps.meta.outputs.version }}
         run: |
           ./scripts/linux/release.sh
+          ./scripts/release/verify-artifacts.sh linux \
+            "dist/con-${{ steps.meta.outputs.version }}-linux-x86_64.tar.gz" \
+            "dist/SHA256SUMS-linux.txt"
           echo "tarball=dist/con-${{ steps.meta.outputs.version }}-linux-x86_64.tar.gz" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifacts
@@ -246,6 +248,7 @@ jobs:
 
       - name: Check Sparkle signing key
         id: sparkle
+        if: steps.meta.outputs.channel != 'dev'
         shell: bash
         env:
           SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
@@ -258,19 +261,19 @@ jobs:
           fi
 
       - name: Download Sparkle tools
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: ./scripts/sparkle/download.sh
 
       - name: Download Linux release artifact
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         uses: actions/download-artifact@v5
         with:
           name: linux-x86_64
           path: release-artifacts
 
       - name: Checkout gh-pages
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -297,7 +300,7 @@ jobs:
           }
 
       - name: Sign tarball and update Linux appcast
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         env:
           SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
@@ -356,7 +359,7 @@ jobs:
           echo "Updated appcast: ${channel}-linux-x86_64.xml (build $build_number)"
 
       - name: Push appcast to gh-pages
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail

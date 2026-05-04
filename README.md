@@ -82,13 +82,17 @@ Quick controls:
 brew install --cask nowledge-co/tap/con-beta
 ```
 
+This installs the app and exposes `con-cli` on your PATH for automation.
+
 **macOS**
 
 ```sh
 curl -fsSL https://con-releases.nowledge.co/install.sh | sh
 ```
 
-Or download the DMG directly from [Releases](https://github.com/nowledge-co/con-terminal/releases).
+This installs the app into `/Applications` and links `con-cli` into
+`~/.local/bin`. Or download the DMG directly from
+[Releases](https://github.com/nowledge-co/con-terminal/releases).
 
 **Linux** (preview)
 
@@ -96,7 +100,9 @@ Or download the DMG directly from [Releases](https://github.com/nowledge-co/con-
 curl -fsSL https://con-releases.nowledge.co/install.sh | sh
 ```
 
-Or download `con-<version>-linux-x86_64.tar.gz` from the latest [Release](https://github.com/nowledge-co/con-terminal/releases).
+This installs both `con` and `con-cli` into `~/.local/bin`. Or download
+`con-<version>-linux-x86_64.tar.gz` from the latest
+[Release](https://github.com/nowledge-co/con-terminal/releases).
 
 **Windows**
 
@@ -104,7 +110,9 @@ Or download `con-<version>-linux-x86_64.tar.gz` from the latest [Release](https:
 irm https://con-releases.nowledge.co/install.ps1 | iex
 ```
 
-Or download `con-windows-x86_64.zip` from the latest [Release](https://github.com/nowledge-co/con-terminal/releases).
+This installs `con-app.exe` and `con-cli.exe` into the same PATH directory.
+Or download `con-windows-x86_64.zip` from the latest
+[Release](https://github.com/nowledge-co/con-terminal/releases).
 
 To build from source, see `HACKING.md`.
 

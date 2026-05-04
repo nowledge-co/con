@@ -3,11 +3,11 @@
 # Build a Linux release tarball for con. Mirrors the role of
 # `scripts/macos/release.sh` and `release-windows.yml`'s "Package
 # ZIP" step:
-#   - cargo build -p con --release with the channel + version baked
+#   - cargo build -p con -p con-cli --release with the channel + version baked
 #     in via CON_RELEASE_CHANNEL / CON_RELEASE_VERSION (the
 #     non-macOS updater path uses option_env!() to read these),
-#   - stage `con` + LICENSE + README.md + a `.desktop` entry +
-#     a 256x256 icon into a versioned directory,
+#   - stage `con` + `con-cli` + LICENSE + README.md + a `.desktop`
+#     entry + a 256x256 icon into a versioned directory,
 #   - emit `con-<version>-linux-<arch>.tar.gz` plus a sha256 sum file
 #     so the publish step can attach both to the GitHub release.
 #
@@ -78,14 +78,16 @@ echo
 export CON_RELEASE_VERSION="${version}"
 export CON_RELEASE_CHANNEL="${channel}"
 
-echo "==> cargo build -p con --release"
-cargo build -p con --release
+echo "==> cargo build -p con -p con-cli --release"
+cargo build -p con -p con-cli --release
 
 # Resolve the actual target dir cargo wrote to. CARGO_TARGET_DIR
 # overrides override the default.
 target_dir="${CARGO_TARGET_DIR:-target}"
 bin_path="${target_dir}/release/con"
+cli_bin_path="${target_dir}/release/con-cli"
 [[ -x "$bin_path" ]] || { echo "build did not produce $bin_path" >&2; exit 1; }
+[[ -x "$cli_bin_path" ]] || { echo "build did not produce $cli_bin_path" >&2; exit 1; }
 
 # ── Stage ───────────────────────────────────────────────────────────────────
 
@@ -98,6 +100,8 @@ mkdir -p "${stage_dir}"
 # Windows pipeline ships with debug-info stripped at link time.
 cp "$bin_path" "${stage_dir}/con"
 strip --strip-debug "${stage_dir}/con" || true
+cp "$cli_bin_path" "${stage_dir}/con-cli"
+strip --strip-debug "${stage_dir}/con-cli" || true
 
 # Docs.
 [[ -f LICENSE ]] && cp LICENSE "${stage_dir}/"

@@ -4,6 +4,41 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.58` - 2026-05-03
+
+### Added
+
+**Distribution**
+
+- Bundled `con-cli` with every release artifact. macOS now ships it inside the
+  app bundle and exposes it through Homebrew/script installs; Linux tarballs
+  install both `con` and `con-cli`; Windows ZIP/script installs include
+  `con-app.exe` and `con-cli.exe`.
+- Added a conservative macOS launch-time self-heal for `~/.local/bin/con-cli`
+  so manual-DMG installs and Sparkle-updated app bundles converge to the same
+  CLI availability as installer/Homebrew installs without overwriting
+  user-managed binaries.
+- Added release verification for the macOS app bundle so a signed/notarized
+  build cannot ship without the control-plane CLI.
+- Added blocking release gates for installer/update safety. macOS and Linux
+  release jobs now verify artifact layout before upload; Windows verifies the
+  ZIP contains both `con-app.exe` and `con-cli.exe`; the finalizer refuses to
+  publish a draft unless all expected assets, appcasts, and gh-pages installer
+  scripts are present and point at the same tag.
+- Tightened those release gates after review: appcasts are now parsed as XML,
+  each macOS architecture publishes its own checksum asset, the finalizer runs
+  from the tagged revision, and the macOS CLI shim ignores transient DMG/test
+  app bundles.
+- Hardened internal `v*-dev.*` release behavior so dev smoke tags are scoped to
+  dev app names/bundle ids, never embed/update stable/beta appcasts, and never
+  update Homebrew casks while the final gate still validates their artifact
+  shape.
+- Made the release finalizer sync hosted installer scripts from the tagged
+  commit before promotion, so dev smoke tags can test the real `install.sh` /
+  `install.ps1` path without moving beta/stable appcasts or Homebrew casks.
+- Documented that `con-cli` is part of the normal install path for surface
+  orchestrators such as `pi-interactive-subagents`.
+
 ## `v0.1.0-beta.57` - 2026-05-03
 
 ### Added
