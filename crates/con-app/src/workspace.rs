@@ -11,8 +11,8 @@ use gpui::{prelude::FluentBuilder as _, *};
 #[cfg(target_os = "macos")]
 use gpui_component::Theme;
 use gpui_component::{
-    ActiveTheme,
-    input::{InputEvent, InputState},
+    ActiveTheme, Sizable,
+    input::{Escape as InputEscape, Input, InputEvent, InputState},
     tooltip::Tooltip,
 };
 use serde_json::json;
@@ -284,6 +284,12 @@ use con_core::{
     TabSummaryRequest,
 };
 
+/// Inline rename editor for the horizontal tab strip.
+struct TabRenameEditor {
+    tab_index: usize,
+    input: Entity<InputState>,
+}
+
 struct Tab {
     pane_tree: PaneTree,
     title: String,
@@ -470,6 +476,8 @@ pub struct ConWorkspace {
     window_close_prepared: bool,
     /// Ordered, coalescing session persistence worker.
     session_save_tx: crossbeam_channel::Sender<SessionSaveRequest>,
+    /// Inline rename state for the horizontal tab strip.
+    tab_rename: Option<TabRenameEditor>,
     /// Drop slot (0..=N) tracked while a DraggedTab is in flight over
     /// the horizontal tab strip. Slot K = "insert before tab K".
     tab_strip_drop_slot: Option<usize>,
@@ -1550,6 +1558,7 @@ impl ConWorkspace {
             workspace_handle: cx.weak_entity(),
             window_close_prepared: false,
             session_save_tx,
+            tab_rename: None,
             tab_strip_drop_slot: None,
         }
     }
@@ -4846,16 +4855,52 @@ impl ConWorkspace {
     }
 
     /// Begin an inline rename for the tab at `index` in the horizontal strip.
-    /// Delegates to the sidebar's rename flow (which handles the input widget
-    /// and emits `SidebarRename` when confirmed).
+    /// Begin an inline rename for the tab at `index` in the horizontal strip.
+    /// Creates a local InputState that replaces the tab title in the strip.
     fn begin_tab_rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.get(index) else {
             return;
         };
-        let session_id = tab.summary_id;
-        self.sidebar.update(cx, |sidebar, cx| {
-            sidebar.start_rename_by_id(session_id, window, cx);
+        // Derive the current display name the same way the strip does.
+        let terminal = tab.pane_tree.focused_terminal();
+        let title = terminal.title(cx).unwrap_or_else(|| tab.title.clone());
+        let initial = tab.user_label.clone().unwrap_or(title);
+
+        let input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_value(&initial, window, cx);
+            state.set_placeholder("Tab name", window, cx);
+            state
         });
+
+        cx.subscribe_in(&input, window, {
+            move |this, input_entity, event: &InputEvent, _window, cx| {
+                if !matches!(event, InputEvent::PressEnter { .. }) {
+                    return;
+                }
+                let value = input_entity.read(cx).value().to_string();
+                let label = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(value.trim().to_string())
+                };
+                if let Some(tab) = this.tabs.get_mut(index) {
+                    tab.user_label = label;
+                }
+                this.tab_rename = None;
+                this.sync_sidebar(cx);
+                this.save_session(cx);
+                cx.notify();
+            }
+        })
+        .detach();
+
+        input.update(cx, |state, cx| state.focus(window, cx));
+        self.tab_rename = Some(TabRenameEditor {
+            tab_index: index,
+            input,
+        });
+        cx.notify();
     }
 
     fn on_sidebar_close_others(
@@ -10362,6 +10407,9 @@ impl Render for ConWorkspace {
         let show_horizontal_tabs = self.horizontal_tabs_visible();
         let tab_count = self.tabs.len();
         let tab_strip_drop_slot = self.tab_strip_drop_slot;
+        // Snapshot rename state for this render frame.
+        let renaming_tab_index = self.tab_rename.as_ref().map(|r| r.tab_index);
+        let rename_input = self.tab_rename.as_ref().map(|r| r.input.clone());
         let mut tabs_container = div()
             .id("tab-strip-container")
             .flex()
@@ -10601,6 +10649,27 @@ impl Render for ConWorkspace {
                 );
 
                 tab_content = tab_content.child(close_button);
+
+                // When this tab is being renamed, replace the title text
+                // with an inline Input. Escape cancels; Enter confirms
+                // (handled in begin_tab_rename's subscribe_in).
+                let is_renaming = renaming_tab_index == Some(index);
+                if is_renaming {
+                    if let Some(input) = rename_input.clone() {
+                        tab_content = div()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.0))
+                            .w_full()
+                            .min_w_0()
+                            .on_action(cx.listener(|this, _: &InputEscape, _, cx| {
+                                this.tab_rename = None;
+                                cx.notify();
+                            }))
+                            .child(Input::new(&input).small().appearance(false));
+                    }
+                }
+
                 tabs_container = tabs_container.child(tab_el.child(tab_content));
             }
         }
