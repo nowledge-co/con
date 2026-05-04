@@ -211,6 +211,13 @@ if (-not (Test-Path $exePath)) {
 Write-Host "`r$(' ' * 40)`r" -NoNewline
 Pass "installed  $DIM$InstallRoot$RESET"
 
+$cliPath = Join-Path $InstallRoot 'con-cli.exe'
+if (Test-Path $cliPath) {
+    Pass "installed  $DIM$cliPath$RESET"
+} else {
+    Write-Host "   $DIM$MID$RESET  con-cli.exe is not bundled in this release artifact"
+}
+
 # --- PATH (HKCU) ------------------------------------------------------------
 # Persist in the user Environment registry hive so new shells pick it
 # up. Current session gets the updated PATH too via `[Environment]::...`.

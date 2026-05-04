@@ -36,6 +36,8 @@ jobs:
           channel="stable"
           if [[ "$version" == *"-beta."* ]]; then
             channel="beta"
+          elif [[ "$version" == *"-dev."* ]]; then
+            channel="dev"
           fi
           echo "version=$version" >>"$GITHUB_OUTPUT"
           echo "channel=$channel" >>"$GITHUB_OUTPUT"
@@ -98,6 +100,25 @@ jobs:
           APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
           APPLE_NOTARY_API_KEY_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_BASE64 }}
         run: ./scripts/macos/release.sh
+
+      - name: Verify release artifact contract
+        shell: bash
+        env:
+          CON_CHANNEL: ${{ steps.meta.outputs.channel }}
+          CON_APP_VERSION: ${{ steps.meta.outputs.version }}
+          CON_BUILD_NUMBER: ${{ github.run_number }}
+          CON_ARCH: ${{ matrix.arch }}
+          CON_RUST_TARGET: ${{ matrix.rust_target }}
+          CON_SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
+        run: |
+          set -euo pipefail
+          source ./scripts/macos/common.sh
+          setup_release_env
+          ./scripts/release/verify-artifacts.sh macos \
+            "$CON_APP_BUNDLE_PATH" \
+            "$CON_APP_ZIP_PATH" \
+            "$CON_DMG_PATH" \
+            "$CON_CHECKSUM_PATH"
 
       - name: Upload notarized artifacts
         uses: actions/upload-artifact@v5
@@ -178,7 +199,7 @@ jobs:
             echo "Uploading: $file"
             gh release upload "$tag" "$file" --clobber
           done < <(find release-artifacts -type f \
-            \( -name '*.zip' -o -name '*.dmg' -o -name 'SHA256SUMS.txt' \) \
+            \( -name '*.zip' -o -name '*.dmg' -o -name 'SHA256SUMS-macos-*.txt' \) \
             -print0)
 
   update-appcast:
@@ -198,6 +219,8 @@ jobs:
           channel="stable"
           if [[ "$version" == *"-beta."* ]]; then
             channel="beta"
+          elif [[ "$version" == *"-dev."* ]]; then
+            channel="dev"
           fi
           marketing="${version%%[-+]*}"
           echo "version=$version" >>"$GITHUB_OUTPUT"
@@ -206,6 +229,7 @@ jobs:
 
       - name: Check Sparkle signing key
         id: sparkle
+        if: steps.meta.outputs.channel != 'dev'
         shell: bash
         env:
           SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
@@ -218,18 +242,18 @@ jobs:
           fi
 
       - name: Download Sparkle tools
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: ./scripts/sparkle/download.sh
 
       - name: Download release artifacts
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         uses: actions/download-artifact@v5
         with:
           path: release-artifacts
 
       - name: Checkout gh-pages
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -251,7 +275,7 @@ jobs:
           }
 
       - name: Sign artifacts and update appcasts
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         env:
           SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
@@ -309,7 +333,7 @@ jobs:
           done
 
       - name: Push appcast to gh-pages
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -343,16 +367,20 @@ jobs:
           channel="stable"
           if [[ "$version" == *"-beta."* ]]; then
             channel="beta"
+          elif [[ "$version" == *"-dev."* ]]; then
+            channel="dev"
           fi
           echo "version=$version" >>"$GITHUB_OUTPUT"
           echo "channel=$channel" >>"$GITHUB_OUTPUT"
 
       - name: Download release artifacts
+        if: steps.meta.outputs.channel != 'dev'
         uses: actions/download-artifact@v5
         with:
           path: release-artifacts
 
       - name: Update cask formula
+        if: steps.meta.outputs.channel != 'dev'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -430,6 +458,7 @@ jobs:
             depends_on macos: ">= :catalina"
 
             app "${app_name}.app"
+            binary "#{appdir}/${app_name}.app/Contents/MacOS/con-cli", target: "con-cli"
 
             zap trash: [
               "~/.config/con",

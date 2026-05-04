@@ -1,0 +1,32 @@
+name: docs-website-rebuild
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "README.md"
+      - "CHANGELOG.md"
+      - "HACKING.md"
+      - "DESIGN.md"
+      - "LICENSE"
+      - "docs/**"
+  workflow_dispatch:
+
+jobs:
+  trigger:
+    name: trigger con.nowledge.co docs rebuild
+    runs-on: ubuntu-latest
+    env:
+      CON_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.CON_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docs manifest
+        run: python3 scripts/docs/validate-manifest.py
+      - name: Trigger Vercel deploy hook
+        if: env.CON_WEBSITE_VERCEL_DEPLOY_HOOK_URL != ''
+        run: curl -fsS -X POST "$CON_WEBSITE_VERCEL_DEPLOY_HOOK_URL"
+      - name: Explain missing deploy hook
+        if: env.CON_WEBSITE_VERCEL_DEPLOY_HOOK_URL == ''
+        run: |
+          echo "Set CON_WEBSITE_VERCEL_DEPLOY_HOOK_URL to a Vercel Deploy Hook for nowledge-co/con-website."
+          echo "Docs were validated, but the website rebuild was not triggered."

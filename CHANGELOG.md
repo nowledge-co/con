@@ -4,6 +4,44 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.59` - 2026-05-04
+
+### Added
+
+**Distribution**
+
+- Bundled `con-cli` with every release artifact. macOS now ships it inside the
+  app bundle and exposes it through Homebrew/script installs; Linux tarballs
+  install both `con` and `con-cli`; Windows ZIP/script installs include
+  `con-app.exe` and `con-cli.exe`.
+- Added a conservative macOS launch-time self-heal for `~/.local/bin/con-cli`
+  so manual-DMG installs and Sparkle-updated app bundles converge to the same
+  CLI availability as installer/Homebrew installs without overwriting
+  user-managed binaries.
+- Added release verification for the macOS app bundle so a signed/notarized
+  build cannot ship without the control-plane CLI.
+- Added blocking release gates for installer/update safety. macOS and Linux
+  release jobs now verify artifact layout before upload; Windows verifies the
+  ZIP contains both `con-app.exe` and `con-cli.exe`; the finalizer refuses to
+  publish a draft unless all expected assets, appcasts, and gh-pages installer
+  scripts are present and point at the same tag.
+- Tightened those release gates after review: appcasts are now parsed as XML,
+  each macOS architecture publishes its own checksum asset, the finalizer runs
+  from the tagged revision, and the macOS CLI shim ignores transient DMG/test
+  app bundles.
+- Hardened internal `v*-dev.*` release behavior so dev smoke tags are scoped to
+  dev app names/bundle ids, never embed/update stable/beta appcasts, and never
+  update Homebrew casks while the final gate still validates their artifact
+  shape.
+- Made the release finalizer sync hosted installer scripts from the tagged
+  commit before promotion, so dev smoke tags can test the real `install.sh` /
+  `install.ps1` path without moving beta/stable appcasts or Homebrew casks.
+- Fixed macOS release signing order so the bundled `con-cli` executable is
+  signed before the main app executable and notarized DMGs are not blocked by
+  unsigned nested code.
+- Documented that `con-cli` is part of the normal install path for surface
+  orchestrators such as `pi-interactive-subagents`.
+
 ## `v0.1.0-beta.57` - 2026-05-03
 
 ### Added
@@ -39,8 +77,10 @@ con is still pre-release, so entries may group related beta work while the produ
 - Fixed cross-platform layout export so repo-relative `cwd` values are written with stable slash-separated paths on Windows, macOS, and Linux.
 - Avoided capturing terminal text when exporting layout profiles, since exported profiles deliberately exclude runtime text history.
 - Honored the **Restore Terminal Text** privacy setting when adding tabs from an imported layout profile, and prevented imported inactive native terminal views from staying visible behind the active tab.
-- Existing config files that predate **Restore Terminal Text** no longer silently opt into terminal-text retention on upgrade. New installs still enable continuity by default, and existing users can turn it on from Settings -> General -> Continuity.
+- Kept terminal-text continuity default-on for existing beta users as well as new installs, while preserving the explicit Settings opt-out and **Clear Restored Terminal History** wipe action.
 - Rejected edited layout profiles that define multiple panes without a layout tree, and made Con synthesize a safe split tree when exporting legacy private sessions that still have panes without layout metadata.
+- Persisted shell cwd changes as soon as Ghostty reports OSC 7/PWD, so restored tabs, panes, and surfaces come back in the last reported directory instead of depending on a later unrelated save or graceful quit.
+- Kept restored terminal text out of cwd decisions. Con now treats Ghostty's reported PWD as the authoritative path, avoiding stale restored prompt text overriding the live shell directory.
 
 **Terminal, Windows and Linux Backends**
 
@@ -50,6 +90,7 @@ con is still pre-release, so entries may group related beta work while the produ
 **Terminal, macOS**
 
 - Made the embedded Ghostty initial-output restore hook fail soft for local best-effort builds while keeping macOS release packaging fail-hard, so upstream anchor drift blocks a release instead of silently shipping without terminal text seeding.
+- Fixed cwd restore for macOS privacy-protected directories such as Documents and Downloads. Con's embedded Ghostty path now trusts the shell-integration cwd passed by the app instead of rejecting it during directory open/stat preflight, which macOS may deny even when the shell can `cd` there.
 
 ## `v0.1.0-beta.54` - 2026-05-02
 

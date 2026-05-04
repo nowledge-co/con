@@ -3,9 +3,10 @@
 # Usage: curl -fsSL https://con-releases.nowledge.co/install.sh | sh
 #
 # macOS path: download the signed DMG, mount it, copy the bundled
-#   `con*.app` into /Applications, launch it. Same flow that's been
+#   `con*.app` into /Applications, expose the bundled `con-cli`
+#   from ~/.local/bin, then launch it. Same app flow that's been
 #   live since the macOS DMG release pipeline shipped.
-# Linux path: download the channel tarball, extract `con` into
+# Linux path: download the channel tarball, extract `con` and `con-cli` into
 #   ~/.local/bin, drop a `.desktop` entry into ~/.local/share/applications
 #   so it shows up in your launcher, and `chmod +x` the binary. The
 #   binary is self-contained — no shared libs other than the GPUI Linux
@@ -184,6 +185,31 @@ if [ "$os" = "macos" ]; then
   printf "\r\033[K"
   pass "installed  ${DIM}${install_dir}/${app_name}${R}"
 
+  cli_src="${target}/Contents/MacOS/con-cli"
+  cli_installed=0
+  if [ -x "$cli_src" ]; then
+    bin_dir="${HOME}/.local/bin"
+    mkdir -p "$bin_dir"
+    ln -sf "$cli_src" "${bin_dir}/con-cli" \
+      || fail "could not install con-cli into ${bin_dir}"
+    pass "installed  ${DIM}${bin_dir}/con-cli${R}"
+    cli_installed=1
+  else
+    pass "${DIM}note:${R}  ${B}con-cli${R} ${DIM}is not bundled in this release artifact${R}"
+  fi
+
+  if [ "$cli_installed" = "1" ]; then
+    case ":${PATH:-}:" in
+      *":${HOME}/.local/bin:"*) ;;
+      *)
+        printf "\n"
+        pass "${DIM}note:${R}  ${B}~/.local/bin${R} ${DIM}is not on your PATH yet${R}"
+        printf "          ${DIM}add this to your shell rc:${R}\n"
+        printf "          ${DIM}export PATH=\"\$HOME/.local/bin:\$PATH\"${R}\n"
+        ;;
+    esac
+  fi
+
   # Launch
   open_name="${app_name%.app}"
   printf "\n"
@@ -219,6 +245,7 @@ pass "extracted"
 # The release tarball contains:
 #   con-<version>-linux-<arch>/
 #     con            (the binary)
+#     con-cli        (control-plane CLI)
 #     LICENSE
 #     README.md
 #     con.desktop
@@ -257,9 +284,9 @@ target_bin="${bin_dir}/con"
 # directory entry; the running con keeps painting on the old
 # inode and the next launch picks up the new binary.
 tmp_bin="${bin_dir}/.con.tmp.$$"
-# Layer the tmp-bin cleanup on top of the existing tmpdir trap (set
-# above when we created `$tmpdir`), don't replace it. Both run on
-# any exit path; mv removes tmp_bin on success so the rm is a no-op.
+# Keep one EXIT trap that removes the download staging dir and any
+# partially staged binary. If con-cli is present below, the trap is
+# replaced once with the same cleanup plus tmp_cli.
 trap 'rm -rf "$tmpdir"; rm -f "$tmp_bin"' EXIT
 cp "$staged_root/con" "$tmp_bin" \
   || fail "could not copy con binary"
@@ -267,6 +294,20 @@ chmod +x "$tmp_bin" \
   || fail "could not mark con binary executable"
 mv -f "$tmp_bin" "$target_bin" \
   || fail "could not install con binary"
+
+if [ -f "$staged_root/con-cli" ]; then
+  target_cli="${bin_dir}/con-cli"
+  tmp_cli="${bin_dir}/.con-cli.tmp.$$"
+  trap 'rm -rf "$tmpdir"; rm -f "$tmp_bin" "$tmp_cli"' EXIT
+  cp "$staged_root/con-cli" "$tmp_cli" \
+    || fail "could not copy con-cli binary"
+  chmod +x "$tmp_cli" \
+    || fail "could not mark con-cli binary executable"
+  mv -f "$tmp_cli" "$target_cli" \
+    || fail "could not install con-cli binary"
+else
+  target_cli=""
+fi
 
 # Desktop entry — handles "con shows up in the launcher" and
 # "double-clicking a `con://` URL". The tarball ships a templated
@@ -295,6 +336,9 @@ fi
 
 printf "\r\033[K"
 pass "installed  ${DIM}${target_bin}${R}"
+if [ -n "${target_cli:-}" ]; then
+  pass "installed  ${DIM}${target_cli}${R}"
+fi
 
 # ── PATH check ──────────────────────────────────────────────────────────────
 

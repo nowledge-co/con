@@ -16,11 +16,11 @@ require_cmd mkdir
 
 mkdir -p "$CON_DIST_ROOT"
 
-log "Building con for $CON_RUST_TARGET"
+log "Building con and con-cli for $CON_RUST_TARGET"
 (
   cd "$REPO_ROOT"
   CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT="${CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT:-1}" \
-    cargo build --locked --release --target "$CON_RUST_TARGET" -p con
+    cargo build --locked --release --target "$CON_RUST_TARGET" -p con -p con-cli
 )
 
 app_root="$CON_APP_BUNDLE_PATH"
@@ -28,6 +28,7 @@ contents_dir="$app_root/Contents"
 macos_dir="$contents_dir/MacOS"
 resources_dir="$contents_dir/Resources"
 binary_path="$REPO_ROOT/target/$CON_RUST_TARGET/release/con"
+cli_binary_path="$REPO_ROOT/target/$CON_RUST_TARGET/release/con-cli"
 
 rm -rf "$app_root"
 mkdir -p "$macos_dir" "$resources_dir"
@@ -35,6 +36,8 @@ mkdir -p "$macos_dir" "$resources_dir"
 log "Creating app bundle at $app_root"
 rsync -a "$binary_path" "$macos_dir/con"
 chmod 755 "$macos_dir/con"
+rsync -a "$cli_binary_path" "$macos_dir/con-cli"
+chmod 755 "$macos_dir/con-cli"
 
 ghostty_resources_dir="$(find "$REPO_ROOT/target/$CON_RUST_TARGET/release/build" -path '*/out/ghostty-src/zig-out/share/ghostty' | head -n 1)"
 if [[ -z "$ghostty_resources_dir" || ! -d "$ghostty_resources_dir" ]]; then

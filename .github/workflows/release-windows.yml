@@ -140,8 +140,17 @@ jobs:
         run: |
           cargo wbuild -p con --release
 
+      - name: Build con-cli
+        id: build_cli
+        shell: pwsh
+        env:
+          CON_RELEASE_CHANNEL: ${{ steps.meta.outputs.channel }}
+          CON_RELEASE_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          cargo build -p con-cli --release
+
       - name: Diagnose build failure
-        if: failure() && steps.build.conclusion == 'failure'
+        if: failure() && (steps.build.conclusion == 'failure' || steps.build_cli.conclusion == 'failure')
         shell: pwsh
         # Zig reports `FileNotFound` for any CreateProcess failure,
         # including `STATUS_DLL_NOT_FOUND` and other loader errors. That
@@ -246,6 +255,7 @@ jobs:
           $StagingDir = "dist\con-$Version-windows-x86_64"
           New-Item -ItemType Directory -Force -Path $StagingDir | Out-Null
           Copy-Item "target\release\con-app.exe" "$StagingDir\con-app.exe"
+          Copy-Item "target\release\con-cli.exe" "$StagingDir\con-cli.exe"
           if (Test-Path "README.md")  { Copy-Item "README.md"  $StagingDir }
           if (Test-Path "LICENSE")    { Copy-Item "LICENSE"    $StagingDir }
           if (Test-Path "LICENSE.md") { Copy-Item "LICENSE.md" $StagingDir }
@@ -255,6 +265,34 @@ jobs:
           "$Sha  $(Split-Path -Leaf $Zip)" | Out-File "dist\SHA256SUMS-windows.txt" -Encoding ascii
           "zip=$Zip"                          | Out-File $env:GITHUB_OUTPUT -Append
           "sha256=dist\SHA256SUMS-windows.txt" | Out-File $env:GITHUB_OUTPUT -Append
+
+      - name: Verify release artifact contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $Zip = "${{ steps.package.outputs.zip }}"
+          $Sha = "${{ steps.package.outputs.sha256 }}"
+          if (-not (Test-Path $Zip)) { throw "missing ZIP: $Zip" }
+          if (-not (Test-Path $Sha)) { throw "missing checksum: $Sha" }
+
+          $Expected = (Select-String -Path $Sha -Pattern ([regex]::Escape((Split-Path -Leaf $Zip))) |
+              Select-Object -First 1).Line -split '\s+' | Select-Object -First 1
+          if (-not $Expected) { throw "checksum file does not reference $(Split-Path -Leaf $Zip)" }
+          $Actual = (Get-FileHash -Algorithm SHA256 $Zip).Hash.ToLower()
+          if ($Actual -ne $Expected.ToLower()) {
+              throw "checksum mismatch for $Zip (expected $Expected, got $Actual)"
+          }
+
+          $Extract = Join-Path $env:RUNNER_TEMP "con-release-verify-$([System.Guid]::NewGuid())"
+          New-Item -ItemType Directory -Force -Path $Extract | Out-Null
+          Expand-Archive -Path $Zip -DestinationPath $Extract -Force
+
+          $App = Join-Path $Extract 'con-app.exe'
+          $Cli = Join-Path $Extract 'con-cli.exe'
+          if (-not (Test-Path $App)) { throw 'con-app.exe missing from Windows ZIP' }
+          if (-not (Test-Path $Cli)) { throw 'con-cli.exe missing from Windows ZIP' }
+          & $Cli --help | Out-Null
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
@@ -351,6 +389,8 @@ jobs:
           channel="stable"
           if [[ "$version" == *"-beta."* ]]; then
             channel="beta"
+          elif [[ "$version" == *"-dev."* ]]; then
+            channel="dev"
           fi
           marketing="${version%%[-+]*}"
           echo "version=$version"     >>"$GITHUB_OUTPUT"
@@ -359,6 +399,7 @@ jobs:
 
       - name: Check Sparkle signing key
         id: sparkle
+        if: steps.meta.outputs.channel != 'dev'
         shell: bash
         env:
           SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
@@ -371,19 +412,19 @@ jobs:
           fi
 
       - name: Download Sparkle tools
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: ./scripts/sparkle/download.sh
 
       - name: Download Windows release artifact
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         uses: actions/download-artifact@v5
         with:
           name: windows-x86_64
           path: release-artifacts
 
       - name: Checkout gh-pages
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -403,7 +444,7 @@ jobs:
           }
 
       - name: Sign ZIP and update Windows appcast
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         env:
           SPARKLE_SIGNING_KEY: ${{ secrets.SPARKLE_SIGNING_KEY }}
@@ -465,7 +506,7 @@ jobs:
           echo "Updated appcast: ${channel}-windows-x86_64.xml (build $build_number)"
 
       - name: Push appcast to gh-pages
-        if: steps.sparkle.outputs.available == 'true'
+        if: steps.meta.outputs.channel != 'dev' && steps.sparkle.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail

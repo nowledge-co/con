@@ -606,6 +606,7 @@ fn apply_embedded_initial_output_patch(ghostty_dir: &Path) -> bool {
 fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), String> {
     let embedded = ghostty_dir.join("src/apprt/embedded.zig");
     let surface = ghostty_dir.join("src/Surface.zig");
+    let exec = ghostty_dir.join("src/termio/Exec.zig");
     let header = ghostty_dir.join("include/ghostty.h");
 
     patch_file_once(
@@ -625,11 +626,27 @@ fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), Str
         )],
     )?;
     patch_file_once(
+        &embedded,
+        "Con: macOS may deny directory open/stat preflight for privacy-protected cwd",
+        &[(
+            "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n                var dir = std.fs.openDirAbsolute(wd, .{}) catch |err| {\n                    log.warn(\n                        \"error opening requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n                defer dir.close();\n\n                const stat = dir.stat() catch |err| {\n                    log.warn(\n                        \"failed to stat requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n\n                if (stat.kind != .directory) {\n                    log.warn(\n                        \"requested working directory is not a directory dir={s}\",\n                        .{wd},\n                    );\n                    break :wd;\n                }\n\n                var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                if (wd_val.finalize(config.arenaAlloc())) |_| {\n                    config.@\"working-directory\" = wd_val;\n                } else |err| {\n                    log.warn(\n                        \"error finalizing working directory config dir={s} err={}\",\n                        .{ wd_val.path, err },\n                    );\n                }\n            }\n",
+            "            const wd = std.mem.sliceTo(c_wd, 0);\n            if (wd.len > 0) wd: {\n                if (comptime builtin.os.tag.isDarwin()) {\n                    // Con: macOS may deny directory open/stat preflight for privacy-protected cwd\n                    // (Documents, Downloads) even though chdir in the spawned shell succeeds. The\n                    // embedder already passes an absolute cwd captured from shell integration, so\n                    // trust it here and let process spawn be the authoritative failure boundary.\n                    var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                    if (wd_val.finalize(config.arenaAlloc())) |_| {\n                        config.@\"working-directory\" = wd_val;\n                    } else |err| {\n                        log.warn(\n                            \"error finalizing working directory config dir={s} err={}\",\n                            .{ wd_val.path, err },\n                        );\n                    }\n                    break :wd;\n                }\n\n                var dir = std.fs.openDirAbsolute(wd, .{}) catch |err| {\n                    log.warn(\n                        \"error opening requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n                defer dir.close();\n\n                const stat = dir.stat() catch |err| {\n                    log.warn(\n                        \"failed to stat requested working directory dir={s} err={}\",\n                        .{ wd, err },\n                    );\n                    break :wd;\n                };\n\n                if (stat.kind != .directory) {\n                    log.warn(\n                        \"requested working directory is not a directory dir={s}\",\n                        .{wd},\n                    );\n                    break :wd;\n                }\n\n                var wd_val: configpkg.WorkingDirectory = .{ .path = wd };\n                if (wd_val.finalize(config.arenaAlloc())) |_| {\n                    config.@\"working-directory\" = wd_val;\n                } else |err| {\n                    log.warn(\n                        \"error finalizing working directory config dir={s} err={}\",\n                        .{ wd_val.path, err },\n                    );\n                }\n            }\n",
+        )],
+    )?;
+    patch_file_once(
         &surface,
         "initial_output_restore: ?[]const u8",
         &[(
             "    rt_surface: *apprt.runtime.Surface,\n) !void {\n",
             "    rt_surface: *apprt.runtime.Surface,\n    initial_output_restore: ?[]const u8,\n) !void {\n",
+        )],
+    )?;
+    patch_file_once(
+        &exec,
+        "Con: trust macOS cwd after embedded surface validation",
+        &[(
+            "            if (std.fs.cwd().access(proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
+            "            if (comptime builtin.os.tag.isDarwin()) {\n                // Con: trust macOS cwd after embedded surface validation. Privacy-protected\n                // directories can fail access/open preflight while the child shell can still\n                // chdir there and preserve the user's restored working directory.\n                break :cwd proposed;\n            }\n\n            if (std.fs.cwd().access(proposed, .{})) {\n                break :cwd proposed;\n            } else |err| {\n                log.warn(\"cannot access cwd, ignoring: {}\", .{err});\n                break :cwd null;\n            }\n",
         )],
     )?;
     patch_file_once(
@@ -658,6 +675,7 @@ fn try_apply_embedded_initial_output_patch(ghostty_dir: &Path) -> Result<(), Str
     println!("cargo:rustc-cfg=con_ghostty_embedded_initial_output");
     println!("cargo:rerun-if-changed={}", embedded.display());
     println!("cargo:rerun-if-changed={}", surface.display());
+    println!("cargo:rerun-if-changed={}", exec.display());
     println!("cargo:rerun-if-changed={}", header.display());
     Ok(())
 }

@@ -56,6 +56,7 @@ pub enum GhosttySplitDirection {
 pub enum GhosttySurfaceEvent {
     SplitRequest(GhosttySplitDirection),
     OpenUrl(String),
+    PwdChanged(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

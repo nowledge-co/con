@@ -107,10 +107,10 @@ derive_build_number() {
 setup_release_env() {
   export CON_CHANNEL="${CON_CHANNEL:-stable}"
   case "$CON_CHANNEL" in
-    stable|beta)
+    stable|beta|dev)
       ;;
     *)
-      fail "CON_CHANNEL must be 'stable' or 'beta', got: $CON_CHANNEL"
+      fail "CON_CHANNEL must be 'stable', 'beta', or 'dev', got: $CON_CHANNEL"
       ;;
   esac
 
@@ -129,20 +129,27 @@ setup_release_env() {
   if [[ "$CON_CHANNEL" == "beta" ]]; then
     default_bundle_id="${CON_BUNDLE_ID_BASE}.beta"
     default_app_name="con Beta"
+  elif [[ "$CON_CHANNEL" == "dev" ]]; then
+    default_bundle_id="${CON_BUNDLE_ID_BASE}.dev"
+    default_app_name="con Dev"
   fi
   export CON_BUNDLE_ID="${CON_BUNDLE_ID:-$default_bundle_id}"
   export CON_APP_NAME="${CON_APP_NAME:-$default_app_name}"
 
   # Derive Sparkle feed URL from channel + arch if not explicitly set.
+  # Dev builds never poll and must not inherit a public feed URL from
+  # the caller's environment.
   # Pattern: https://con-releases.nowledge.co/appcast/{channel}-macos-{arch}.xml
-  if [[ -z "${CON_SPARKLE_FEED_URL:-}" && -n "${CON_SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
+  if [[ "$CON_CHANNEL" == "dev" ]]; then
+    unset CON_SPARKLE_FEED_URL
+  elif [[ -z "${CON_SPARKLE_FEED_URL:-}" && -n "${CON_SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
     export CON_SPARKLE_FEED_URL="https://con-releases.nowledge.co/appcast/${CON_CHANNEL}-macos-${CON_ARCH}.xml"
   fi
 
   export CON_APP_BUNDLE_PATH="$CON_DIST_ROOT/$CON_APP_NAME.app"
   export CON_APP_ZIP_PATH="$CON_DIST_ROOT/${CON_APP_NAME// /-}-${CON_APP_VERSION}-macos-${CON_ARCH}.zip"
   export CON_DMG_PATH="$CON_DIST_ROOT/${CON_APP_NAME// /-}-${CON_APP_VERSION}-macos-${CON_ARCH}.dmg"
-  export CON_CHECKSUM_PATH="$CON_DIST_ROOT/SHA256SUMS.txt"
+  export CON_CHECKSUM_PATH="$CON_DIST_ROOT/SHA256SUMS-macos-$CON_ARCH.txt"
 }
 
 signing_identity() {
