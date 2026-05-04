@@ -30,7 +30,7 @@ If you're an old-school terminal user and only want enough AI harness when neede
 
 - a terminal that's fast, elegant
 - a built-in AI harness that can read context, ask before acting, and work directly in the terminal you can already see
-- terminal-native workflows for anything in CLI, including`ssh`, `tmux`, and coding-agent CLIs
+- terminal-native workflows for anything in CLI, with `ssh`, `tmux`, and coding-agent aware ocherstration
 
 ## Status
 
