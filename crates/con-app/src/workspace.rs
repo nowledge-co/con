@@ -10444,28 +10444,26 @@ impl Render for ConWorkspace {
                 let is_active = index == self.active_tab;
                 let needs_attention = tab.needs_attention && !is_active;
                 let terminal = tab.pane_tree.focused_terminal();
-                let title = terminal.title(cx).unwrap_or_else(|| tab.title.clone());
                 let session_id = tab.summary_id;
-                let terminal_for_icon = tab.pane_tree.focused_terminal();
-                let hostname_for_icon =
-                    self.effective_remote_host_for_tab(index, terminal_for_icon, cx);
-                let title_for_icon = terminal_for_icon.title(cx);
-                let dir_for_icon = terminal_for_icon.current_dir(cx);
-                let tab_icon = smart_tab_presentation(
+                let hostname_for_tab =
+                    self.effective_remote_host_for_tab(index, terminal, cx);
+                let title_for_tab = terminal.title(cx);
+                let dir_for_tab = terminal.current_dir(cx);
+                let presentation = smart_tab_presentation(
                     tab.user_label.as_deref(),
                     tab.ai_label.as_deref(),
                     tab.ai_icon.map(|k| k.svg_path()),
-                    hostname_for_icon.as_deref(),
-                    title_for_icon.as_deref(),
-                    dir_for_icon.as_deref(),
+                    hostname_for_tab.as_deref(),
+                    title_for_tab.as_deref(),
+                    dir_for_tab.as_deref(),
                     index,
-                )
-                .icon;
+                );
+                let tab_icon = presentation.icon;
 
-                let display_title: String = if title.chars().count() > 24 {
-                    format!("{}…", &title[..title.floor_char_boundary(22)])
+                let display_title: String = if presentation.name.chars().count() > 24 {
+                    format!("{}…", &presentation.name[..presentation.name.floor_char_boundary(22)])
                 } else {
-                    title
+                    presentation.name
                 };
 
                 let close_id = ElementId::Name(format!("tab-close-{}", index).into());
