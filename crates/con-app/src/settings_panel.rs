@@ -4869,6 +4869,7 @@ impl Render for SettingsPanel {
                     }
                     "w" if event.keystroke.modifiers.platform => {
                         if this.standalone {
+                            this.revert_standalone_preview(cx);
                             window.remove_window();
                         } else {
                             this.save(window, cx);
