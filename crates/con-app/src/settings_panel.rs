@@ -2154,6 +2154,7 @@ impl SettingsPanel {
         // Write directly into config
         match field.as_str() {
             "global_summon" => self.config.keybindings.global_summon = binding,
+            "hotkey_window" => self.config.keybindings.hotkey_window = binding,
             "new_window" => self.config.keybindings.new_window = binding,
             "new_tab" => self.config.keybindings.new_tab = binding,
             "close_tab" => self.config.keybindings.close_tab = binding,
@@ -2189,6 +2190,7 @@ impl SettingsPanel {
     fn binding_value(&self, field: &str) -> &str {
         match field {
             "global_summon" => &self.config.keybindings.global_summon,
+            "hotkey_window" => &self.config.keybindings.hotkey_window,
             "new_window" => &self.config.keybindings.new_window,
             "new_tab" => &self.config.keybindings.new_tab,
             "close_tab" => &self.config.keybindings.close_tab,
@@ -4409,6 +4411,10 @@ impl SettingsPanel {
         let global_summon_enabled = self.config.keybindings.global_summon_enabled;
         let global_summon_value = self.config.keybindings.global_summon.clone();
         let global_summon_recording = recording.as_deref() == Some("global_summon");
+        let hotkey_window_enabled = self.config.keybindings.hotkey_window_enabled;
+        let hotkey_window_value = self.config.keybindings.hotkey_window.clone();
+        let hotkey_window_always_on_top = self.config.keybindings.hotkey_window_always_on_top;
+        let hotkey_window_recording = recording.as_deref() == Some("hotkey_window");
         let theme = cx.theme();
 
         let fixed_tab_card = card(theme, card_opacity).child(
@@ -4593,6 +4599,178 @@ impl SettingsPanel {
                 ),
         );
 
+        let hotkey_window_badge = if hotkey_window_recording {
+            div()
+                .min_h(px(28.0))
+                .px(px(10.0))
+                .flex()
+                .items_center()
+                .rounded(px(8.0))
+                .bg(theme.primary.opacity(0.10))
+                .text_color(theme.primary)
+                .text_size(px(11.5))
+                .font_weight(FontWeight::MEDIUM)
+                .child("Press shortcut…")
+                .into_any_element()
+        } else if !hotkey_window_value.trim().is_empty() {
+            crate::keycaps::keycaps_for_binding(&hotkey_window_value, theme)
+        } else {
+            div()
+                .min_h(px(28.0))
+                .px(px(10.0))
+                .flex()
+                .items_center()
+                .rounded(px(8.0))
+                .bg(theme.muted.opacity(0.08))
+                .text_size(px(11.5))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.muted_foreground)
+                .child("Not set")
+                .into_any_element()
+        };
+
+        let hotkey_window_card = card(theme, card_opacity)
+            .child(
+                div()
+                    .px(px(16.0))
+                    .py(px(13.0))
+                    .flex()
+                    .items_start()
+                    .justify_between()
+                    .gap(px(16.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .flex_1()
+                            .max_w(px(430.0))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("Hotkey Window"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .line_height(px(17.0))
+                                    .text_color(theme.muted_foreground.opacity(0.68))
+                                    .child("Show a dedicated floating Con window that slides down from the top of the screen."),
+                            ),
+                    )
+                    .child(
+                        div().pt(px(1.0)).child(
+                            Switch::new("hotkey-window-enabled")
+                                .checked(hotkey_window_enabled)
+                                .small()
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.config.keybindings.hotkey_window_enabled = *checked;
+                                    if *checked
+                                        && this.config.keybindings.hotkey_window.trim().is_empty()
+                                    {
+                                        this.config.keybindings.hotkey_window = "cmd-\\".to_string();
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
+                    ),
+            )
+            .child(row_separator(theme))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(16.0))
+                    .px(px(16.0))
+                    .py(px(11.0))
+                    .text_color(if hotkey_window_enabled {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.0))
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("Shortcut"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .line_height(px(15.0))
+                                    .text_color(theme.muted_foreground.opacity(0.62))
+                                    .child("Use a low-conflict macOS shortcut. Cmd-Backslash matches the requested default."),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("key-badge-hotkey-window")
+                            .min_w(px(112.0))
+                            .flex()
+                            .justify_end()
+                            .opacity(if hotkey_window_enabled { 1.0 } else { 0.45 })
+                            .cursor_pointer()
+                            .rounded(px(7.0))
+                            .px(px(4.0))
+                            .py(px(3.0))
+                            .hover(|s| s.bg(theme.muted.opacity(0.08)))
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                if this.config.keybindings.hotkey_window_enabled {
+                                    this.recording_key = Some("hotkey_window".to_string());
+                                    cx.notify();
+                                }
+                            }))
+                            .child(hotkey_window_badge),
+                    ),
+            )
+            .child(row_separator(theme))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(16.0))
+                    .px(px(16.0))
+                    .py(px(11.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.0))
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("Always on top"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .line_height(px(15.0))
+                                    .text_color(theme.muted_foreground.opacity(0.62))
+                                    .child("Keep the hotkey window above other apps while it is visible."),
+                            ),
+                    )
+                    .child(
+                        Switch::new("hotkey-window-always-on-top")
+                            .checked(hotkey_window_always_on_top)
+                            .disabled(!hotkey_window_enabled)
+                            .small()
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.config.keybindings.hotkey_window_always_on_top = *checked;
+                                crate::hotkey_window::set_always_on_top(*checked);
+                                cx.notify();
+                            })),
+                    ),
+            );
+
         section_content(
             "Keyboard Shortcuts",
             "Click a shortcut to record a new key combination.",
@@ -4605,6 +4783,7 @@ impl SettingsPanel {
                 .gap(px(8.0))
                 .child(group_label("Global", &theme))
                 .child(global_summon_card)
+                .child(hotkey_window_card)
                 .child(div().h(px(8.0)))
                 .child(group_label("General", &theme))
                 .child(general_card),
