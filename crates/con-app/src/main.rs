@@ -363,8 +363,26 @@ fn default_window_options(config: &con_core::Config, cx: &mut App) -> WindowOpti
 }
 
 #[cfg(target_os = "macos")]
+fn hotkey_window_bounds(cx: &mut App) -> WindowBounds {
+    let fallback_size = size(px(1440.0), px(480.0));
+    let fallback_bounds = Bounds::centered(None, fallback_size, cx);
+
+    let Some(display) = cx.primary_display() else {
+        return WindowBounds::Windowed(fallback_bounds);
+    };
+
+    let visible = display.visible_bounds();
+    let bounds = Bounds::new(
+        visible.origin,
+        size(visible.size.width, visible.size.height / 2.0),
+    );
+    WindowBounds::Windowed(bounds)
+}
+
+#[cfg(target_os = "macos")]
 fn hotkey_window_options(config: &con_core::Config, cx: &mut App) -> WindowOptions {
     let mut options = default_window_options(config, cx);
+    options.window_bounds = Some(hotkey_window_bounds(cx));
     options.titlebar = None;
     options
 }
@@ -483,6 +501,9 @@ pub(crate) fn open_con_window(
     exit_on_error: bool,
     cx: &mut App,
 ) {
+    #[cfg(target_os = "macos")]
+    crate::hotkey_window::ensure_created_for_app_run(cx);
+
     let window_options = default_window_options(&config, cx);
     cx.spawn(async move |cx| {
         if let Err(err) = cx.open_window(window_options, |window, cx| {
@@ -577,6 +598,16 @@ pub(crate) fn open_hotkey_window(config: con_core::Config, session: Session, cx:
 
 fn fresh_window_session_with_history() -> Session {
     fresh_window_session_with_history_for_cwd(None)
+}
+
+#[cfg(target_os = "macos")]
+fn default_hotkey_window_cwd() -> Option<std::path::PathBuf> {
+    dirs::home_dir()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn default_hotkey_window_cwd() -> Option<std::path::PathBuf> {
+    None
 }
 
 fn fresh_window_session_with_history_for_cwd(cwd: Option<std::path::PathBuf>) -> Session {

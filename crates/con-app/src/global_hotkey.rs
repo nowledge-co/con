@@ -161,9 +161,12 @@ extern "C" fn on_hotkey_window_pressed() {
             return;
         };
 
-        app.update(|cx| {
-            crate::hotkey_window::toggle(cx);
-        });
+        app.spawn(async move |cx| {
+            cx.update(|cx| {
+                crate::hotkey_window::toggle(cx);
+            });
+        })
+        .detach();
     });
 }
 
