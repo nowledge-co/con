@@ -357,6 +357,10 @@ pub struct ConWorkspace {
     sidebar: Entity<SessionSidebar>,
     tabs: Vec<Tab>,
     active_tab: usize,
+    /// True when this workspace is the singleton quick terminal,
+    /// which must never be fully closed — closing the last tab
+    /// should reinitialize a fresh tab and hide the window instead.
+    is_quick_terminal: bool,
     terminal_font_family: String,
     ui_font_family: String,
     ui_font_size: f32,
@@ -909,14 +913,21 @@ impl ConWorkspace {
         let (control_request_tx, control_request_rx) = crossbeam_channel::unbounded();
         let (shell_suggestion_tx, shell_suggestion_rx) = crossbeam_channel::unbounded();
         let (tab_summary_tx, tab_summary_rx) = crossbeam_channel::unbounded();
-        let control_socket = match con_core::spawn_control_socket_server(
-            harness.runtime_handle(),
-            control_request_tx,
-        ) {
-            Ok(handle) => Some(handle),
-            Err(err) => {
-                log::error!("Failed to start con control socket: {}", err);
-                None
+        let control_socket = if crate::control_socket_started() {
+            None
+        } else {
+            match con_core::spawn_control_socket_server(
+                harness.runtime_handle(),
+                control_request_tx,
+            ) {
+                Ok(handle) => {
+                    crate::mark_control_socket_started();
+                    Some(handle)
+                }
+                Err(err) => {
+                    log::error!("Failed to start con control socket: {}", err);
+                    None
+                }
             }
         };
         let model_registry = ModelRegistry::new();
@@ -1464,6 +1475,7 @@ impl ConWorkspace {
             sidebar,
             tabs,
             active_tab,
+            is_quick_terminal: false,
             terminal_font_family,
             ui_font_family,
             ui_font_size,
@@ -7664,6 +7676,10 @@ impl ConWorkspace {
         });
     }
 
+    pub fn mark_as_quick_terminal(&mut self) {
+        self.is_quick_terminal = true;
+    }
+
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
         // If the active tab has multiple panes, close the focused pane first.
         // Only close the entire tab when it's down to a single pane.
@@ -7714,6 +7730,57 @@ impl ConWorkspace {
             return;
         }
         if self.tabs.len() <= 1 {
+            if self.is_quick_terminal {
+                // Quick terminal must never fully close: reinitialize a fresh tab
+                // and hide the window instead of removing it.
+                let closing_terminals: Vec<TerminalPane> = self.tabs[index]
+                    .pane_tree
+                    .all_surface_terminals()
+                    .into_iter()
+                    .cloned()
+                    .collect();
+                let _conv = self.tabs[index].session.conversation();
+                let _ = _conv.lock().save();
+                let _summary_id = self.tabs[index].summary_id;
+                self.tab_summary_engine.forget(_summary_id);
+                self.tabs.remove(index);
+
+                // Create a fresh replacement tab so the workspace is never empty.
+                let terminal = self.create_terminal(None, window, cx);
+                let summary_id = self.next_tab_summary_id;
+                self.next_tab_summary_id += 1;
+                self.tabs.push(Tab {
+                    pane_tree: PaneTree::new(terminal),
+                    title: "Terminal 1".to_string(),
+                    user_label: None,
+                    ai_label: None,
+                    ai_icon: None,
+                    summary_id,
+                    needs_attention: false,
+                    session: AgentSession::new(),
+                    agent_routing: Self::default_agent_routing(self.harness.config()),
+                    panel_state: PanelState::new(),
+                    runtime_trackers: RefCell::new(HashMap::new()),
+                    runtime_cache: RefCell::new(HashMap::new()),
+                    shell_history: HashMap::new(),
+                });
+                self.active_tab = 0;
+                self.save_session(cx);
+                cx.notify();
+
+                // Shut down the old surfaces on the next frame.
+                cx.on_next_frame(window, move |_workspace, _window, cx| {
+                    for terminal in &closing_terminals {
+                        terminal.shutdown_surface(cx);
+                    }
+                });
+
+                // Hide the window via the quick terminal controller.
+                #[cfg(target_os = "macos")]
+                crate::quick_terminal::hide();
+                return;
+            }
+
             self.close_window_from_last_tab(window, cx);
             return;
         }

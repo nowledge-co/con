@@ -86,6 +86,21 @@ pub fn toggle(_cx: &mut App) {
     log::warn!("quick terminal toggle requested before singleton window was created");
 }
 
+/// Slide the quick terminal window off-screen without toggling visible state
+/// or capturing a return pid. Used when the last tab is closed — the window
+/// reinitializes and hides but must remain alive for the next toggle.
+pub fn hide() {
+    QUICK_TERMINAL_RAW_PTR.with(|slot| {
+        let window_ptr = *slot.borrow();
+        if let Some(window_ptr) = window_ptr {
+            unsafe {
+                con_quick_terminal_slide_out(window_ptr as *mut std::ffi::c_void, 0);
+            }
+            QUICK_TERMINAL_VISIBLE.with(|v| *v.borrow_mut() = false);
+        }
+    });
+}
+
 pub fn set_always_on_top(always_on_top: bool) {
     QUICK_TERMINAL_RAW_PTR.with(|slot| {
         if let Some(window_ptr) = *slot.borrow() {

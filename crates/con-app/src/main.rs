@@ -572,7 +572,12 @@ pub(crate) fn open_quick_terminal(config: con_core::Config, session: Session, cx
         if let Err(err) = cx.open_window(window_options, |window, cx| {
             let restored_session = session.clone();
             let view = cx
-                .new(|cx| ConWorkspace::from_session(config.clone(), restored_session, window, cx));
+                .new(|cx| {
+                    let mut workspace =
+                        ConWorkspace::from_session(config.clone(), restored_session, window, cx);
+                    workspace.mark_as_quick_terminal();
+                    workspace
+                });
 
             let raw_ptr = HasWindowHandle::window_handle(window)
                 .ok()
@@ -1268,6 +1273,20 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new("cmd-~", PreviousWindow, Some("Input")),
         KeyBinding::new("cmd-<", PreviousWindow, Some("Input")),
     ]);
+}
+
+/// Guard against starting the control socket more than once per process.
+/// Multiple workspaces (normal window + quick terminal) share the same
+/// Unix socket path, so only the first workspace binds it.
+static CONTROL_SOCKET_STARTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn control_socket_started() -> bool {
+    CONTROL_SOCKET_STARTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) fn mark_control_socket_started() {
+    CONTROL_SOCKET_STARTED.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Install a panic hook that writes every panic (including from
