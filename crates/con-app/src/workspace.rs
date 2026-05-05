@@ -7719,7 +7719,6 @@ impl ConWorkspace {
             shell_history: HashMap::new(),
         });
         self.active_tab = 0;
-        self.save_session(cx);
         cx.notify();
 
         cx.on_next_frame(window, move |_workspace, _window, cx| {
