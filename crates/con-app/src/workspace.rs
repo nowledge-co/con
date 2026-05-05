@@ -7713,6 +7713,11 @@ impl ConWorkspace {
             window,
             cx,
         );
+        // Explicitly focus the new terminal so GPUI's focus chain
+        // is established before the window hides. Otherwise toggling
+        // back after reinit shows a window without focus.
+        terminal.focus(window, cx);
+
         let summary_id = self.next_tab_summary_id;
         self.next_tab_summary_id += 1;
         self.tabs.push(Tab {
