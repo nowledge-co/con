@@ -1,4 +1,4 @@
-use gpui::App;
+use gpui::{App, Bounds, Pixels, point, px, size};
 use std::cell::RefCell;
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -81,6 +81,12 @@ unsafe extern "C" {
     fn con_quick_terminal_window_from_view(
         view_ptr: *mut std::ffi::c_void,
     ) -> *mut std::ffi::c_void;
+    fn con_quick_terminal_active_display_visible_frame(
+        x: *mut f64,
+        y: *mut f64,
+        width: *mut f64,
+        height: *mut f64,
+    ) -> bool;
     fn con_quick_terminal_frontmost_app_pid() -> i32;
     fn con_quick_terminal_is_main_thread() -> bool;
 }
@@ -185,6 +191,24 @@ pub fn opening_failed() {
 /// On macOS this is the user's home directory.
 pub fn default_quick_terminal_cwd() -> Option<std::path::PathBuf> {
     dirs::home_dir()
+}
+
+#[cfg(target_os = "macos")]
+pub fn active_display_visible_bounds() -> Option<Bounds<Pixels>> {
+    let mut x = 0.0;
+    let mut y = 0.0;
+    let mut width = 0.0;
+    let mut height = 0.0;
+    let ok = unsafe {
+        con_quick_terminal_active_display_visible_frame(&mut x, &mut y, &mut width, &mut height)
+    };
+    if !ok || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    Some(Bounds::new(
+        point(px(x as f32), px(y as f32)),
+        size(px(width as f32), px(height as f32)),
+    ))
 }
 
 /// Always slide the window off-screen, regardless of the current visible

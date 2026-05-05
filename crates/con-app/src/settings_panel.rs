@@ -2151,8 +2151,15 @@ impl SettingsPanel {
             (true, false) => {
                 // Resume from the persisted config, not the in-panel draft, so
                 // that cancel/revert flows don't leave unsaved bindings active.
-                let persisted = con_core::Config::load().unwrap_or_default();
-                crate::global_hotkey::resume_global_hotkeys(&persisted.keybindings);
+                let keybindings = con_core::Config::load()
+                    .map(|config| config.keybindings)
+                    .unwrap_or_else(|err| {
+                        log::warn!(
+                            "settings: failed to load persisted config for hotkey resume: {err}"
+                        );
+                        self.config.keybindings.clone()
+                    });
+                crate::global_hotkey::resume_global_hotkeys(&keybindings);
             }
             _ => {}
         }

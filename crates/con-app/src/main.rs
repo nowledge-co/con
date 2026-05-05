@@ -380,11 +380,12 @@ fn quick_terminal_bounds(cx: &mut App) -> WindowBounds {
         ),
     );
 
-    let Some(display) = cx.primary_display() else {
+    let Some(visible) = quick_terminal::active_display_visible_bounds()
+        .or_else(|| cx.primary_display().map(|display| display.visible_bounds()))
+    else {
         return WindowBounds::Windowed(fallback_bounds);
     };
 
-    let visible = display.visible_bounds();
     let bounds = Bounds::new(
         visible.origin,
         size(visible.size.width, visible.size.height / 2.0),

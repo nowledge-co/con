@@ -135,6 +135,38 @@ int32_t con_quick_terminal_frontmost_app_pid(void) {
     return (int32_t)app.processIdentifier;
 }
 
+bool con_quick_terminal_active_display_visible_frame(double *x, double *y, double *width, double *height) {
+    NSPoint mouseLocation = NSEvent.mouseLocation;
+    NSScreen *target = nil;
+    for (NSScreen *screen in NSScreen.screens) {
+        if (NSPointInRect(mouseLocation, screen.frame)) {
+            target = screen;
+            break;
+        }
+    }
+    if (target == nil) {
+        target = NSScreen.mainScreen;
+    }
+    if (target == nil) {
+        return false;
+    }
+
+    NSRect frame = target.visibleFrame;
+    if (x != NULL) {
+        *x = frame.origin.x;
+    }
+    if (y != NULL) {
+        *y = frame.origin.y;
+    }
+    if (width != NULL) {
+        *width = frame.size.width;
+    }
+    if (height != NULL) {
+        *height = frame.size.height;
+    }
+    return true;
+}
+
 bool con_quick_terminal_is_main_thread(void) {
     return [NSThread isMainThread];
 }
