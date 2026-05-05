@@ -257,11 +257,12 @@ use crate::ghostty_view::{
 };
 use crate::{
     AddWorkspaceLayoutTabs, ClearRestoredTerminalHistory, ClearTerminal, ClosePane, CloseSurface,
-    CloseTab, CycleInputMode, ExportWorkspaceLayout, FocusInput, NewSurface, NewSurfaceSplitDown,
-    NewSurfaceSplitRight, NewTab, NextSurface, NextTab, OpenWorkspaceLayoutWindow, PreviousSurface,
-    PreviousTab, Quit, RenameSurface, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5,
-    SelectTab6, SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp,
-    ToggleAgentPanel, TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs, CollapseSidebar,
+    CloseTab, CollapseSidebar, CycleInputMode, ExportWorkspaceLayout, FocusInput, NewSurface,
+    NewSurfaceSplitDown, NewSurfaceSplitRight, NewTab, NextSurface, NextTab,
+    OpenWorkspaceLayoutWindow, PreviousSurface, PreviousTab, Quit, RenameSurface, SelectTab1,
+    SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8, SelectTab9,
+    SplitDown, SplitLeft, SplitRight, SplitUp, ToggleAgentPanel, TogglePaneScopePicker,
+    TogglePaneZoom, ToggleVerticalTabs,
 };
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
@@ -3551,14 +3552,30 @@ impl ConWorkspace {
                                     return;
                                 }
                             };
+                            let active_tab_needs_focus_sync = tab_idx == self.active_tab;
+                            #[cfg(target_os = "macos")]
+                            let should_notify = changed || active_tab_needs_focus_sync;
+                            #[cfg(not(target_os = "macos"))]
+                            let should_notify = changed;
+
+                            #[cfg(target_os = "macos")]
+                            if active_tab_needs_focus_sync {
+                                self.mark_tab_terminal_native_layout_pending(tab_idx, cx);
+                                self.notify_tab_terminal_views(tab_idx, cx);
+                                self.sync_active_terminal_focus_states(cx);
+                                self.schedule_active_terminal_focus(cx);
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            if changed && active_tab_needs_focus_sync {
+                                self.sync_active_tab_native_view_visibility(cx);
+                                self.sync_active_terminal_focus_states(cx);
+                                self.schedule_active_terminal_focus(cx);
+                            }
                             if changed {
-                                if tab_idx == self.active_tab {
-                                    self.sync_active_tab_native_view_visibility(cx);
-                                    self.sync_active_terminal_focus_states(cx);
-                                    self.schedule_active_terminal_focus(cx);
-                                }
                                 self.sync_sidebar(cx);
                                 self.save_session(cx);
+                            }
+                            if should_notify {
                                 cx.notify();
                             }
                             Self::send_control_result(
@@ -9630,18 +9647,39 @@ impl ConWorkspace {
             .pane_tree
             .focus_surface(surface_id);
         if !changed {
-            return;
+            #[cfg(not(target_os = "macos"))]
+            {
+                return;
+            }
+            #[cfg(target_os = "macos")]
+            if !self.tabs[self.active_tab]
+                .pane_tree
+                .surface_infos(None)
+                .into_iter()
+                .any(|surface| surface.surface_id == surface_id)
+            {
+                return;
+            }
         }
+        #[cfg(target_os = "macos")]
+        self.mark_active_tab_terminal_native_layout_pending(cx);
+        #[cfg(target_os = "macos")]
+        self.notify_active_tab_terminal_views(cx);
         let terminal = self.tabs[self.active_tab]
             .pane_tree
             .focused_terminal()
             .clone();
         terminal.ensure_surface(window, cx);
+        #[cfg(target_os = "macos")]
+        self.sync_active_tab_native_view_visibility_now_or_after_layout(false, window, cx);
+        #[cfg(not(target_os = "macos"))]
         self.sync_active_tab_native_view_visibility(cx);
-        self.sync_sidebar(cx);
+        if changed {
+            self.sync_sidebar(cx);
+            self.save_session(cx);
+        }
         terminal.focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
-        self.save_session(cx);
         cx.notify();
     }
 

@@ -882,9 +882,14 @@ impl GhosttyView {
 
     #[cfg(target_os = "macos")]
     fn update_frame(&mut self, bounds: Bounds<Pixels>) {
+        // `last_bounds` is Con's layout cache, not Ghostty's protocol state.
+        // Pane-local surfaces can be hidden, focused, and resized without
+        // repainting every sibling; always verify the embedded surface still
+        // reports the pixel size that maps to these bounds before skipping.
         if self.last_bounds.as_ref() == Some(&bounds)
             && !self.awaiting_first_layout_visibility
             && !self.pending_native_layout
+            && self.terminal_matches_bounds(bounds)
         {
             return;
         }
@@ -1079,6 +1084,16 @@ impl GhosttyView {
                 .max(1.0)
                 .round() as u32,
         )
+    }
+
+    #[cfg(target_os = "macos")]
+    fn terminal_matches_bounds(&self, bounds: Bounds<Pixels>) -> bool {
+        let Some(ref terminal) = self.terminal else {
+            return false;
+        };
+        let (width_px, height_px) = self.surface_size_in_backing_pixels(bounds);
+        let size = terminal.size();
+        size.width_px == width_px && size.height_px == height_px
     }
 
     #[cfg(target_os = "macos")]

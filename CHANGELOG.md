@@ -4,6 +4,17 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.63` - 2026-05-06
+
+### Fixed
+
+**macOS**
+
+- Fixed pane-local surface geometry drift that could make TUI output appear
+  clipped after switching between surfaces or changing pane layouts. Activating
+  a surface now revalidates Ghostty's embedded terminal size against the
+  current pane before exposing it.
+
 ## `v0.1.0-beta.62` - 2026-05-05
 
 ### Added

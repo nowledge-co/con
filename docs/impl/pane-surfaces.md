@@ -232,6 +232,11 @@ closes.
   inactive surfaces to the visible terminal host bounds even while they are not
   rendered, so TUI agents that start in background surfaces see the correct
   rows and columns before focus moves to them.
+- On macOS, surface focus is also a native geometry checkpoint. Activating a
+  hidden surface must revalidate the embedded Ghostty surface size against the
+  current pane bounds before exposing it, because rows and columns are part of
+  the TUI protocol. Selecting the already-active surface runs the same
+  checkpoint.
 - Tab, pane, window, and app close paths tear down every surface, not just the
   active surface.
 - If a non-last surface exits, Con removes only that surface.
