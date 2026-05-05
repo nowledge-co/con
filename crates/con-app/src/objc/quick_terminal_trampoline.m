@@ -198,10 +198,10 @@ void con_quick_terminal_slide_out(void *window_ptr, int32_t return_pid) {
             context.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
             [[window animator] setFrame:con_quick_terminal_frame(window, false) display:YES];
         } completionHandler:^{
-            [window orderOut:nil];
             if (return_pid > 0) {
                 con_quick_terminal_activate_app(return_pid);
             }
+            [window orderOut:nil];
         }];
     });
 }
