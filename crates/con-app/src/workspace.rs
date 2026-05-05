@@ -6958,12 +6958,20 @@ impl ConWorkspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let next = if self.vertical_tabs_active() {
-            TabsOrientation::Horizontal
+        if self.vertical_tabs_active() {
+            // Already in vertical-tabs mode: toggle the sidebar between
+            // collapsed (rail) and pinned (full panel) without switching
+            // to horizontal tabs. This matches the issue #139 expectation
+            // that Cmd+B hides/shows the sidebar rather than falling back
+            // to a horizontal tab strip.
+            self.sidebar.update(cx, |sidebar, cx| {
+                sidebar.toggle_pinned(cx);
+            });
+            self.save_session(cx);
+            cx.notify();
         } else {
-            TabsOrientation::Vertical
-        };
-        self.apply_tabs_orientation(next, true, cx);
+            self.apply_tabs_orientation(TabsOrientation::Vertical, true, cx);
+        }
     }
 
     fn toggle_pane_scope_picker(
@@ -10939,7 +10947,11 @@ impl Render for ConWorkspace {
         );
 
         let vertical_tabs_tooltip = if self.vertical_tabs_active() {
-            "Use horizontal tabs"
+            if self.sidebar.read(cx).is_pinned() {
+                "Collapse sidebar"
+            } else {
+                "Expand sidebar"
+            }
         } else {
             "Use vertical tabs"
         };
