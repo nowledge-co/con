@@ -1706,16 +1706,21 @@ impl ConWorkspace {
         }
     }
 
-    fn hide_active_tab_native_views_not_visible_after_focus(&self, cx: &App) {
+    fn hide_active_tab_native_views_not_visible_after_layout(&self, cx: &App) {
         if !self.has_active_tab() {
             return;
         }
         let tab = &self.tabs[self.active_tab];
         let zoomed_pane_id = tab.pane_tree.zoomed_pane_id();
+        let focused_pane_id = tab.pane_tree.focused_pane_id();
 
         for surface in tab.pane_tree.surface_infos(None) {
             let pane_visible = zoomed_pane_id.is_none_or(|zoomed| zoomed == surface.pane_id);
-            if !pane_visible || !surface.is_active {
+            // Same-pane surface switches should keep the old surface visible
+            // until the newly active one has a committed frame. Hiding it here
+            // creates a one-frame blank pane. Panes outside the focused layout
+            // cannot stay visible because their native frames would be stale.
+            if !pane_visible || surface.pane_id != focused_pane_id {
                 surface.terminal.set_native_view_visible(false, cx);
             }
         }
@@ -1762,7 +1767,7 @@ impl ConWorkspace {
         // surfaces that are definitely no longer visible immediately, but
         // delay revealing newly-visible surfaces until GPUI has committed one
         // layout frame so they do not flash at stale split coordinates.
-        self.hide_active_tab_native_views_not_visible_after_focus(cx);
+        self.hide_active_tab_native_views_not_visible_after_layout(cx);
         cx.on_next_frame(window, |_workspace, window, cx| {
             cx.notify();
             cx.on_next_frame(window, |workspace, _window, cx| {
