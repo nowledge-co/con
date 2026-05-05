@@ -178,7 +178,8 @@ linux-install arch=arch: (linux-release arch)
         resolved_arch="$(uname -m | sed 's/aarch64/arm64/')"
     fi
     # scripts/linux/release.sh stages to dist/con-{version}-linux-{arch}/
-    stage_dir="$(ls -d dist/con-*-linux-${resolved_arch} 2>/dev/null | sort -V | tail -1)"
+    # Use || true so set -e doesn't exit when the glob has no matches.
+    stage_dir="$(ls -d dist/con-*-linux-${resolved_arch} 2>/dev/null | sort -V | tail -1 || true)"
     if [[ -z "${stage_dir}" || ! -f "${stage_dir}/con" ]]; then
         echo "Binary not found under dist/con-*-linux-${resolved_arch}/ — run 'just linux-release' first"
         exit 1
