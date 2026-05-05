@@ -1,15 +1,16 @@
 # TUI text wrapping incorrectly in Linux split panes
 
 **Date**: 2026-05-05
-**Issue**: #142
+**Issue**: #142 triage, Linux preview side fix
 
 ## What happened
 
-On Linux, TUI applications (htop, vim, less, etc.) displayed garbled
-layouts in split panes. Continuous text runs like `12345` were broken
-across lines — e.g. `abcde, 123` on one line and `45` on the next —
-instead of being clipped at the pane edge. The same TUI in Ghostty's
-own split rendered correctly.
+While triaging #142, we found a separate Linux preview bug: TUI
+applications (htop, vim, less, etc.) displayed garbled layouts in split
+panes. Continuous text runs like `12345` were broken across lines, for
+example `abcde, 123` on one line and `45` on the next, instead of being
+clipped at the pane edge. The same TUI in Ghostty's own split rendered
+correctly.
 
 ## Root cause
 

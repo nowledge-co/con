@@ -48,6 +48,9 @@ Quick Terminal is an optional macOS-only drop-down terminal. Enable it in
 Settings -> Keys, then use the shortcut to slide down a dedicated Con window
 from the top of the active screen, even when another app is frontmost.
 
+While Con is frontmost, you can also open Quick Terminal from the command
+palette or **View -> Quick Terminal** without enabling the global shortcut.
+
 It is separate from the main window. Hiding it keeps its live tabs, panes, cwd,
 and scrollback. Closing its last tab or exiting its last shell destroys it, and
 the next shortcut creates a fresh one.

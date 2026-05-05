@@ -17,8 +17,8 @@ open a terminal over the app you are using.
 The shortcut is global. It works when another app is frontmost, as long as Con
 is running.
 
-You can also open it from **View -> Quick Terminal** while Con is active, even
-if the global shortcut is off.
+You can also open it from **View -> Quick Terminal** or the command palette
+while Con is active, even if the global shortcut is off.
 
 ## How It Feels
 

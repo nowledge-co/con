@@ -232,11 +232,42 @@ closes.
   inactive surfaces to the visible terminal host bounds even while they are not
   rendered, so TUI agents that start in background surfaces see the correct
   rows and columns before focus moves to them.
+- On macOS, surface focus is also a native geometry checkpoint. Activating a
+  hidden surface must revalidate the embedded Ghostty surface size against the
+  current pane bounds before exposing it, because rows and columns are part of
+  the TUI protocol. Selecting the already-active surface runs the same
+  checkpoint.
 - Tab, pane, window, and app close paths tear down every surface, not just the
   active surface.
 - If a non-last surface exits, Con removes only that surface.
 - If the last surface in a pane exits, Con follows the existing pane close
   escalation: close pane, then close tab, then close the workspace window.
+
+## Debugging Geometry Drift
+
+If a macOS user reports that a TUI is clipped after pane or surface operations,
+ask for one opt-in diagnostic run before guessing at the layout path. A normal
+beta/dev build is enough; no special instrumented build is required.
+
+For an installed beta app:
+
+```bash
+CON_LOG_FILE="$HOME/Desktop/con-surface-geometry.log" \
+CON_GHOSTTY_PROFILE=1 \
+RUST_LOG=con::perf=info,con_ghostty::perf=info,con=warn,con_core=warn,con_agent=warn \
+"/Applications/con Beta.app/Contents/MacOS/con"
+```
+
+After reproducing the clipping, capture the live surface state:
+
+```bash
+con-cli --json surfaces list > "$HOME/Desktop/con-surfaces.json"
+```
+
+Ask for both files privately if paths or terminal titles are sensitive. Useful
+signals in the log are `surface geometry mismatch`, `surface resize request`,
+and `update_frame`; together with `con-surfaces.json`, they show whether the
+visible pane bounds, Ghostty pixel size, and TUI rows/columns agree.
 
 ## Current Limit
 

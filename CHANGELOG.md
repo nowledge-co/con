@@ -4,6 +4,40 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.63`
+
+### Added
+
+**macOS**
+
+- Added **Quick Terminal** to the command palette on macOS, matching the View
+  menu entry so it can be opened while Con is frontmost even when the global
+  hotkey is disabled.
+
+### Fixed
+
+**macOS**
+
+- Fixed pane-local surface geometry drift that could make TUI output appear
+  clipped after switching between surfaces or changing pane layouts. Activating
+  a surface now revalidates Ghostty's embedded terminal size against the
+  current pane before exposing it.
+
+**Linux**
+
+- Fixed Linux preview terminal rows wrapping like prose in split panes. Rows now
+  stay on one fixed terminal line and clip at the pane edge, which prevents TUI
+  layouts from reflowing into later rows.
+
+### Changed
+
+**Developer Experience**
+
+- Added low-noise macOS surface geometry diagnostics behind
+  `CON_GHOSTTY_PROFILE`, so reproduced pane/surface clipping reports can include
+  a log file and `con-cli surfaces list` snapshot without requiring a special
+  debug build.
+
 ## `v0.1.0-beta.62` - 2026-05-05
 
 ### Added

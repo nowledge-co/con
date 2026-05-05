@@ -75,6 +75,10 @@ Quick controls:
 - Command mode runs shell commands. With multiple panes, the pane mini map lets you choose the focused pane, all panes, or a selected set.
 - Agent mode sends text directly to the built-in agent.
 
+Quick Terminal is off by default. On macOS, enable its global shortcut in
+Settings -> Keys, or open it from the command palette / View menu while Con is
+frontmost.
+
 ## Install
 
 **macOS, Homebrew**
