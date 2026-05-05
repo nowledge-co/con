@@ -1479,6 +1479,9 @@ mod tests {
     fn normalize_sidebar_rename_label_trims_and_clears_blank_values() {
         assert_eq!(normalize_sidebar_rename_label(""), None);
         assert_eq!(normalize_sidebar_rename_label("   \t  \n"), None);
-        assert_eq!(normalize_sidebar_rename_label("  hello  "), Some("hello".to_string()));
+        assert_eq!(
+            normalize_sidebar_rename_label("  hello  "),
+            Some("hello".to_string())
+        );
     }
 }

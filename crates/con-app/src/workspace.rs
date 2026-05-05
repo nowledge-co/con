@@ -286,6 +286,7 @@ use con_core::{
 
 /// Inline rename editor for the horizontal tab strip.
 struct TabRenameEditor {
+    tab_id: u64,
     tab_index: usize,
     input: Entity<InputState>,
 }
@@ -293,6 +294,7 @@ struct TabRenameEditor {
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TabRenameStateSnapshot {
+    tab_id: u64,
     tab_index: usize,
 }
 
@@ -486,7 +488,7 @@ pub struct ConWorkspace {
     tab_rename: Option<TabRenameEditor>,
     /// Escape-cancel marker so the subsequent input blur does not
     /// auto-save the value we meant to discard.
-    tab_rename_cancelled_index: Option<usize>,
+    tab_rename_cancelled_id: Option<u64>,
     /// Drop slot (0..=N) tracked while a DraggedTab is in flight over
     /// the horizontal tab strip. Slot K = "insert before tab K".
     tab_strip_drop_slot: Option<usize>,
@@ -1568,7 +1570,7 @@ impl ConWorkspace {
             window_close_prepared: false,
             session_save_tx,
             tab_rename: None,
-            tab_rename_cancelled_index: None,
+            tab_rename_cancelled_id: None,
             tab_strip_drop_slot: None,
         }
     }
@@ -4875,10 +4877,23 @@ impl ConWorkspace {
         let Some(tab) = self.tabs.get(index) else {
             return;
         };
-        // Derive the current display name the same way the strip does.
+        let tab_id = tab.summary_id;
+        // Seed from the rendered tab label so focus→blur without edits
+        // preserves AI/SSH/CWD-derived naming instead of materializing the
+        // raw terminal title as a new explicit label.
         let terminal = tab.pane_tree.focused_terminal();
-        let title = terminal.title(cx).unwrap_or_else(|| tab.title.clone());
-        let initial = tab.user_label.clone().unwrap_or(title);
+        let hostname = self.effective_remote_host_for_tab(index, terminal, cx);
+        let title = terminal.title(cx);
+        let current_dir = terminal.current_dir(cx);
+        let initial = tab_rename_initial_label(
+            tab.user_label.as_deref(),
+            tab.ai_label.as_deref(),
+            tab.ai_icon.map(|kind| kind.svg_path()),
+            hostname.as_deref(),
+            title.as_deref(),
+            current_dir.as_deref(),
+            index,
+        );
 
         let input = cx.new(|cx| {
             let mut state = InputState::new(window, cx);
@@ -4896,7 +4911,7 @@ impl ConWorkspace {
                 }
                 InputEvent::PressEnter { .. } | InputEvent::Blur => {
                     let value = input_entity.read(cx).value().to_string();
-                    this.commit_tab_rename(index, value, window, cx);
+                    this.commit_tab_rename(tab_id, value, window, cx);
                 }
                 _ => {}
             }
@@ -4904,31 +4919,39 @@ impl ConWorkspace {
         .detach();
 
         self.tab_rename = Some(TabRenameEditor {
+            tab_id,
             tab_index: index,
             input: input.clone(),
         });
-        self.tab_rename_cancelled_index = None;
+        self.tab_rename_cancelled_id = None;
         input.update(cx, |state, cx| state.focus(window, cx));
         cx.notify();
     }
 
     fn commit_tab_rename(
         &mut self,
-        index: usize,
+        tab_id: u64,
         value: String,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.tab_rename_cancelled_index == Some(index) {
-            self.tab_rename_cancelled_index = None;
+        if self.tab_rename_cancelled_id == Some(tab_id) {
+            self.tab_rename_cancelled_id = None;
             self.tab_rename = None;
             cx.notify();
             return;
         }
 
+        let Some(index) = self.tab_index_for_summary_id(tab_id) else {
+            self.tab_rename = None;
+            self.tab_rename_cancelled_id = None;
+            cx.notify();
+            return;
+        };
+
         let Some(tab) = self.tabs.get_mut(index) else {
             self.tab_rename = None;
-            self.tab_rename_cancelled_index = None;
+            self.tab_rename_cancelled_id = None;
             cx.notify();
             return;
         };
@@ -4937,7 +4960,7 @@ impl ConWorkspace {
         let changed = tab.user_label != label;
         tab.user_label = label;
         self.tab_rename = None;
-        self.tab_rename_cancelled_index = None;
+        self.tab_rename_cancelled_id = None;
 
         if changed {
             self.sync_sidebar(cx);
@@ -4948,24 +4971,18 @@ impl ConWorkspace {
     }
 
     fn remap_tab_rename_state_after_close(&mut self, closed_index: usize) {
-        self.tab_rename = self
-            .tab_rename
-            .take()
-            .and_then(|state| match state.tab_index.cmp(&closed_index) {
-                std::cmp::Ordering::Less => Some(state),
-                std::cmp::Ordering::Equal => None,
-                std::cmp::Ordering::Greater => Some(TabRenameEditor {
-                    tab_index: state.tab_index - 1,
-                    input: state.input,
-                }),
-            });
-        self.tab_rename_cancelled_index = self
-            .tab_rename_cancelled_index
-            .and_then(|idx| match idx.cmp(&closed_index) {
-                std::cmp::Ordering::Less => Some(idx),
-                std::cmp::Ordering::Equal => None,
-                std::cmp::Ordering::Greater => Some(idx - 1),
-            });
+        self.tab_rename =
+            self.tab_rename
+                .take()
+                .and_then(|state| match state.tab_index.cmp(&closed_index) {
+                    std::cmp::Ordering::Less => Some(state),
+                    std::cmp::Ordering::Equal => None,
+                    std::cmp::Ordering::Greater => Some(TabRenameEditor {
+                        tab_id: state.tab_id,
+                        tab_index: state.tab_index - 1,
+                        input: state.input,
+                    }),
+                });
     }
 
     fn remap_tab_rename_state_after_reorder(&mut self, old_order: &[u64]) {
@@ -4975,16 +4992,14 @@ impl ConWorkspace {
             .and_then(|state| old_order.get(state.tab_index))
             .copied();
         if let Some(summary_id) = rename_summary_id
-            && let Some(new_index) = self.tabs.iter().position(|tab| tab.summary_id == summary_id)
+            && let Some(new_index) = self
+                .tabs
+                .iter()
+                .position(|tab| tab.summary_id == summary_id)
             && let Some(state) = self.tab_rename.as_mut()
         {
             state.tab_index = new_index;
         }
-
-        self.tab_rename_cancelled_index = self.tab_rename_cancelled_index.and_then(|idx| {
-            let summary_id = *old_order.get(idx)?;
-            self.tabs.iter().position(|tab| tab.summary_id == summary_id)
-        });
     }
 
     fn on_sidebar_close_others(
@@ -10530,8 +10545,7 @@ impl Render for ConWorkspace {
                 let needs_attention = tab.needs_attention && !is_active;
                 let terminal = tab.pane_tree.focused_terminal();
                 let session_id = tab.summary_id;
-                let hostname_for_tab =
-                    self.effective_remote_host_for_tab(index, terminal, cx);
+                let hostname_for_tab = self.effective_remote_host_for_tab(index, terminal, cx);
                 let title_for_tab = terminal.title(cx);
                 let dir_for_tab = terminal.current_dir(cx);
                 let presentation = smart_tab_presentation(
@@ -10546,7 +10560,10 @@ impl Render for ConWorkspace {
                 let tab_icon = presentation.icon;
 
                 let display_title: String = if presentation.name.chars().count() > 24 {
-                    format!("{}…", &presentation.name[..presentation.name.floor_char_boundary(22)])
+                    format!(
+                        "{}…",
+                        &presentation.name[..presentation.name.floor_char_boundary(22)]
+                    )
                 } else {
                     presentation.name
                 };
@@ -10640,22 +10657,27 @@ impl Render for ConWorkspace {
                             cx.stop_propagation();
                         }),
                     )
-                    .on_click(cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                        if event.click_count() == 2 {
-                            this.begin_tab_rename(index, window, cx);
-                        } else {
-                            this.activate_tab(index, window, cx);
-                        }
-                    }))
+                    .on_click(
+                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            if event.click_count() == 2 {
+                                this.begin_tab_rename(index, window, cx);
+                            } else {
+                                this.activate_tab(index, window, cx);
+                            }
+                        }),
+                    )
                     .on_mouse_down(
                         MouseButton::Middle,
                         cx.listener(move |this, _, window, cx| {
                             this.close_tab_by_index(index, window, cx);
                         }),
                     )
-                    .on_drag(dragged, |dragged: &DraggedTab, _offset, _window, cx: &mut App| {
-                        cx.new(|_| dragged.clone())
-                    })
+                    .on_drag(
+                        dragged,
+                        |dragged: &DraggedTab, _offset, _window, cx: &mut App| {
+                            cx.new(|_| dragged.clone())
+                        },
+                    )
                     .on_drag_move::<DraggedTab>(cx.listener(
                         move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
                             let Some(slot) = horizontal_tab_slot_from_position(
@@ -10771,7 +10793,7 @@ impl Render for ConWorkspace {
                             .min_w_0()
                             .on_action(cx.listener(|this, _: &InputEscape, _, cx| {
                                 if let Some(editor) = this.tab_rename.as_ref() {
-                                    this.tab_rename_cancelled_index = Some(editor.tab_index);
+                                    this.tab_rename_cancelled_id = Some(editor.tab_id);
                                 }
                                 this.tab_rename = None;
                                 cx.notify();
@@ -12128,6 +12150,31 @@ fn smart_tab_presentation(
     }
 }
 
+fn tab_rename_initial_label(
+    user_label: Option<&str>,
+    ai_label: Option<&str>,
+    ai_icon: Option<&'static str>,
+    hostname: Option<&str>,
+    title: Option<&str>,
+    current_dir: Option<&str>,
+    tab_index: usize,
+) -> String {
+    if let Some(label) = user_label.filter(|label| !label.trim().is_empty()) {
+        label.to_string()
+    } else {
+        smart_tab_presentation(
+            user_label,
+            ai_label,
+            ai_icon,
+            hostname,
+            title,
+            current_dir,
+            tab_index,
+        )
+        .name
+    }
+}
+
 fn cwd_subtitle(current_dir: Option<&str>) -> Option<String> {
     let dir = current_dir?;
     let home = std::env::var("HOME").ok();
@@ -12263,41 +12310,36 @@ fn normalize_tab_user_label(value: &str) -> Option<String> {
 #[cfg(test)]
 fn remap_tab_rename_state_after_close(
     rename: Option<TabRenameStateSnapshot>,
-    cancelled_index: Option<usize>,
+    cancelled_id: Option<u64>,
     closed_index: usize,
-) -> (Option<TabRenameStateSnapshot>, Option<usize>) {
+) -> (Option<TabRenameStateSnapshot>, Option<u64>) {
     let rename = rename.and_then(|state| match state.tab_index.cmp(&closed_index) {
         std::cmp::Ordering::Less => Some(state),
         std::cmp::Ordering::Equal => None,
         std::cmp::Ordering::Greater => Some(TabRenameStateSnapshot {
+            tab_id: state.tab_id,
             tab_index: state.tab_index - 1,
         }),
     });
-    let cancelled_index = cancelled_index.and_then(|idx| match idx.cmp(&closed_index) {
-        std::cmp::Ordering::Less => Some(idx),
-        std::cmp::Ordering::Equal => None,
-        std::cmp::Ordering::Greater => Some(idx - 1),
-    });
-    (rename, cancelled_index)
+    (rename, cancelled_id)
 }
 
 #[cfg(test)]
 fn remap_tab_rename_state_after_reorder(
     rename: Option<TabRenameStateSnapshot>,
-    cancelled_index: Option<usize>,
+    cancelled_id: Option<u64>,
     old_order: &[u64],
     new_order: &[u64],
-) -> (Option<TabRenameStateSnapshot>, Option<usize>) {
+) -> (Option<TabRenameStateSnapshot>, Option<u64>) {
     let rename = rename.and_then(|state| {
         let summary_id = *old_order.get(state.tab_index)?;
         let tab_index = new_order.iter().position(|id| *id == summary_id)?;
-        Some(TabRenameStateSnapshot { tab_index })
+        Some(TabRenameStateSnapshot {
+            tab_id: state.tab_id,
+            tab_index,
+        })
     });
-    let cancelled_index = cancelled_index.and_then(|idx| {
-        let summary_id = *old_order.get(idx)?;
-        new_order.iter().position(|id| *id == summary_id)
-    });
-    (rename, cancelled_index)
+    (rename, cancelled_id)
 }
 
 #[cfg(test)]
@@ -12305,7 +12347,7 @@ mod tests {
     use super::{
         ConWorkspace, TabRenameStateSnapshot, horizontal_tab_slot_from_position,
         normalize_tab_user_label, remap_tab_rename_state_after_close,
-        remap_tab_rename_state_after_reorder,
+        remap_tab_rename_state_after_reorder, tab_rename_initial_label,
     };
     use gpui::{Bounds, Point, Size, px};
 
@@ -12313,26 +12355,41 @@ mod tests {
     fn normalize_tab_user_label_trims_and_clears_blank_values() {
         assert_eq!(normalize_tab_user_label(""), None);
         assert_eq!(normalize_tab_user_label("   \t  \n"), None);
-        assert_eq!(normalize_tab_user_label("  hello  "), Some("hello".to_string()));
+        assert_eq!(
+            normalize_tab_user_label("  hello  "),
+            Some("hello".to_string())
+        );
     }
 
     #[test]
-    fn remap_tab_rename_state_after_close_drops_closed_tab_and_shifts_later_indices() {
+    fn remap_tab_rename_state_after_close_drops_closed_tab_and_preserves_cancelled_id() {
         assert_eq!(
             remap_tab_rename_state_after_close(
-                Some(TabRenameStateSnapshot { tab_index: 2 }),
-                Some(3),
+                Some(TabRenameStateSnapshot {
+                    tab_id: 30,
+                    tab_index: 2,
+                }),
+                Some(40),
                 2,
             ),
-            (None, Some(2))
+            (None, Some(40))
         );
         assert_eq!(
             remap_tab_rename_state_after_close(
-                Some(TabRenameStateSnapshot { tab_index: 4 }),
-                Some(4),
+                Some(TabRenameStateSnapshot {
+                    tab_id: 50,
+                    tab_index: 4,
+                }),
+                Some(50),
                 1,
             ),
-            (Some(TabRenameStateSnapshot { tab_index: 3 }), Some(3))
+            (
+                Some(TabRenameStateSnapshot {
+                    tab_id: 50,
+                    tab_index: 3,
+                }),
+                Some(50)
+            )
         );
     }
 
@@ -12342,12 +12399,50 @@ mod tests {
         let new_order = vec![30_u64, 10, 20, 40];
         assert_eq!(
             remap_tab_rename_state_after_reorder(
-                Some(TabRenameStateSnapshot { tab_index: 2 }),
-                Some(2),
+                Some(TabRenameStateSnapshot {
+                    tab_id: 30,
+                    tab_index: 2,
+                }),
+                Some(30),
                 &old_order,
                 &new_order,
             ),
-            (Some(TabRenameStateSnapshot { tab_index: 0 }), Some(0))
+            (
+                Some(TabRenameStateSnapshot {
+                    tab_id: 30,
+                    tab_index: 0,
+                }),
+                Some(30)
+            )
+        );
+    }
+
+    #[test]
+    fn tab_rename_initial_label_prefers_rendered_presentation_over_raw_title() {
+        assert_eq!(
+            tab_rename_initial_label(
+                None,
+                None,
+                None,
+                Some("prod-1.example.com"),
+                Some("ssh prod-1.example.com"),
+                Some("/Users/sundy/src/con-terminal"),
+                0,
+            ),
+            "prod-1.example.com"
+        );
+
+        assert_eq!(
+            tab_rename_initial_label(
+                None,
+                Some("Deploy"),
+                Some("phosphor/rocket.svg"),
+                None,
+                Some("zsh"),
+                Some("/Users/sundy/src/con-terminal"),
+                0,
+            ),
+            "Deploy"
         );
     }
 
@@ -12364,19 +12459,47 @@ mod tests {
             },
         };
         assert_eq!(
-            horizontal_tab_slot_from_position(Point { x: px(90.0), y: px(25.0) }, bounds, 3),
+            horizontal_tab_slot_from_position(
+                Point {
+                    x: px(90.0),
+                    y: px(25.0)
+                },
+                bounds,
+                3
+            ),
             None
         );
         assert_eq!(
-            horizontal_tab_slot_from_position(Point { x: px(181.0), y: px(25.0) }, bounds, 3),
+            horizontal_tab_slot_from_position(
+                Point {
+                    x: px(181.0),
+                    y: px(25.0)
+                },
+                bounds,
+                3
+            ),
             None
         );
         assert_eq!(
-            horizontal_tab_slot_from_position(Point { x: px(120.0), y: px(10.0) }, bounds, 3),
+            horizontal_tab_slot_from_position(
+                Point {
+                    x: px(120.0),
+                    y: px(10.0)
+                },
+                bounds,
+                3
+            ),
             None
         );
         assert_eq!(
-            horizontal_tab_slot_from_position(Point { x: px(120.0), y: px(51.0) }, bounds, 3),
+            horizontal_tab_slot_from_position(
+                Point {
+                    x: px(120.0),
+                    y: px(51.0)
+                },
+                bounds,
+                3
+            ),
             None
         );
     }
@@ -12394,11 +12517,25 @@ mod tests {
             },
         };
         assert_eq!(
-            horizontal_tab_slot_from_position(Point { x: px(110.0), y: px(25.0) }, bounds, 3),
+            horizontal_tab_slot_from_position(
+                Point {
+                    x: px(110.0),
+                    y: px(25.0)
+                },
+                bounds,
+                3
+            ),
             Some(3)
         );
         assert_eq!(
-            horizontal_tab_slot_from_position(Point { x: px(150.0), y: px(25.0) }, bounds, 3),
+            horizontal_tab_slot_from_position(
+                Point {
+                    x: px(150.0),
+                    y: px(25.0)
+                },
+                bounds,
+                3
+            ),
             Some(4)
         );
     }
