@@ -67,6 +67,7 @@ Responsibilities:
 
 - lazy creation on first toggle
 - duplicate creation prevention while the first lazy window is still opening
+- previous-app focus capture before the first lazy window activates Con
 - show/hide dispatch for an existing Quick Terminal window
 - destruction-state reset when the Quick Terminal window is removed
 
@@ -95,11 +96,12 @@ Quick Terminal is created lazily.
 When the global Quick Terminal hotkey fires and no Quick Terminal window exists:
 
 1. Con loads the current config.
-2. Con creates a fresh session with history and `HOME` as the default cwd on macOS.
-3. Con opens a new special Con window via `open_quick_terminal(...)`.
-4. The new window is marked as a Quick Terminal workspace.
-5. The native window pointer is captured.
-6. The window is configured and immediately shown with slide-in animation.
+2. Con captures the currently frontmost app before activating its own window.
+3. Con creates a fresh session with history and `HOME` as the default cwd on macOS.
+4. Con opens a new special Con window via `open_quick_terminal(...)`.
+5. The new window is marked as a Quick Terminal workspace.
+6. The native window pointer is captured.
+7. The window is configured and immediately shown with slide-in animation.
 
 There is no eager startup creation anymore.
 

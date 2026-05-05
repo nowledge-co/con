@@ -103,7 +103,7 @@ actions!(
         NextWindow,
         PreviousWindow,
         ToggleSummon,
-        ToggleHotkeyWindow,
+        ToggleQuickTerminal,
         ToggleAgentPanel,
         ToggleInputBar,
         ToggleVerticalTabs,
@@ -371,8 +371,14 @@ fn default_window_options(config: &con_core::Config, cx: &mut App) -> WindowOpti
 
 #[cfg(target_os = "macos")]
 fn quick_terminal_bounds(cx: &mut App) -> WindowBounds {
-    let fallback_size = size(px(1440.0), px(480.0));
-    let fallback_bounds = Bounds::centered(None, fallback_size, cx);
+    let fallback_display = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
+    let fallback_bounds = Bounds::new(
+        fallback_display.origin,
+        size(
+            fallback_display.size.width,
+            fallback_display.size.height / 2.0,
+        ),
+    );
 
     let Some(display) = cx.primary_display() else {
         return WindowBounds::Windowed(fallback_bounds);
@@ -390,6 +396,8 @@ fn quick_terminal_bounds(cx: &mut App) -> WindowBounds {
 fn quick_terminal_options(config: &con_core::Config, cx: &mut App) -> WindowOptions {
     let mut options = default_window_options(config, cx);
     options.window_bounds = Some(quick_terminal_bounds(cx));
+    // Avoid a transient GPUI titlebar before the AppKit trampoline
+    // normalizes the window to borderless.
     options.titlebar = None;
     options
 }
@@ -1516,7 +1524,7 @@ fn main() {
         #[cfg(target_os = "macos")]
         global_hotkey::init(cx, &config.keybindings);
         #[cfg(target_os = "macos")]
-        quick_terminal::init(cx, &config.keybindings);
+        quick_terminal::init(cx);
         #[cfg(target_os = "macos")]
         macos_windowing::install_window_cycle_shortcuts();
 
@@ -1528,7 +1536,7 @@ fn main() {
             toggle_global_summon(cx);
         });
         #[cfg(target_os = "macos")]
-        cx.on_action(|_: &ToggleHotkeyWindow, cx: &mut App| {
+        cx.on_action(|_: &ToggleQuickTerminal, cx: &mut App| {
             quick_terminal::toggle(cx);
         });
         #[cfg(target_os = "macos")]
@@ -1646,7 +1654,7 @@ fn main() {
                     MenuItem::action("Toggle Agent Panel", ToggleAgentPanel),
                     MenuItem::action("Toggle Input Bar", ToggleInputBar),
                     #[cfg(target_os = "macos")]
-                    MenuItem::action("Hotkey Window", ToggleHotkeyWindow),
+                    MenuItem::action("Quick Terminal", ToggleQuickTerminal),
                     MenuItem::action("Command Palette", command_palette::ToggleCommandPalette),
                     MenuItem::separator(),
                     MenuItem::action("Toggle Input / Terminal", FocusInput),

@@ -1,4 +1,3 @@
-use con_core::config::KeybindingConfig;
 use gpui::App;
 use std::cell::RefCell;
 
@@ -23,6 +22,12 @@ fn finish_opening(state: &mut QuickTerminalState) {
     state.opening = false;
 }
 
+fn capture_return_pid() -> Option<i32> {
+    let current_pid = std::process::id() as i32;
+    let frontmost_pid = unsafe { con_quick_terminal_frontmost_app_pid() };
+    remember_return_pid(current_pid, Some(frontmost_pid))
+}
+
 fn prepare_force_hide(state: &mut QuickTerminalState) -> Option<i32> {
     state.visible = false;
     state.return_pid.take()
@@ -30,12 +35,14 @@ fn prepare_force_hide(state: &mut QuickTerminalState) -> Option<i32> {
 
 unsafe extern "C" {
     fn con_quick_terminal_configure(window_ptr: *mut std::ffi::c_void);
+    fn con_quick_terminal_prepare_destroy(window_ptr: *mut std::ffi::c_void);
     fn con_quick_terminal_slide_in(window_ptr: *mut std::ffi::c_void);
     fn con_quick_terminal_slide_out(window_ptr: *mut std::ffi::c_void, return_pid: i32);
     fn con_quick_terminal_window_from_view(
         view_ptr: *mut std::ffi::c_void,
     ) -> *mut std::ffi::c_void;
     fn con_quick_terminal_frontmost_app_pid() -> i32;
+    fn con_quick_terminal_is_main_thread() -> bool;
 }
 
 thread_local! {
@@ -43,16 +50,18 @@ thread_local! {
         const { RefCell::new(QuickTerminalState { raw_ptr: None, opening: false, visible: false, return_pid: None }) };
 }
 
-pub fn init(_cx: &App, _keybindings: &KeybindingConfig) {}
+/// Keep the module loaded; actual Quick Terminal work is lazy on first toggle.
+pub fn init(_cx: &App) {}
 
 pub fn store_window_ptr(window_ptr: *mut std::ffi::c_void) {
+    let fallback_return_pid = capture_return_pid();
     QUICK_TERMINAL_STATE.with(|state| {
         let mut state = state.borrow_mut();
         state.raw_ptr = Some(window_ptr as usize);
         finish_opening(&mut state);
-        let current_pid = std::process::id() as i32;
-        let frontmost_pid = unsafe { con_quick_terminal_frontmost_app_pid() };
-        state.return_pid = remember_return_pid(current_pid, Some(frontmost_pid));
+        if state.return_pid.is_none() {
+            state.return_pid = fallback_return_pid;
+        }
         state.visible = true;
     });
     unsafe { con_quick_terminal_configure(window_ptr) };
@@ -78,9 +87,7 @@ pub fn toggle(cx: &mut App) {
                 }
                 state.visible = false;
             } else {
-                let current_pid = std::process::id() as i32;
-                let frontmost_pid = unsafe { con_quick_terminal_frontmost_app_pid() };
-                state.return_pid = remember_return_pid(current_pid, Some(frontmost_pid));
+                state.return_pid = capture_return_pid();
                 unsafe {
                     con_quick_terminal_slide_in(raw);
                 }
@@ -90,7 +97,15 @@ pub fn toggle(cx: &mut App) {
         return;
     }
 
-    let should_open = QUICK_TERMINAL_STATE.with(|state| begin_opening(&mut state.borrow_mut()));
+    let initial_return_pid = capture_return_pid();
+    let should_open = QUICK_TERMINAL_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        if !begin_opening(&mut state) {
+            return false;
+        }
+        state.return_pid = initial_return_pid;
+        true
+    });
     if !should_open {
         return;
     }
@@ -105,21 +120,14 @@ pub fn toggle(cx: &mut App) {
 
 pub fn opening_failed() {
     QUICK_TERMINAL_STATE.with(|state| {
-        finish_opening(&mut state.borrow_mut());
+        *state.borrow_mut() = QuickTerminalState::default();
     });
 }
 
 /// Returns the default working directory for the quick terminal.
-/// On macOS this is the user's home directory; on other platforms
-/// it defers to the process working directory.
-#[cfg(target_os = "macos")]
+/// On macOS this is the user's home directory.
 pub fn default_quick_terminal_cwd() -> Option<std::path::PathBuf> {
     dirs::home_dir()
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn default_quick_terminal_cwd() -> Option<std::path::PathBuf> {
-    None
 }
 
 /// Always slide the window off-screen, regardless of the current visible
@@ -163,6 +171,7 @@ pub fn hide() {
 /// elsewhere). Hides the window automatically like iTerm2's hotkey window.
 #[unsafe(no_mangle)]
 extern "C" fn con_quick_terminal_handle_resign_key() {
+    debug_assert!(unsafe { con_quick_terminal_is_main_thread() });
     hide();
 }
 
@@ -171,16 +180,32 @@ fn remember_return_pid(current_pid: i32, frontmost_pid: Option<i32>) -> Option<i
 }
 
 pub fn reset_destroyed_window() {
+    let window_ptr = QUICK_TERMINAL_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let window_ptr = state.raw_ptr;
+        *state = QuickTerminalState::default();
+        window_ptr
+    });
+    if let Some(window_ptr) = window_ptr {
+        unsafe {
+            con_quick_terminal_prepare_destroy(window_ptr as *mut std::ffi::c_void);
+        }
+    }
+}
+
+#[cfg(test)]
+fn reset_state_for_tests() -> QuickTerminalState {
     QUICK_TERMINAL_STATE.with(|state| {
         *state.borrow_mut() = QuickTerminalState::default();
-    });
+        *state.borrow()
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         QuickTerminalState, begin_opening, default_quick_terminal_cwd, finish_opening,
-        prepare_force_hide, remember_return_pid,
+        prepare_force_hide, remember_return_pid, reset_state_for_tests,
     };
 
     #[test]
@@ -215,7 +240,7 @@ mod tests {
 
     #[test]
     fn reset_clears_destroyed_window_state() {
-        let state = QuickTerminalState::default();
+        let state = reset_state_for_tests();
         assert_eq!(state.raw_ptr, None);
         assert!(!state.opening);
         assert!(!state.visible);
@@ -253,6 +278,10 @@ mod tests {
 
     #[test]
     fn default_quick_terminal_cwd_uses_home_dir() {
-        assert_eq!(default_quick_terminal_cwd(), dirs::home_dir());
+        let cwd = default_quick_terminal_cwd().expect("macOS should expose a home directory");
+        assert!(
+            cwd.is_dir(),
+            "quick terminal cwd must be an existing directory"
+        );
     }
 }

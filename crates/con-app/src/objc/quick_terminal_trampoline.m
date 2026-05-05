@@ -30,6 +30,9 @@ static NSRect con_quick_terminal_frame(NSWindow *window, bool visible) {
 }
 
 static void con_quick_terminal_apply_configuration(NSWindow *window) {
+    // Borderless removes the visible chrome; the resizable bit keeps the
+    // AppKit edge-resize behavior for the bottom edge and preserves live
+    // height changes across show/hide animations.
     window.styleMask = NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable;
     window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace |
                                 NSWindowCollectionBehaviorTransient;
@@ -51,12 +54,21 @@ static void con_quick_terminal_apply_configuration(NSWindow *window) {
     id observer = [[NSNotificationCenter defaultCenter]
         addObserverForName:NSWindowDidResignKeyNotification
                     object:window
-                     queue:nil
+                     queue:NSOperationQueue.mainQueue
                 usingBlock:^(__unused NSNotification *note) {
                     con_quick_terminal_handle_resign_key();
                 }];
     objc_setAssociatedObject(window, &kResignKeyObserverKey, observer,
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void con_quick_terminal_remove_resign_observer(NSWindow *window) {
+    id observer = objc_getAssociatedObject(window, &kResignKeyObserverKey);
+    if (observer) {
+        [[NSNotificationCenter defaultCenter] removeObserver:observer];
+        objc_setAssociatedObject(window, &kResignKeyObserverKey, nil,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
 }
 
 void con_quick_terminal_configure(void *window_ptr) {
@@ -68,6 +80,21 @@ void con_quick_terminal_configure(void *window_ptr) {
     dispatch_async(dispatch_get_main_queue(), ^{
         con_quick_terminal_apply_configuration(window);
     });
+}
+
+void con_quick_terminal_prepare_destroy(void *window_ptr) {
+    NSWindow *window = (__bridge NSWindow *)window_ptr;
+    if (window == nil) {
+        return;
+    }
+
+    if ([NSThread isMainThread]) {
+        con_quick_terminal_remove_resign_observer(window);
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            con_quick_terminal_remove_resign_observer(window);
+        });
+    }
 }
 
 void *con_quick_terminal_window_from_view(void *view_ptr) {
@@ -88,6 +115,10 @@ int32_t con_quick_terminal_frontmost_app_pid(void) {
     return (int32_t)app.processIdentifier;
 }
 
+bool con_quick_terminal_is_main_thread(void) {
+    return [NSThread isMainThread];
+}
+
 bool con_quick_terminal_activate_app(int32_t pid) {
     if (pid <= 0) {
         return false;
@@ -99,7 +130,15 @@ bool con_quick_terminal_activate_app(int32_t pid) {
         return false;
     }
 
-    return [app activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+    if (@available(macOS 14.0, *)) {
+        [NSApp yieldActivationToApplication:app];
+        return true;
+    } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        return [app activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+#pragma clang diagnostic pop
+    }
 }
 
 void con_quick_terminal_slide_in(void *window_ptr) {
@@ -110,7 +149,14 @@ void con_quick_terminal_slide_in(void *window_ptr) {
 
     dispatch_async(dispatch_get_main_queue(), ^{
         [window setFrame:con_quick_terminal_frame(window, false) display:NO];
-        [NSApp activateIgnoringOtherApps:YES];
+        if (@available(macOS 14.0, *)) {
+            [NSApp activate];
+        } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            [NSApp activateIgnoringOtherApps:YES];
+#pragma clang diagnostic pop
+        }
         [window makeKeyAndOrderFront:nil];
 
         [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
