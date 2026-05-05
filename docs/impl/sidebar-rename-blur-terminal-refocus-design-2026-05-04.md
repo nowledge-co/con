@@ -109,7 +109,7 @@ Why not recommended now:
 - emit `SidebarRename { session_id, label }`
 - clear the local rename state
 
-To preserve Escape semantics, the sidebar stores a small cancel marker for the active rename session. If Escape is pressed, the sidebar clears the inline editor and records that the session was canceled. If a subsequent blur arrives for the same rename session, that blur handler becomes a no-op.
+To preserve Escape semantics, the sidebar stores a per-editor generation token. If Escape is pressed, the sidebar clears the inline editor and records that editor generation as canceled. If a delayed blur arrives from that same editor, the blur handler becomes a no-op. If the user immediately opens a new rename editor on the same tab, the new editor gets a new generation and can still commit normally.
 
 This mirrors the protection already used in horizontal tab rename, but remains sidebar-local because the sidebar owns that input entity and its blur lifecycle.
 
@@ -218,10 +218,11 @@ This avoids stale rename/editor state after drag-reorder or close actions.
 
 ### Sidebar rename changes
 
-- Add `rename_cancelled_session_id: Option<u64>` to `SessionSidebar`.
+- Add `rename_generation: u64` and `rename_cancelled_generation: Option<u64>` to `SessionSidebar`.
 - Add `normalize_sidebar_rename_label(value: &str) -> Option<String>`.
 - In `begin_rename`, use one commit path for `PressEnter` and `Blur`.
 - Ignore blur commits that belong to an Escape-canceled rename.
+- Track whether the input changed, so focus-to-blur without edits restores terminal focus without freezing a smart label as an explicit user label.
 - On the first `InputEvent::Focus`, dispatch `SelectAll` once.
 
 ### Workspace rename changes
@@ -229,7 +230,7 @@ This avoids stale rename/editor state after drag-reorder or close actions.
 - Keep horizontal rename persistence in `commit_tab_rename`.
 - Refocus the active terminal after successful sidebar or horizontal rename commits.
 - Keep rename display aligned with `smart_tab_presentation` so updated user labels show immediately.
-- Remap `tab_rename` and `tab_rename_cancelled_index` after tab close/reorder.
+- Keep `tab_rename` bound to stable tab identity after tab close/reorder, and protect cancel/blur races with `tab_rename_generation` plus `tab_rename_cancelled_generation`.
 
 ### Horizontal tab reorder semantics
 

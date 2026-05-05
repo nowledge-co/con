@@ -205,6 +205,10 @@ pub struct SidebarRename {
     pub session_id: u64,
     /// `None` clears the user override and falls back to smart naming.
     pub label: Option<String>,
+    /// False when rename ended without a user edit. This lets the
+    /// workspace restore terminal focus without freezing a smart label
+    /// into an explicit user override.
+    pub changed_by_user: bool,
 }
 pub struct SidebarDuplicate {
     pub session_id: u64,
@@ -352,11 +356,16 @@ impl SessionSidebar {
         });
 
         let select_all_on_focus = Rc::new(Cell::new(true));
+        let changed_by_user = Rc::new(Cell::new(false));
         cx.subscribe_in(&input, window, {
             let select_all_on_focus = select_all_on_focus.clone();
+            let changed_by_user = changed_by_user.clone();
             move |this, input_entity, event: &InputEvent, window, cx| match event {
                 InputEvent::Focus if select_all_on_focus.replace(false) => {
                     window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
+                }
+                InputEvent::Change => {
+                    changed_by_user.set(true);
                 }
                 InputEvent::PressEnter { .. } | InputEvent::Blur => {
                     if this.rename_cancelled_generation == Some(generation)
@@ -369,7 +378,11 @@ impl SessionSidebar {
                     }
                     let value = input_entity.read(cx).value().to_string();
                     let label = normalize_sidebar_rename_label(&value);
-                    cx.emit(SidebarRename { session_id, label });
+                    cx.emit(SidebarRename {
+                        session_id,
+                        label,
+                        changed_by_user: changed_by_user.get(),
+                    });
                     this.rename = None;
                     this.rename_cancelled_generation = None;
                     cx.notify();
@@ -545,12 +558,7 @@ impl SessionSidebar {
                 .hover(move |s| if is_active { s } else { s.bg(hover_bg) })
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |this, _, _, cx| {
-                        if let Some(state) = &this.rename {
-                            if state.index != i {
-                                this.rename = None;
-                            }
-                        }
+                    cx.listener(move |_this, _, _, cx| {
                         cx.emit(SidebarSelect { index: i });
                     }),
                 )
@@ -1084,12 +1092,7 @@ impl SessionSidebar {
             .hover(move |s| if is_active { s } else { s.bg(hover_bg) })
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    if let Some(state) = &this.rename {
-                        if state.index != i {
-                            this.rename = None;
-                        }
-                    }
+                cx.listener(move |_this, _, _, cx| {
                     cx.emit(SidebarSelect { index: i });
                 }),
             )
@@ -1391,6 +1394,7 @@ fn build_row_context_menu(
                         cx.emit(SidebarRename {
                             session_id,
                             label: None,
+                            changed_by_user: true,
                         })
                     });
                 }
@@ -1502,10 +1506,14 @@ fn cancel_rename_lifecycle(state: RenameLifecycleStateSnapshot) -> RenameLifecyc
 #[cfg(test)]
 fn begin_rename_after_cancel_lifecycle(
     generation: &mut u64,
-    _state: RenameLifecycleStateSnapshot,
+    state: RenameLifecycleStateSnapshot,
     session_id: u64,
 ) -> RenameLifecycleStateSnapshot {
-    begin_rename_lifecycle(generation, session_id)
+    let next = begin_rename_lifecycle(generation, session_id);
+    RenameLifecycleStateSnapshot {
+        active_generation: next.active_generation,
+        cancelled_generation: state.cancelled_generation,
+    }
 }
 
 #[cfg(test)]
@@ -1549,11 +1557,17 @@ mod tests {
         let state = begin_rename_lifecycle(&mut generation, 42);
         let cancelled_generation = state.active_generation.unwrap();
         let state = cancel_rename_lifecycle(state);
-        let _state = begin_rename_after_cancel_lifecycle(&mut generation, state, 42);
+        let reopened = begin_rename_after_cancel_lifecycle(&mut generation, state, 42);
 
         assert!(!blur_should_commit_for_lifecycle(
-            state,
+            reopened,
             cancelled_generation
+        ));
+
+        let active_generation = reopened.active_generation.unwrap();
+        assert!(blur_should_commit_for_lifecycle(
+            reopened,
+            active_generation
         ));
     }
 }

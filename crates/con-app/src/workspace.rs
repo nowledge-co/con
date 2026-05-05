@@ -299,13 +299,6 @@ struct TabRenameStateSnapshot {
     tab_index: usize,
 }
 
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct TabRenameLifecycleSnapshot {
-    active_generation: Option<u64>,
-    cancelled_generation: Option<u64>,
-}
-
 struct Tab {
     pane_tree: PaneTree,
     title: String,
@@ -503,6 +496,10 @@ pub struct ConWorkspace {
     /// Drop slot (0..=N) tracked while a DraggedTab is in flight over
     /// the horizontal tab strip. Slot K = "insert before tab K".
     tab_strip_drop_slot: Option<usize>,
+    /// macOS titlebar drag is initiated explicitly after actual mouse
+    /// movement so double-click still reaches the titlebar handler.
+    #[cfg(target_os = "macos")]
+    top_bar_should_move: bool,
 }
 
 #[derive(Clone)]
@@ -1584,6 +1581,8 @@ impl ConWorkspace {
             tab_rename_cancelled_generation: None,
             tab_rename_generation: 0,
             tab_strip_drop_slot: None,
+            #[cfg(target_os = "macos")]
+            top_bar_should_move: false,
         }
     }
 
@@ -1632,8 +1631,8 @@ impl ConWorkspace {
     }
 
     fn refocus_active_terminal(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(tab) = self.tabs.get(self.active_tab) {
-            tab.pane_tree.focused_terminal().focus(window, cx);
+        if self.has_active_tab() {
+            self.focus_terminal(window, cx);
         }
     }
 
@@ -4642,7 +4641,12 @@ impl ConWorkspace {
         else {
             return;
         };
+        if !event.changed_by_user {
+            self.refocus_active_terminal(window, cx);
+            return;
+        }
         if self.tabs[index].user_label == new_label {
+            self.refocus_active_terminal(window, cx);
             return;
         }
         self.tabs[index].user_label = new_label;
@@ -4917,11 +4921,16 @@ impl ConWorkspace {
         });
 
         let select_all_on_focus = Rc::new(Cell::new(true));
+        let changed_by_user = Rc::new(Cell::new(false));
         cx.subscribe_in(&input, window, {
             let select_all_on_focus = select_all_on_focus.clone();
+            let changed_by_user = changed_by_user.clone();
             move |this, input_entity, event: &InputEvent, window, cx| match event {
                 InputEvent::Focus if select_all_on_focus.replace(false) => {
                     window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
+                }
+                InputEvent::Change => {
+                    changed_by_user.set(true);
                 }
                 InputEvent::PressEnter { .. } | InputEvent::Blur => {
                     if this.tab_rename_cancelled_generation == Some(generation)
@@ -4934,7 +4943,7 @@ impl ConWorkspace {
                         return;
                     }
                     let value = input_entity.read(cx).value().to_string();
-                    this.commit_tab_rename(tab_id, value, window, cx);
+                    this.commit_tab_rename(tab_id, value, changed_by_user.get(), window, cx);
                 }
                 _ => {}
             }
@@ -4956,6 +4965,7 @@ impl ConWorkspace {
         &mut self,
         tab_id: u64,
         value: String,
+        changed_by_user: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -4973,7 +4983,13 @@ impl ConWorkspace {
             return;
         };
 
-        let label = normalize_tab_user_label(&value);
+        let Some(label) = tab_rename_commit_label(&value, changed_by_user) else {
+            self.tab_rename = None;
+            self.tab_rename_cancelled_generation = None;
+            self.refocus_active_terminal(window, cx);
+            cx.notify();
+            return;
+        };
         let changed = tab.user_label != label;
         tab.user_label = label;
         self.tab_rename = None;
@@ -10483,15 +10499,33 @@ impl Render for ConWorkspace {
         {
             top_bar = top_bar
                 .window_control_area(WindowControlArea::Drag)
-                .on_mouse_down(MouseButton::Left, |_, window, _cx| {
-                    // NSWindow.isMovable is set to false so that GPUI
-                    // element drags (tab reorder, etc.) don't also move
-                    // the window. We restore the drag-to-move gesture
-                    // here on the top_bar background; child elements
-                    // with on_mouse_down (tabs, buttons) consume the
-                    // event before it reaches this handler.
-                    window.start_window_move();
-                })
+                .on_mouse_down_out(cx.listener(|this, _, _, _| {
+                    this.top_bar_should_move = false;
+                }))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.top_bar_should_move = false;
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        // NSWindow.isMovable is set to false so GPUI
+                        // element drags (tab reorder, etc.) don't also
+                        // move the window. Match Zed's GPUI titlebar
+                        // pattern: arm on mouse-down, start native drag
+                        // only after actual mouse movement so double
+                        // click can still zoom/minimize the window.
+                        this.top_bar_should_move = true;
+                    }),
+                )
+                .on_mouse_move(cx.listener(|this, _, window, _| {
+                    if this.top_bar_should_move {
+                        this.top_bar_should_move = false;
+                        window.start_window_move();
+                    }
+                }))
                 .on_click(|event, window, _cx| {
                     if event.click_count() == 2 {
                         window.titlebar_double_click();
@@ -10661,14 +10695,7 @@ impl Render for ConWorkspace {
                     // on_click / on_drag still work correctly.
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            // Cancel rename on another tab click.
-                            if let Some(state) = &this.tab_rename {
-                                if state.tab_index != index {
-                                    this.tab_rename = None;
-                                    cx.notify();
-                                }
-                            }
+                        cx.listener(move |_this, _, _, cx| {
                             cx.stop_propagation();
                         }),
                     )
@@ -12367,6 +12394,10 @@ fn trailing_drop_slot_from_position(
     point_in_bounds(&cursor, &bounds).then_some(slot)
 }
 
+fn tab_rename_commit_label(value: &str, changed_by_user: bool) -> Option<Option<String>> {
+    changed_by_user.then(|| normalize_tab_user_label(value))
+}
+
 fn normalize_tab_user_label(value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -12416,7 +12447,7 @@ mod tests {
     use super::{
         ConWorkspace, TabRenameStateSnapshot, horizontal_tab_slot_from_position,
         normalize_tab_user_label, remap_tab_rename_state_after_close,
-        remap_tab_rename_state_after_reorder, tab_rename_initial_label,
+        remap_tab_rename_state_after_reorder, tab_rename_commit_label, tab_rename_initial_label,
         trailing_drop_slot_from_position,
     };
     use gpui::{Bounds, Point, Size, px};
@@ -12429,6 +12460,16 @@ mod tests {
             normalize_tab_user_label("  hello  "),
             Some("hello".to_string())
         );
+    }
+
+    #[test]
+    fn tab_rename_commit_label_only_persists_user_edits() {
+        assert_eq!(tab_rename_commit_label("Deploy", false), None);
+        assert_eq!(
+            tab_rename_commit_label("  Deploy  ", true),
+            Some(Some("Deploy".to_string()))
+        );
+        assert_eq!(tab_rename_commit_label("   ", true), Some(None));
     }
 
     #[test]
