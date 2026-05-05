@@ -261,7 +261,7 @@ use crate::{
     NewSurfaceSplitRight, NewTab, NextSurface, NextTab, OpenWorkspaceLayoutWindow, PreviousSurface,
     PreviousTab, Quit, RenameSurface, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5,
     SelectTab6, SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp,
-    ToggleAgentPanel, TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs,
+    ToggleAgentPanel, TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs, CollapseSidebar,
 };
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
@@ -5220,6 +5220,9 @@ impl ConWorkspace {
             "toggle-vertical-tabs" => {
                 self.toggle_vertical_tabs(&ToggleVerticalTabs, window, cx);
             }
+            "collapse-sidebar" => {
+                self.collapse_sidebar(&CollapseSidebar, window, cx);
+            }
             "cycle-input-mode" => {
                 self.input_bar.update(cx, |bar, cx| {
                     bar.cycle_mode(window, cx);
@@ -6964,6 +6967,22 @@ impl ConWorkspace {
             TabsOrientation::Vertical
         };
         self.apply_tabs_orientation(next, true, cx);
+    }
+
+    fn collapse_sidebar(
+        &mut self,
+        _: &CollapseSidebar,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.vertical_tabs_active() {
+            return;
+        }
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.toggle_pinned(cx);
+        });
+        self.save_session(cx);
+        cx.notify();
     }
 
     fn toggle_pane_scope_picker(
@@ -11294,6 +11313,7 @@ impl Render for ConWorkspace {
                 .on_action(cx.listener(Self::toggle_agent_panel))
                 .on_action(cx.listener(Self::toggle_input_bar))
                 .on_action(cx.listener(Self::toggle_vertical_tabs))
+                .on_action(cx.listener(Self::collapse_sidebar))
                 .on_action(cx.listener(Self::toggle_settings))
                 .on_action(cx.listener(Self::toggle_command_palette))
                 .on_action(cx.listener(Self::new_tab))

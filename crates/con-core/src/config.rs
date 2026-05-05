@@ -282,6 +282,14 @@ fn default_toggle_vertical_tabs() -> String {
     // real terminal control character. Ctrl+Shift+B stays app-level.
     "ctrl-shift-b".into()
 }
+#[cfg(target_os = "macos")]
+fn default_collapse_sidebar() -> String {
+    "secondary-shift-b".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_collapse_sidebar() -> String {
+    "ctrl-alt-b".into()
+}
 
 #[cfg(target_os = "macos")]
 fn default_new_surface() -> String {
@@ -380,6 +388,7 @@ pub struct KeybindingConfig {
     pub toggle_input_bar: String,
     pub toggle_pane_scope: String,
     pub toggle_vertical_tabs: String,
+    pub collapse_sidebar: String,
     pub new_surface: String,
     pub new_surface_split_right: String,
     pub new_surface_split_down: String,
@@ -414,6 +423,7 @@ impl Default for KeybindingConfig {
             toggle_input_bar: default_toggle_input_bar(),
             toggle_pane_scope: default_toggle_pane_scope(),
             toggle_vertical_tabs: default_toggle_vertical_tabs(),
+            collapse_sidebar: default_collapse_sidebar(),
             new_surface: default_new_surface(),
             new_surface_split_right: default_new_surface_split_right(),
             new_surface_split_down: default_new_surface_split_down(),

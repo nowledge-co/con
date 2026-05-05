@@ -2216,6 +2216,7 @@ impl SettingsPanel {
             "split_down" => self.config.keybindings.split_down = binding,
             "toggle_pane_scope" => self.config.keybindings.toggle_pane_scope = binding,
             "toggle_vertical_tabs" => self.config.keybindings.toggle_vertical_tabs = binding,
+            "collapse_sidebar" => self.config.keybindings.collapse_sidebar = binding,
             "new_surface" => self.config.keybindings.new_surface = binding,
             "new_surface_split_right" => self.config.keybindings.new_surface_split_right = binding,
             "new_surface_split_down" => self.config.keybindings.new_surface_split_down = binding,
@@ -2252,6 +2253,7 @@ impl SettingsPanel {
             "split_down" => &self.config.keybindings.split_down,
             "toggle_pane_scope" => &self.config.keybindings.toggle_pane_scope,
             "toggle_vertical_tabs" => &self.config.keybindings.toggle_vertical_tabs,
+            "collapse_sidebar" => &self.config.keybindings.collapse_sidebar,
             "new_surface" => &self.config.keybindings.new_surface,
             "new_surface_split_right" => &self.config.keybindings.new_surface_split_right,
             "new_surface_split_down" => &self.config.keybindings.new_surface_split_down,
@@ -4354,6 +4356,7 @@ impl SettingsPanel {
             ("Cycle Input Mode", "cycle_input_mode"),
             ("Toggle Pane Scope", "toggle_pane_scope"),
             ("Toggle Vertical Tabs", "toggle_vertical_tabs"),
+            ("Collapse/Expand Sidebar", "collapse_sidebar"),
             ("Quit", "quit"),
         ];
 
