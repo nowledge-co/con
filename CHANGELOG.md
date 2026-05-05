@@ -4,6 +4,26 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.62` - 2026-05-05
+
+### Added
+
+**macOS**
+
+- Added Quick Terminal, an optional macOS-only floating terminal window that
+  slides down from the active screen, keeps its live tabs/panes while hidden,
+  and can return focus to the app you were using before it appeared. It is off
+  by default; enable it in Settings -> Keys and use Cmd-Backslash or your chosen
+  shortcut.
+
+### Changed
+
+**Settings**
+
+- Shortcut recording now temporarily suspends macOS global hotkeys and restores
+  the previously active persisted shortcuts when recording is canceled, saved,
+  or dismissed.
+
 ## `v0.1.0-beta.61` - 2026-05-05
 
 ### Added
@@ -14,14 +34,6 @@ con is still pre-release, so entries may group related beta work while the produ
   in place, with focus-time select-all, Enter/blur save, and Escape cancel.
 - Added browser-style drag reorder for horizontal tabs, including left/right
   drop slots and a real trailing drop target after the last tab.
-
-**macOS**
-
-- Added Quick Terminal, an optional macOS-only floating terminal window that
-  slides down from the active screen, keeps its live tabs/panes while hidden,
-  and can return focus to the app you were using before it appeared. It is off
-  by default; enable it in Settings -> Keys and use Cmd-Backslash or your chosen
-  shortcut.
 
 **Distribution**
 
@@ -65,9 +77,6 @@ con is still pre-release, so entries may group related beta work while the produ
 - Added `cmd-s` (macOS) / `ctrl-s` (Windows/Linux) keybinding to trigger Save Changes from anywhere in the settings panel.
 - Added `cmd-w` (macOS) / `ctrl-w` (Windows/Linux) to close the standalone settings window or save-and-dismiss in panel mode. Closing via `cmd-w` now correctly reverts any unsaved standalone preview changes, matching the existing Escape path.
 - Save Changes button in the standalone settings window now shows a `⌘ S` / `Ctrl S` keycap hint.
-- Shortcut recording now temporarily suspends macOS global hotkeys and restores
-  the previously active persisted shortcuts when recording is canceled, saved,
-  or dismissed.
 
 ### Fixed
 
