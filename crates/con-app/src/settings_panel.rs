@@ -2118,6 +2118,7 @@ impl SettingsPanel {
                 self.save_error = None;
                 self.last_saved_at = Some(std::time::SystemTime::now());
                 self.preview_snapshot = Some(self.config.clone());
+                self.set_recording_key(None);
                 if !self.standalone {
                     self.visible = false;
                     self.overlay_motion
