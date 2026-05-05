@@ -7689,11 +7689,16 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Mark the quick terminal as not-visible immediately so the
-        // NSWindowDidResignKeyNotification observer (auto-hide on blur)
-        // does not fire a competing slide-out while we rebuild the tab.
+        // Suppress the auto-hide observer so it doesn't fire a competing
+        // slide-out while we tear down the tab.
         #[cfg(target_os = "macos")]
         crate::quick_terminal::mark_hidden();
+
+        // Slide the window off-screen first — while the old terminal is
+        // still visible — so the user sees a clean dismiss. Rebuilding
+        // the tab happens off-screen on the next frame.
+        #[cfg(target_os = "macos")]
+        crate::quick_terminal::force_hide();
 
         let index = self.active_tab;
         let closing_terminals: Vec<TerminalPane> = self.tabs[index]
@@ -7713,9 +7718,8 @@ impl ConWorkspace {
             window,
             cx,
         );
-        // Explicitly focus the new terminal so GPUI's focus chain
-        // is established before the window hides. Otherwise toggling
-        // back after reinit shows a window without focus.
+        // Focus the new terminal while we still have the window context
+        // so GPUI remembers it for the next toggle.
         terminal.focus(window, cx);
 
         let summary_id = self.next_tab_summary_id;
@@ -7743,9 +7747,6 @@ impl ConWorkspace {
                 terminal.shutdown_surface(cx);
             }
         });
-
-        #[cfg(target_os = "macos")]
-        crate::quick_terminal::force_hide();
     }
 
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
