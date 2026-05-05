@@ -107,9 +107,35 @@ pub fn mark_hidden() {
 }
 
 /// Always slide the window off-screen, regardless of the current visible
-/// flag. Called from reinitialize_quick_terminal_and_hide after mark_hidden()
-/// already disabled the auto-hide guard.
+/// flag. Consumes the saved return pid (captured during toggle-in) so
+/// focus returns to the previously active app, not the con main window.
 pub fn force_hide() {
+    let return_pid =
+        QUICK_TERMINAL_RETURN_PID.with(|slot| take_return_pid(&mut slot.borrow_mut()));
+    QUICK_TERMINAL_RAW_PTR.with(|slot| {
+        let window_ptr = *slot.borrow();
+        if let Some(window_ptr) = window_ptr {
+            unsafe {
+                con_quick_terminal_slide_out(
+                    window_ptr as *mut std::ffi::c_void,
+                    return_pid.unwrap_or(0),
+                );
+            }
+        }
+    });
+}
+
+/// Slide the quick terminal window off-screen, but only if currently
+/// visible. No-ops when already hidden to avoid double-hide during
+/// resign-key animations. Does NOT consume the saved return pid —
+/// macOS naturally activates whatever the user clicked on.
+pub fn hide() {
+    let is_visible = QUICK_TERMINAL_VISIBLE.with(|v| *v.borrow());
+    if !is_visible {
+        return;
+    }
+    QUICK_TERMINAL_VISIBLE.with(|v| *v.borrow_mut() = false);
+    // auto-hide: pass 0 so macOS handles app switching naturally
     QUICK_TERMINAL_RAW_PTR.with(|slot| {
         let window_ptr = *slot.borrow();
         if let Some(window_ptr) = window_ptr {
@@ -118,18 +144,6 @@ pub fn force_hide() {
             }
         }
     });
-}
-
-/// Slide the quick terminal window off-screen, but only if currently
-/// visible. No-ops when already hidden to avoid double-hide during
-/// resign-key animations.
-pub fn hide() {
-    let is_visible = QUICK_TERMINAL_VISIBLE.with(|v| *v.borrow());
-    if !is_visible {
-        return;
-    }
-    QUICK_TERMINAL_VISIBLE.with(|v| *v.borrow_mut() = false);
-    force_hide();
 }
 
 /// Called from ObjC when the quick terminal window resigns key (user clicked

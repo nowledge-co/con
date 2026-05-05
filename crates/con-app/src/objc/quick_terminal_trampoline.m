@@ -45,7 +45,7 @@ static void con_quick_terminal_apply_configuration(NSWindow *window, bool always
         addObserverForName:NSWindowDidResignKeyNotification
                     object:window
                      queue:nil
-                usingBlock:^(NSNotification *note) {
+                usingBlock:^(__unused NSNotification *note) {
                     con_quick_terminal_handle_resign_key();
                 }];
     objc_setAssociatedObject(window, &kResignKeyObserverKey, observer,
