@@ -261,7 +261,7 @@ use crate::{
     NewSurfaceSplitRight, NewTab, NextSurface, NextTab, OpenWorkspaceLayoutWindow, PreviousSurface,
     PreviousTab, Quit, RenameSurface, SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5,
     SelectTab6, SelectTab7, SelectTab8, SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp,
-    ToggleAgentPanel, TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs,
+    ToggleAgentPanel, TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs, CollapseSidebar,
 };
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
@@ -407,11 +407,6 @@ pub struct ConWorkspace {
     agent_panel_motion: MotionValue,
     agent_panel_width: f32,
     tab_strip_motion: MotionValue,
-    /// When true, the horizontal tab strip is hidden even though
-    /// `tabs_orientation` is `Horizontal` and there are multiple tabs.
-    /// Toggled by `ToggleVerticalTabs` while in horizontal mode so the
-    /// user can collapse the strip without switching to vertical tabs.
-    horizontal_tabs_collapsed: bool,
     input_bar_visible: bool,
     input_bar_motion: MotionValue,
     /// Tracks whether a modal was open on the last render, so we can
@@ -1535,7 +1530,6 @@ impl ConWorkspace {
             agent_panel_motion: MotionValue::new(if agent_panel_open { 1.0 } else { 0.0 }),
             agent_panel_width,
             tab_strip_motion: MotionValue::new(if has_multiple_tabs { 1.0 } else { 0.0 }),
-            horizontal_tabs_collapsed: false,
             input_bar_visible: session.input_bar_visible,
             input_bar_motion: MotionValue::new(if session.input_bar_visible { 1.0 } else { 0.0 }),
             modal_was_open: false,
@@ -1608,9 +1602,7 @@ impl ConWorkspace {
     }
 
     fn horizontal_tabs_visible(&self) -> bool {
-        matches!(self.tabs_orientation, TabsOrientation::Horizontal)
-            && self.tabs.len() > 1
-            && !self.horizontal_tabs_collapsed
+        matches!(self.tabs_orientation, TabsOrientation::Horizontal) && self.tabs.len() > 1
     }
 
     fn vertical_tabs_active(&self) -> bool {
@@ -5228,6 +5220,9 @@ impl ConWorkspace {
             "toggle-vertical-tabs" => {
                 self.toggle_vertical_tabs(&ToggleVerticalTabs, window, cx);
             }
+            "collapse-sidebar" => {
+                self.collapse_sidebar(&CollapseSidebar, window, cx);
+            }
             "cycle-input-mode" => {
                 self.input_bar.update(cx, |bar, cx| {
                     bar.cycle_mode(window, cx);
@@ -5410,11 +5405,6 @@ impl ConWorkspace {
         }
         self.config.appearance.tabs_orientation = orientation;
         self.tabs_orientation = orientation;
-        // When switching away from horizontal tabs, reset the collapsed
-        // state so the strip is visible if the user switches back.
-        if matches!(orientation, TabsOrientation::Vertical) {
-            self.horizontal_tabs_collapsed = false;
-        }
         if persist_config {
             self.sync_settings_panels_tabs_orientation(orientation, cx);
         }
@@ -6971,29 +6961,28 @@ impl ConWorkspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.vertical_tabs_active() {
-            // Already in vertical-tabs mode: toggle the sidebar between
-            // collapsed (rail) and pinned (full panel) without switching
-            // to horizontal tabs. This matches the issue #139 expectation
-            // that Cmd+B hides/shows the sidebar rather than falling back
-            // to a horizontal tab strip.
-            self.sidebar.update(cx, |sidebar, cx| {
-                sidebar.toggle_pinned(cx);
-            });
-            self.save_session(cx);
-            cx.notify();
+        let next = if self.vertical_tabs_active() {
+            TabsOrientation::Horizontal
         } else {
-            // Horizontal-tabs mode: toggle the tab strip collapsed state.
-            // This lets the user hide the strip without switching to
-            // vertical tabs — the strip can be restored with another Cmd+B.
-            self.horizontal_tabs_collapsed = !self.horizontal_tabs_collapsed;
-            if self.sync_tab_strip_motion() {
-                #[cfg(target_os = "macos")]
-                self.arm_top_chrome_snap_guard(cx);
-            }
-            self.save_session(cx);
-            cx.notify();
+            TabsOrientation::Vertical
+        };
+        self.apply_tabs_orientation(next, true, cx);
+    }
+
+    fn collapse_sidebar(
+        &mut self,
+        _: &CollapseSidebar,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.vertical_tabs_active() {
+            return;
         }
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.toggle_pinned(cx);
+        });
+        self.save_session(cx);
+        cx.notify();
     }
 
     fn toggle_pane_scope_picker(
@@ -10969,13 +10958,7 @@ impl Render for ConWorkspace {
         );
 
         let vertical_tabs_tooltip = if self.vertical_tabs_active() {
-            if self.sidebar.read(cx).is_pinned() {
-                "Collapse sidebar"
-            } else {
-                "Expand sidebar"
-            }
-        } else if self.horizontal_tabs_collapsed {
-            "Show tab strip"
+            "Use horizontal tabs"
         } else {
             "Use vertical tabs"
         };
@@ -11330,6 +11313,7 @@ impl Render for ConWorkspace {
                 .on_action(cx.listener(Self::toggle_agent_panel))
                 .on_action(cx.listener(Self::toggle_input_bar))
                 .on_action(cx.listener(Self::toggle_vertical_tabs))
+                .on_action(cx.listener(Self::collapse_sidebar))
                 .on_action(cx.listener(Self::toggle_settings))
                 .on_action(cx.listener(Self::toggle_command_palette))
                 .on_action(cx.listener(Self::new_tab))

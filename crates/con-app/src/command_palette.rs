@@ -27,6 +27,10 @@ const TOGGLE_VERTICAL_TABS_SHORTCUT: &str = "secondary-b";
 #[cfg(not(target_os = "macos"))]
 const TOGGLE_VERTICAL_TABS_SHORTCUT: &str = "ctrl-shift-b";
 #[cfg(target_os = "macos")]
+const COLLAPSE_SIDEBAR_SHORTCUT: &str = "secondary-shift-b";
+#[cfg(not(target_os = "macos"))]
+const COLLAPSE_SIDEBAR_SHORTCUT: &str = "ctrl-alt-b";
+#[cfg(target_os = "macos")]
 const NEW_SURFACE_SHORTCUT: &str = "secondary-alt-t";
 #[cfg(not(target_os = "macos"))]
 const NEW_SURFACE_SHORTCUT: &str = "alt-shift-t";
@@ -216,6 +220,12 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         id: "toggle-vertical-tabs",
         label: "Toggle Vertical Tabs",
         shortcut: TOGGLE_VERTICAL_TABS_SHORTCUT,
+        category: "View",
+    },
+    PaletteAction {
+        id: "collapse-sidebar",
+        label: "Collapse/Expand Sidebar",
+        shortcut: COLLAPSE_SIDEBAR_SHORTCUT,
         category: "View",
     },
     PaletteAction {
