@@ -1676,6 +1676,8 @@ fn main() {
             },
         ]);
 
+        cx.set_dock_menu(vec![MenuItem::action("New Window", NewWindow)]);
+
         open_con_window(config.clone(), startup_session(), true, cx);
 
         // Initialize the auto-updater. On macOS this loads Sparkle

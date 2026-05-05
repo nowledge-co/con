@@ -34,7 +34,6 @@ kingston/
 │   ├── con-ghostty/   # Ghostty FFI wrapper — primary macOS backend (libghostty C API)
 │   ├── con-agent/     # AI harness (Rig 0.34, tools, conversation)
 │   └── con-cli/       # CLI + socket client for the live local control plane
-├── postmortem/        # Integration & incident postmortems
 ├── assets/            # Themes, fonts, icons
 └── 3pp/               # Third-party source (READ-ONLY reference, .gitignored)
 ```
@@ -154,7 +153,7 @@ Read the component's source in `3pp/gpui-component/crates/ui/src/` to understand
 - **Real Rig integration.** Tools implement `rig::tool::Tool` trait. Agent built via `client.agent(model).tool(T).build()`. Chat via `Chat::chat()` trait.
 - **Agent transparency.** When the built-in agent runs a command, it executes visibly. No hidden subprocesses.
 - **Shared tokio runtime.** The harness owns a single multi-thread tokio runtime — no thread-per-message.
-- **Config is TOML.** User config at `~/.config/con/config.toml`.
+- **Config is TOML.** User config at `~/Library/Application Support/con/config.toml` (macOS), `%APPDATA%\con-terminal\config.toml` (Windows), `~/.config/con/config.toml` (Linux). Path resolved at runtime via `con-paths::config_file()` → `dirs::config_dir()`.
 - **GPUI patterns.** Use `cx.spawn(async move |this, cx| { ... })` for async work. Use if/else for conditional UI (FluentBuilder::when() is not re-exported).
 
 ## Branching
