@@ -106,7 +106,7 @@ This installs both `con` and `con-cli` into `~/.local/bin`. Or download
 
 Arch Linux
 
-Arch Linux User can install con via `pacman -S con-bin` or `paru -S con-bin` or `yay -S con-bin`
+Arch Linux users can install con via `pacman -S con-bin` or `paru -S con-bin` or `yay -S con-bin` .
 
 **Windows**
 
