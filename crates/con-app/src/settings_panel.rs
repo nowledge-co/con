@@ -1378,6 +1378,10 @@ impl SettingsPanel {
         );
         if self.visible {
             self.refresh_controls_from_config(window, cx);
+        } else {
+            // Ensure hotkeys are always re-enabled when the panel closes,
+            // even if recording was active when the user dismissed it.
+            self.set_recording_key(None);
         }
         cx.notify();
     }
@@ -2144,7 +2148,10 @@ impl SettingsPanel {
                 crate::global_hotkey::suspend_global_hotkeys(&self.config.keybindings);
             }
             (true, false) => {
-                crate::global_hotkey::resume_global_hotkeys(&self.config.keybindings);
+                // Resume from the persisted config, not the in-panel draft, so
+                // that cancel/revert flows don't leave unsaved bindings active.
+                let persisted = con_core::Config::load().unwrap_or_default();
+                crate::global_hotkey::resume_global_hotkeys(&persisted.keybindings);
             }
             _ => {}
         }
