@@ -171,17 +171,17 @@ macos-open channel=channel arch=arch:
 
 # [Linux] Build a release binary and package it
 # Output: dist/con-{version}-linux-{arch}.tar.gz
-linux-release arch=arch:
+linux-release channel=channel arch=arch:
     #!/usr/bin/env bash
     set -euo pipefail
     resolved_arch="{{ arch }}"
     if [[ -z "${resolved_arch}" ]]; then
         resolved_arch="$(uname -m | sed 's/aarch64/arm64/')"
     fi
-    CON_LINUX_ARCH="${resolved_arch}" ./scripts/linux/release.sh
+    CON_RELEASE_CHANNEL={{ channel }} CON_LINUX_ARCH="${resolved_arch}" ./scripts/linux/release.sh
 
 # [Linux] Install the release binaries to ~/.local/bin
-linux-install arch=arch: (linux-release arch)
+linux-install channel=channel arch=arch: (linux-release channel arch)
     #!/usr/bin/env bash
     set -euo pipefail
     resolved_arch="{{ arch }}"
