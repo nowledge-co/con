@@ -11,6 +11,10 @@
 # `uname` is never invoked there.
 # Override explicitly when needed: just macos-bundle arch=x86_64
 
+# Use cmd.exe on Windows so recipes work in a plain Developer Command Prompt
+# without requiring Git Bash, Cygwin, or sh on PATH.
+set windows-shell := ["cmd.exe", "/c"]
+
 # ── defaults ──────────────────────────────────────────────────────────────────
 
 # Release channel for macOS/Linux app bundles (stable | beta | dev)
