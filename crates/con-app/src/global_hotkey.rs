@@ -37,6 +37,10 @@ pub fn init(cx: &App, keybindings: &KeybindingConfig) {
 }
 
 pub fn update_from_keybindings(keybindings: &KeybindingConfig) {
+    if hotkeys_suspended() {
+        return;
+    }
+
     register_hotkey(
         keybindings.global_summon_enabled,
         &keybindings.global_summon,
@@ -164,13 +168,17 @@ pub fn suspend_global_hotkeys(_keybindings: &KeybindingConfig) {
 }
 
 pub fn resume_global_hotkeys(keybindings: &KeybindingConfig) {
-    update_from_keybindings(keybindings);
     HOTKEYS_SUSPENDED.with(|s| *s.borrow_mut() = false);
+    update_from_keybindings(keybindings);
+}
+
+fn hotkeys_suspended() -> bool {
+    HOTKEYS_SUSPENDED.with(|s| *s.borrow())
 }
 
 #[cfg(test)]
 pub fn is_suspended() -> bool {
-    HOTKEYS_SUSPENDED.with(|s| *s.borrow())
+    hotkeys_suspended()
 }
 
 // Keep this in sync with ghostty_view.rs.
