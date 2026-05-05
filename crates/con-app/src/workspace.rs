@@ -10517,17 +10517,14 @@ impl Render for ConWorkspace {
             .min_w_0()
             .items_end()
             // Container-level drop fallback — catches drops in the gaps
-            // between tabs and after the last tab.
+            // between tabs. The trailing after-last-tab slot is handled
+            // by a dedicated element with real bounds below.
             .on_drag_move::<DraggedTab>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
-                    // Promote to slot=N when cursor is past the last tab.
-                    let approx_tab_w = 120.0_f32;
-                    let last_tab_right_estimate =
-                        f32::from(event.bounds.origin.x) + (tab_count as f32) * approx_tab_w;
-                    if f32::from(event.event.position.x) >= last_tab_right_estimate
-                        && this.tab_strip_drop_slot != Some(tab_count)
+                    if point_in_bounds(&event.event.position, &event.bounds)
+                        && this.tab_strip_drop_slot == Some(tab_count)
                     {
-                        this.tab_strip_drop_slot = Some(tab_count);
+                        this.tab_strip_drop_slot = None;
                         cx.notify();
                     }
                 },
@@ -10803,6 +10800,37 @@ impl Render for ConWorkspace {
                 }
 
                 tabs_container = tabs_container.child(tab_el.child(tab_content));
+
+                if index + 1 == tab_count {
+                    tabs_container = tabs_container.child(
+                        div()
+                            .id(ElementId::Name(format!("tab-trailing-drop-{index}").into()))
+                            .w(px(12.0))
+                            .h_full()
+                            .flex_shrink_0()
+                            .on_drag_move::<DraggedTab>(cx.listener(
+                                move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                                    let Some(slot) = trailing_drop_slot_from_position(
+                                        event.event.position,
+                                        event.bounds,
+                                        tab_count,
+                                    ) else {
+                                        return;
+                                    };
+                                    if this.tab_strip_drop_slot != Some(slot) {
+                                        this.tab_strip_drop_slot = Some(slot);
+                                        cx.notify();
+                                    }
+                                },
+                            ))
+                            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                                let to = this.tab_strip_drop_slot.unwrap_or(tab_count);
+                                this.tab_strip_drop_slot = None;
+                                this.reorder_tab_by_id(dragged.session_id, to, cx);
+                                cx.notify();
+                            })),
+                    );
+                }
             }
         }
 
@@ -12298,6 +12326,14 @@ fn horizontal_tab_slot_from_position(
     Some(if local_x < half { index } else { index + 1 })
 }
 
+fn trailing_drop_slot_from_position(
+    cursor: gpui::Point<gpui::Pixels>,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    slot: usize,
+) -> Option<usize> {
+    point_in_bounds(&cursor, &bounds).then_some(slot)
+}
+
 fn normalize_tab_user_label(value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -12348,6 +12384,7 @@ mod tests {
         ConWorkspace, TabRenameStateSnapshot, horizontal_tab_slot_from_position,
         normalize_tab_user_label, remap_tab_rename_state_after_close,
         remap_tab_rename_state_after_reorder, tab_rename_initial_label,
+        trailing_drop_slot_from_position,
     };
     use gpui::{Bounds, Point, Size, px};
 
@@ -12443,6 +12480,43 @@ mod tests {
                 0,
             ),
             "Deploy"
+        );
+    }
+
+    #[test]
+    fn trailing_drop_slot_uses_real_bounds() {
+        let bounds = Bounds {
+            origin: Point {
+                x: px(340.0),
+                y: px(20.0),
+            },
+            size: Size {
+                width: px(88.0),
+                height: px(30.0),
+            },
+        };
+
+        assert_eq!(
+            trailing_drop_slot_from_position(
+                Point {
+                    x: px(400.0),
+                    y: px(25.0)
+                },
+                bounds,
+                5,
+            ),
+            Some(5)
+        );
+        assert_eq!(
+            trailing_drop_slot_from_position(
+                Point {
+                    x: px(429.0),
+                    y: px(25.0)
+                },
+                bounds,
+                5,
+            ),
+            None
         );
     }
 
