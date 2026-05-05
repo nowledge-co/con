@@ -477,13 +477,24 @@ impl GhosttyView {
         // actually paint at — picking different floors here would
         // make text overrun the estimated column count and lines
         // wrap unexpectedly on the alternate screen.
+        //
+        // Subtract the padding that `render()` applies (px + py) so the
+        // PTY grid is sized to the *drawable* area, not the full pane
+        // bounds. Without this the terminal reports more columns/rows than
+        // it can actually display, causing TUI apps to draw text that gets
+        // clipped at the right/bottom edge.
+        let pad_x_px = (TERMINAL_PADDING_X_PX * scale_factor).round() as u32;
+        let pad_y_px = (TERMINAL_PADDING_Y_PX * scale_factor).round() as u32;
+        let inner_width_px = width_px.saturating_sub(pad_x_px * 2).max(1);
+        let inner_height_px = height_px.saturating_sub(pad_y_px * 2).max(1);
+
         let font_size_px = effective_font_size(self.initial_font_size) * scale_factor;
         let cell_width_px = (font_size_px * DEFAULT_CELL_WIDTH_RATIO).round().max(7.0) as u32;
         let cell_height_px = (font_size_px * DEFAULT_CELL_HEIGHT_RATIO).round().max(14.0) as u32;
-        let columns = (width_px / cell_width_px.max(1))
+        let columns = (inner_width_px / cell_width_px.max(1))
             .max(1)
             .min(u32::from(u16::MAX)) as u16;
-        let rows = (height_px / cell_height_px.max(1))
+        let rows = (inner_height_px / cell_height_px.max(1))
             .max(1)
             .min(u32::from(u16::MAX)) as u16;
 
