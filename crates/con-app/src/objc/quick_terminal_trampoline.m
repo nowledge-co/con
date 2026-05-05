@@ -2,6 +2,7 @@
 #import <QuartzCore/QuartzCore.h>
 #include <dispatch/dispatch.h>
 #include <objc/runtime.h>
+#include <unistd.h>
 
 static const CGFloat CON_QUICK_TERMINAL_MIN_HEIGHT = 280.0;
 
@@ -198,7 +199,7 @@ void con_quick_terminal_slide_out(void *window_ptr, int32_t return_pid) {
             context.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
             [[window animator] setFrame:con_quick_terminal_frame(window, false) display:YES];
         } completionHandler:^{
-            if (return_pid > 0) {
+            if (return_pid > 0 && return_pid != (int32_t)getpid()) {
                 con_quick_terminal_activate_app(return_pid);
             }
             [window orderOut:nil];

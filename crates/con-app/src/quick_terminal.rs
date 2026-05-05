@@ -7,7 +7,7 @@ struct QuickTerminalState {
     opening: bool,
     visible: bool,
     return_pid: Option<i32>,
-    last_non_con_pid: Option<i32>,
+    last_active_pid: Option<i32>,
 }
 
 fn begin_opening(state: &mut QuickTerminalState) -> bool {
@@ -23,23 +23,38 @@ fn finish_opening(state: &mut QuickTerminalState) {
     state.opening = false;
 }
 
+fn valid_pid(pid: i32) -> Option<i32> {
+    (pid > 0).then_some(pid)
+}
+
 fn capture_return_pid() -> Option<i32> {
     let current_pid = std::process::id() as i32;
     let frontmost_pid = unsafe { con_quick_terminal_frontmost_app_pid() };
-    let captured = remember_return_pid(current_pid, Some(frontmost_pid));
+    let captured = valid_pid(frontmost_pid).filter(|pid| *pid != current_pid);
     if captured.is_some() {
-        QUICK_TERMINAL_STATE.with(|state| state.borrow_mut().last_non_con_pid = captured);
+        QUICK_TERMINAL_STATE.with(|state| state.borrow_mut().last_active_pid = captured);
     }
-    captured.or_else(|| QUICK_TERMINAL_STATE.with(|state| state.borrow().last_non_con_pid))
+    captured.or_else(|| QUICK_TERMINAL_STATE.with(|state| state.borrow().last_active_pid))
 }
 
 /// Record an externally observed active app pid. This lets the quick terminal
 /// restore focus even when the global-hotkey callback runs after macOS has
-/// already made con frontmost.
+/// already made con frontmost. The recorded app may be con itself: the return
+/// target is "whatever app was active before Quick Terminal", not "non-con".
 pub fn remember_active_app_pid(pid: i32) {
     let current_pid = std::process::id() as i32;
-    if let Some(pid) = remember_return_pid(current_pid, Some(pid)) {
-        QUICK_TERMINAL_STATE.with(|state| state.borrow_mut().last_non_con_pid = Some(pid));
+    if let Some(pid) = valid_pid(pid) {
+        QUICK_TERMINAL_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            // Opening/showing Quick Terminal activates con as the owner app.
+            // Do not let that synthetic activation overwrite the app that was
+            // active before Quick Terminal. A con pid observed while the quick
+            // terminal is not active is still a valid return target.
+            if pid == current_pid && (state.opening || state.visible) {
+                return;
+            }
+            state.last_active_pid = Some(pid);
+        });
     }
 }
 
@@ -70,7 +85,7 @@ unsafe extern "C" {
 
 thread_local! {
     static QUICK_TERMINAL_STATE: RefCell<QuickTerminalState> =
-        const { RefCell::new(QuickTerminalState { raw_ptr: None, opening: false, visible: false, return_pid: None, last_non_con_pid: None }) };
+        const { RefCell::new(QuickTerminalState { raw_ptr: None, opening: false, visible: false, return_pid: None, last_active_pid: None }) };
 }
 
 /// Keep the module loaded; actual Quick Terminal work is lazy on first toggle.
@@ -221,10 +236,6 @@ extern "C" fn con_quick_terminal_handle_resign_key() {
     hide();
 }
 
-fn remember_return_pid(current_pid: i32, frontmost_pid: Option<i32>) -> Option<i32> {
-    frontmost_pid.filter(|pid| *pid != current_pid && *pid > 0)
-}
-
 pub fn reset_destroyed_window() {
     let window_ptr = QUICK_TERMINAL_STATE.with(|state| {
         let mut state = state.borrow_mut();
@@ -251,7 +262,7 @@ fn reset_state_for_tests() -> QuickTerminalState {
 mod tests {
     use super::{
         QuickTerminalState, begin_opening, default_quick_terminal_cwd, finish_opening,
-        prepare_force_hide, remember_return_pid, reset_state_for_tests,
+        prepare_force_hide, reset_state_for_tests, valid_pid,
     };
 
     #[test]
@@ -261,7 +272,7 @@ mod tests {
         assert!(!state.opening);
         assert!(!state.visible);
         assert_eq!(state.return_pid, None);
-        assert_eq!(state.last_non_con_pid, None);
+        assert_eq!(state.last_active_pid, None);
     }
 
     #[test]
@@ -275,10 +286,11 @@ mod tests {
     }
 
     #[test]
-    fn remember_return_pid_ignores_con_itself_and_consumes_saved_pid() {
-        assert_eq!(remember_return_pid(42, Some(7)), Some(7));
-        assert_eq!(remember_return_pid(42, Some(42)), None);
-        assert_eq!(remember_return_pid(42, None), None);
+    fn valid_pid_accepts_any_positive_process_id() {
+        assert_eq!(valid_pid(7), Some(7));
+        assert_eq!(valid_pid(42), Some(42));
+        assert_eq!(valid_pid(0), None);
+        assert_eq!(valid_pid(-1), None);
 
         let mut slot = Some(7);
         assert_eq!(slot.take(), Some(7));
@@ -301,7 +313,7 @@ mod tests {
             opening: false,
             visible: true,
             return_pid: Some(99),
-            last_non_con_pid: None,
+            last_active_pid: None,
         };
         assert_eq!(prepare_force_hide(&mut state), Some(99));
         assert!(!state.visible);
