@@ -2,13 +2,14 @@
 
 ## Overview
 
-Con has a macOS-only **Quick Terminal**: a special Con window that can be shown or hidden with a global hotkey.
+Con has a macOS-only **Quick Terminal**: a special Con window that can be shown or hidden with a global hotkey after the user enables it in Settings.
 
 It is **not** a separate terminal subsystem. It is a normal `ConWorkspace` with a small amount of quick-terminal-specific lifecycle and AppKit behavior around it.
 
 Current product behavior:
 
-- global toggle via `Cmd+\\`
+- optional global toggle, default binding Cmd-Backslash
+- disabled by default to avoid surprising users with a new system-level hotkey
 - lazily created on first toggle
 - hidden by default because it does not exist until first toggle
 - slides down from the top of the current screen
@@ -93,7 +94,7 @@ A key constraint is that Quick Terminal must **not** replace GPUI's own native d
 
 Quick Terminal is created lazily.
 
-When the global Quick Terminal hotkey fires and no Quick Terminal window exists:
+When Quick Terminal is enabled and the global hotkey fires with no Quick Terminal window alive:
 
 1. Con loads the current config.
 2. Con captures the currently frontmost app before activating its own window.

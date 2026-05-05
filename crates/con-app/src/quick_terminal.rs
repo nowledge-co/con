@@ -96,7 +96,7 @@ thread_local! {
         const { RefCell::new(QuickTerminalState { raw_ptr: None, opening: false, visible: false, return_pid: None, last_active_pid: None }) };
 }
 
-/// Keep the module loaded; actual Quick Terminal work is lazy on first toggle.
+/// Install the native observer; Quick Terminal window creation stays lazy.
 pub fn init(_cx: &App) {
     unsafe { con_quick_terminal_init() };
 }
@@ -263,6 +263,7 @@ extern "C" fn con_quick_terminal_handle_resign_key() {
 }
 
 pub fn reset_destroyed_window() {
+    debug_assert!(unsafe { con_quick_terminal_is_main_thread() });
     let window_ptr = QUICK_TERMINAL_STATE.with(|state| {
         let mut state = state.borrow_mut();
         let window_ptr = state.raw_ptr;

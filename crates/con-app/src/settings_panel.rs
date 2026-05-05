@@ -148,6 +148,8 @@ pub struct SettingsPanel {
 
     // Keybindings — which binding is being recorded (field name, e.g. "new_tab")
     recording_key: Option<String>,
+    #[cfg(target_os = "macos")]
+    recording_resume_keybindings: Option<con_core::config::KeybindingConfig>,
 }
 
 const SIDEBAR_PROVIDERS: &[ProviderKind] = &[
@@ -1366,6 +1368,8 @@ impl SettingsPanel {
             custom_theme_preview: None,
             custom_theme_status: None,
             recording_key: None,
+            #[cfg(target_os = "macos")]
+            recording_resume_keybindings: None,
         }
     }
 
@@ -2035,6 +2039,8 @@ impl SettingsPanel {
     }
 
     fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_recording_key(None);
+
         let max_turns_text = self.max_turns_input.read(cx).value().to_string();
         let temperature_text = self.temperature_input.read(cx).value().to_string();
         let suggestion_provider_label = self
@@ -2118,7 +2124,6 @@ impl SettingsPanel {
                 self.save_error = None;
                 self.last_saved_at = Some(std::time::SystemTime::now());
                 self.preview_snapshot = Some(self.config.clone());
-                self.set_recording_key(None);
                 if !self.standalone {
                     self.visible = false;
                     self.overlay_motion
@@ -2146,20 +2151,23 @@ impl SettingsPanel {
         #[cfg(target_os = "macos")]
         match (was_recording, will_record) {
             (false, true) => {
-                crate::global_hotkey::suspend_global_hotkeys(&self.config.keybindings);
-            }
-            (true, false) => {
-                // Resume from the persisted config, not the in-panel draft, so
-                // that cancel/revert flows don't leave unsaved bindings active.
                 let keybindings = con_core::Config::load()
                     .map(|config| config.keybindings)
                     .unwrap_or_else(|err| {
                         log::warn!(
-                            "settings: failed to load persisted config for hotkey resume: {err}"
+                            "settings: failed to load persisted config before hotkey recording: {err}"
                         );
                         self.config.keybindings.clone()
                     });
-                crate::global_hotkey::resume_global_hotkeys(&keybindings);
+                self.recording_resume_keybindings = Some(keybindings.clone());
+                crate::global_hotkey::suspend_global_hotkeys(&keybindings);
+            }
+            (true, false) => {
+                if let Some(keybindings) = self.recording_resume_keybindings.take() {
+                    crate::global_hotkey::resume_global_hotkeys(&keybindings);
+                } else {
+                    log::warn!("settings: hotkey recording ended without saved resume keybindings");
+                }
             }
             _ => {}
         }
