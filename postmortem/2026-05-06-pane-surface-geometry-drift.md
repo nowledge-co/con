@@ -44,11 +44,35 @@ Terminal size is part of the TUI protocol, not presentation. Any place that
 activates a hidden live terminal must be treated as a geometry checkpoint, even
 if the pane rectangle itself did not visibly change.
 
+PR #143 fixed a separate Linux preview renderer bug discovered during the same
+issue triage: GPUI text rows were wrapping like prose. That fix is still valid,
+but it is distinct from Jay's macOS report, which involved a live embedded
+Ghostty surface whose pixel size could drift from the visible pane.
+
+## Diagnostics
+
+If this reproduces again on macOS, use a normal beta/dev build with opt-in
+geometry logs instead of shipping a special debug build first:
+
+```bash
+CON_LOG_FILE="$HOME/Desktop/con-surface-geometry.log" \
+CON_GHOSTTY_PROFILE=1 \
+RUST_LOG=con::perf=info,con_ghostty::perf=info,con=warn,con_core=warn,con_agent=warn \
+"/Applications/con Beta.app/Contents/MacOS/con"
+```
+
+Then capture:
+
+```bash
+con-cli --json surfaces list > "$HOME/Desktop/con-surfaces.json"
+```
+
+The high-signal lines are `surface geometry mismatch`, `surface resize request`,
+and `update_frame`. If those do not explain the drift, a dev-channel build can
+add narrower instrumentation without making beta/stable noisy.
+
 ## Follow-Ups
 
 - Add a control-plane E2E for `surfaces.create`, `surfaces.focus`, pane split
   resize, then `surfaces.list`, asserting all surfaces in the pane report the
   same grid size.
-- Add a compact debug command or documented recipe for issue reports:
-  `CON_GHOSTTY_PROFILE=1 RUST_LOG=con::perf=info,con=debug` plus
-  `con-cli --json surfaces list`.

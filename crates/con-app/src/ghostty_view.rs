@@ -1093,7 +1093,22 @@ impl GhosttyView {
         };
         let (width_px, height_px) = self.surface_size_in_backing_pixels(bounds);
         let size = terminal.size();
-        size.width_px == width_px && size.height_px == height_px
+        let matches = size.width_px == width_px && size.height_px == height_px;
+        if !matches && perf_trace_enabled() {
+            log::info!(
+                target: "con::perf",
+                "surface geometry mismatch terminal_px={}x{} terminal_grid={}x{} expected_px={}x{} logical_pt={:.1}x{:.1}",
+                size.width_px,
+                size.height_px,
+                size.columns,
+                size.rows,
+                width_px,
+                height_px,
+                bounds.size.width.as_f32(),
+                bounds.size.height.as_f32()
+            );
+        }
+        matches
     }
 
     #[cfg(target_os = "macos")]

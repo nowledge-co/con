@@ -1958,6 +1958,9 @@ impl ConWorkspace {
     }
 
     fn schedule_active_terminal_focus(&self, was_zoomed: bool, cx: &mut Context<Self>) {
+        #[cfg(not(target_os = "macos"))]
+        let _ = was_zoomed;
+
         let window_handle = self.window_handle;
         let workspace_handle = self.workspace_handle.clone();
         cx.defer(move |cx| {
@@ -9648,6 +9651,9 @@ impl ConWorkspace {
             .pane_tree
             .zoomed_pane_id()
             .is_some();
+        #[cfg(not(target_os = "macos"))]
+        let _ = was_zoomed;
+
         let changed = self.tabs[self.active_tab]
             .pane_tree
             .focus_surface(surface_id);
