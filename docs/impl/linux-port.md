@@ -91,7 +91,8 @@ What it still does **not** give you:
 - validated mouse selection / reporting
 - native packaging artifacts (`.deb`, AppImage, Flatpak, …); the
   current release pipeline already ships a tarball, one-line installer,
-  desktop entry, icon install, appcast, and notify-only updater
+  `co.nowledge.con.desktop` launcher identity, icon install, appcast,
+  and notify-only updater
 
 Current verification note:
 
@@ -277,7 +278,7 @@ can ship.
 | 3 | Linux backend scaffold | `con-ghostty/src/linux/` plus `con-app/src/linux_view.rs` (or equivalent) with real lifecycle types | Linux no longer routes through the generic stub path conceptually | ✅ landed |
 | 4 | First real terminal surface | PTY spawn, resize, exit, `libghostty-vt` state, GPUI-owned pane paint, real product chrome (no native WM titlebar), embedded mono font, transparent + rounded window with compositor-gated blur | VT-backed Linux pane compiles and displays live shell state with SGR colors / bold / italic / underline / strikethrough / inverse, cursor block, theme palette synced from settings, IoskeleyMono shaping, client-side titlebar with min/max/close caption cluster, transparent ARGB window with rounded corners and per-pane / per-surface opacity, real KWin Wayland blur where available, fast paint pipeline (16 ms keystroke-echo round-trip), no placeholder flash on alt-screen TUIs | ✅ landed (preview) |
 | 5 | Input + selection + glyph-atlas grid renderer | keyboard, mouse, clipboard, bracketed paste, DECCKM, CJK IME text/preedit input, selection, plus the long-term GPUI-owned glyph-atlas grid renderer matching the D3D11/DirectWrite path Windows uses | vim/tmux/fzf/less usable on Linux at full speed | 🚧 in progress (DECCKM, bracketed paste, CJK IME text/preedit input, and terminal-local Tab / Shift+Tab capture are wired; mouse reporting, selection, desktop IME validation matrix, and the glyph-atlas renderer remain) |
-| 6 | Packaging | one-line installer, tarball release, desktop entry, icon integration, appcast / notify-only updater, plus native artifact strategy (`.deb`, AppImage, Flatpak, etc.) | tarball installer exists; native package format decision remains | 🚧 partially landed |
+| 6 | Packaging | one-line installer, tarball release, desktop entry, icon integration, appcast / notify-only updater, plus native artifact strategy (`.deb`, AppImage, Flatpak, etc.) | tarball installer exists; runtime Linux app id, desktop-file basename, and `StartupWMClass` are aligned as `co.nowledge.con`; native package format decision remains | 🚧 partially landed |
 
 ## Immediate next work
 
@@ -313,10 +314,10 @@ With phase 4 landed (preview), the remaining Linux tasks are:
    transparent rounded chrome, htop in the alternate screen,
    keystroke-echo benchmark), but the hardware path still wants a
    real-desktop pass before we drop the "preview" label.
-4. Packaging: the tarball + one-line installer + desktop entry + icon +
-   notify-only appcast path is landed. The remaining packaging decision
-   is whether to add `.deb`, AppImage, Flatpak, or another native
-   artifact for Linux distributions.
+4. Packaging: the tarball + one-line installer + `co.nowledge.con.desktop`
+   launcher entry + icon + notify-only appcast path is landed. The remaining
+   packaging decision is whether to add `.deb`, AppImage, Flatpak, or another
+   native artifact for Linux distributions.
 
 ## Tracker shape for issue #18
 

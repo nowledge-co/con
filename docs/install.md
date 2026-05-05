@@ -49,8 +49,9 @@ current limits and fixes.
 curl -fsSL https://con-releases.nowledge.co/install.sh | sh
 ```
 
-This installs `con` and `con-cli` into `~/.local/bin`. You can also download the
-Linux tarball from the latest
+This installs `con` and `con-cli` into `~/.local/bin`, registers the desktop
+launcher, and refreshes the app icon. You can also download the Linux tarball
+from the latest
 [Release](https://github.com/nowledge-co/con-terminal/releases).
 
 Linux is in preview. Follow the

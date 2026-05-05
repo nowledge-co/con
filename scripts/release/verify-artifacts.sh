@@ -53,8 +53,8 @@ verify_linux() {
     || fail "$tarball_name does not contain con"
   tar -tzf "$tarball" | grep -E "/con-cli$" >/dev/null \
     || fail "$tarball_name does not contain con-cli"
-  tar -tzf "$tarball" | grep -E "/con.desktop$" >/dev/null \
-    || fail "$tarball_name does not contain con.desktop"
+  tar -tzf "$tarball" | grep -E "/co\\.nowledge\\.con\\.desktop$" >/dev/null \
+    || fail "$tarball_name does not contain co.nowledge.con.desktop"
 
   local tmp
   tmp="$(mktemp -d)"

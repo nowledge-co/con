@@ -60,6 +60,9 @@ con is still pre-release, so entries may group related beta work while the produ
   dev app names/bundle ids, never embed/update stable/beta appcasts, and never
   update Homebrew casks while the final gate still validates their artifact
   shape.
+- Aligned the Linux runtime app id, desktop entry filename, and
+  `StartupWMClass` as `co.nowledge.con` so Wayland and X11 launchers can group
+  running Con windows with the installed app entry.
 - Made the release finalizer sync hosted installer scripts from the tagged
   commit before promotion, so dev smoke tags can test the real `install.sh` /
   `install.ps1` path without moving beta/stable appcasts or Homebrew casks.
