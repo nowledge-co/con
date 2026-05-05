@@ -4,6 +4,26 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.62` - 2026-05-05
+
+### Added
+
+**macOS**
+
+- Added Quick Terminal, an optional macOS-only floating terminal window that
+  slides down from the active screen, keeps its live tabs/panes while hidden,
+  and can return focus to the app you were using before it appeared. It is off
+  by default; enable it in Settings -> Keys and use Cmd-Backslash or your chosen
+  shortcut.
+
+### Changed
+
+**Settings**
+
+- Shortcut recording now temporarily suspends macOS global hotkeys and restores
+  the previously active persisted shortcuts when recording is canceled, saved,
+  or dismissed.
+
 ## `v0.1.0-beta.61` - 2026-05-05
 
 ### Added

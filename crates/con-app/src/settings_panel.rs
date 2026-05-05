@@ -148,6 +148,8 @@ pub struct SettingsPanel {
 
     // Keybindings — which binding is being recorded (field name, e.g. "new_tab")
     recording_key: Option<String>,
+    #[cfg(target_os = "macos")]
+    recording_resume_keybindings: Option<con_core::config::KeybindingConfig>,
 }
 
 const SIDEBAR_PROVIDERS: &[ProviderKind] = &[
@@ -1366,6 +1368,8 @@ impl SettingsPanel {
             custom_theme_preview: None,
             custom_theme_status: None,
             recording_key: None,
+            #[cfg(target_os = "macos")]
+            recording_resume_keybindings: None,
         }
     }
 
@@ -1378,6 +1382,10 @@ impl SettingsPanel {
         );
         if self.visible {
             self.refresh_controls_from_config(window, cx);
+        } else {
+            // Ensure hotkeys are always re-enabled when the panel closes,
+            // even if recording was active when the user dismissed it.
+            self.set_recording_key(None);
         }
         cx.notify();
     }
@@ -1396,6 +1404,7 @@ impl SettingsPanel {
         if !self.standalone {
             return;
         }
+        self.set_recording_key(None);
         if let Some(snapshot) = self.preview_snapshot.take() {
             self.config = snapshot;
             cx.emit(AppearancePreview);
@@ -1534,7 +1543,7 @@ impl SettingsPanel {
         self.provider_model_fetching = false;
         self.provider_model_status = None;
         self.provider_model_status_error = false;
-        self.recording_key = None;
+        self.set_recording_key(None);
         self.focus_handle.focus(window, cx);
     }
 
@@ -2030,6 +2039,8 @@ impl SettingsPanel {
     }
 
     fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_recording_key(None);
+
         let max_turns_text = self.max_turns_input.read(cx).value().to_string();
         let temperature_text = self.temperature_input.read(cx).value().to_string();
         let suggestion_provider_label = self
@@ -2129,6 +2140,39 @@ impl SettingsPanel {
     }
 
     /// Record a keystroke for the binding currently being recorded.
+
+    fn set_recording_key(&mut self, key: Option<String>) {
+        #[cfg(target_os = "macos")]
+        let was_recording = self.recording_key.is_some();
+        #[cfg(target_os = "macos")]
+        let will_record = key.is_some();
+        self.recording_key = key;
+
+        #[cfg(target_os = "macos")]
+        match (was_recording, will_record) {
+            (false, true) => {
+                let keybindings = con_core::Config::load()
+                    .map(|config| config.keybindings)
+                    .unwrap_or_else(|err| {
+                        log::warn!(
+                            "settings: failed to load persisted config before hotkey recording: {err}"
+                        );
+                        self.config.keybindings.clone()
+                    });
+                self.recording_resume_keybindings = Some(keybindings.clone());
+                crate::global_hotkey::suspend_global_hotkeys(&keybindings);
+            }
+            (true, false) => {
+                if let Some(keybindings) = self.recording_resume_keybindings.take() {
+                    crate::global_hotkey::resume_global_hotkeys(&keybindings);
+                } else {
+                    log::warn!("settings: hotkey recording ended without saved resume keybindings");
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn record_keystroke(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
         let field = match &self.recording_key {
             Some(f) => f.clone(),
@@ -2142,7 +2186,7 @@ impl SettingsPanel {
             "shift" | "control" | "alt" | "meta" | "fn" | "escape"
         ) {
             if key == "escape" {
-                self.recording_key = None;
+                self.set_recording_key(None);
                 cx.notify();
             }
             return;
@@ -2154,6 +2198,7 @@ impl SettingsPanel {
         // Write directly into config
         match field.as_str() {
             "global_summon" => self.config.keybindings.global_summon = binding,
+            "quick_terminal" => self.config.keybindings.quick_terminal = binding,
             "new_window" => self.config.keybindings.new_window = binding,
             "new_tab" => self.config.keybindings.new_tab = binding,
             "close_tab" => self.config.keybindings.close_tab = binding,
@@ -2181,7 +2226,7 @@ impl SettingsPanel {
             "quit" => self.config.keybindings.quit = binding,
             _ => {}
         }
-        self.recording_key = None;
+        self.set_recording_key(None);
         cx.notify();
     }
 
@@ -2189,6 +2234,7 @@ impl SettingsPanel {
     fn binding_value(&self, field: &str) -> &str {
         match field {
             "global_summon" => &self.config.keybindings.global_summon,
+            "quick_terminal" => &self.config.keybindings.quick_terminal,
             "new_window" => &self.config.keybindings.new_window,
             "new_tab" => &self.config.keybindings.new_tab,
             "close_tab" => &self.config.keybindings.close_tab,
@@ -4391,7 +4437,7 @@ impl SettingsPanel {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(move |this, _, _, cx| {
-                                        this.recording_key = Some(field_str.clone());
+                                        this.set_recording_key(Some(field_str.clone()));
                                         cx.notify();
                                     }),
                                 )
@@ -4409,6 +4455,12 @@ impl SettingsPanel {
         let global_summon_enabled = self.config.keybindings.global_summon_enabled;
         let global_summon_value = self.config.keybindings.global_summon.clone();
         let global_summon_recording = recording.as_deref() == Some("global_summon");
+        #[cfg(target_os = "macos")]
+        let quick_terminal_enabled = self.config.keybindings.quick_terminal_enabled;
+        #[cfg(target_os = "macos")]
+        let quick_terminal_value = self.config.keybindings.quick_terminal.clone();
+        #[cfg(target_os = "macos")]
+        let quick_terminal_recording = recording.as_deref() == Some("quick_terminal");
         let theme = cx.theme();
 
         let fixed_tab_card = card(theme, card_opacity).child(
@@ -4584,7 +4636,7 @@ impl SettingsPanel {
                             MouseButton::Left,
                             cx.listener(|this, _, _, cx| {
                                 if this.config.keybindings.global_summon_enabled {
-                                    this.recording_key = Some("global_summon".to_string());
+                                    this.set_recording_key(Some("global_summon".to_string()));
                                     cx.notify();
                                 }
                             }),
@@ -4593,22 +4645,159 @@ impl SettingsPanel {
                 ),
         );
 
+        #[cfg(target_os = "macos")]
+        let quick_terminal_badge = if quick_terminal_recording {
+            div()
+                .min_h(px(28.0))
+                .px(px(10.0))
+                .flex()
+                .items_center()
+                .rounded(px(8.0))
+                .bg(theme.primary.opacity(0.10))
+                .text_color(theme.primary)
+                .text_size(px(11.5))
+                .font_weight(FontWeight::MEDIUM)
+                .child("Press shortcut…")
+                .into_any_element()
+        } else if !quick_terminal_value.trim().is_empty() {
+            crate::keycaps::keycaps_for_binding(&quick_terminal_value, theme)
+        } else {
+            div()
+                .min_h(px(28.0))
+                .px(px(10.0))
+                .flex()
+                .items_center()
+                .rounded(px(8.0))
+                .bg(theme.muted.opacity(0.08))
+                .text_size(px(11.5))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.muted_foreground)
+                .child("Not set")
+                .into_any_element()
+        };
+
+        #[cfg(target_os = "macos")]
+        let quick_terminal_card = card(theme, card_opacity)
+            .child(
+                div()
+                    .px(px(16.0))
+                    .py(px(13.0))
+                    .flex()
+                    .items_start()
+                    .justify_between()
+                    .gap(px(16.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .flex_1()
+                            .max_w(px(430.0))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("Quick Terminal"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .line_height(px(17.0))
+                                    .text_color(theme.muted_foreground.opacity(0.68))
+                                    .child("Show a dedicated floating Con window that slides down from the top of the screen."),
+                            ),
+                    )
+                    .child(
+                        div().pt(px(1.0)).child(
+                            Switch::new("hotkey-window-enabled")
+                                .checked(quick_terminal_enabled)
+                                .small()
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.config.keybindings.quick_terminal_enabled = *checked;
+                                    if *checked
+                                        && this.config.keybindings.quick_terminal.trim().is_empty()
+                                    {
+                                        this.config.keybindings.quick_terminal = "cmd-\\".to_string();
+                                    }
+                                    cx.notify();
+                                })),
+                        ),
+                    ),
+            )
+            .child(row_separator(theme))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(16.0))
+                    .px(px(16.0))
+                    .py(px(11.0))
+                    .text_color(if quick_terminal_enabled {
+                        theme.foreground
+                    } else {
+                        theme.muted_foreground
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(3.0))
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("Shortcut"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .line_height(px(15.0))
+                                    .text_color(theme.muted_foreground.opacity(0.62))
+                                    .child("Use a low-conflict macOS shortcut. Cmd-Backslash matches the requested default."),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("key-badge-hotkey-window")
+                            .min_w(px(112.0))
+                            .flex()
+                            .justify_end()
+                            .opacity(if quick_terminal_enabled { 1.0 } else { 0.45 })
+                            .cursor_pointer()
+                            .rounded(px(7.0))
+                            .px(px(4.0))
+                            .py(px(3.0))
+                            .hover(|s| s.bg(theme.muted.opacity(0.08)))
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                if this.config.keybindings.quick_terminal_enabled {
+                                    this.set_recording_key(Some("quick_terminal".to_string()));
+                                    cx.notify();
+                                }
+                            }))
+                            .child(quick_terminal_badge),
+                    ),
+            );
+
+        let shortcut_groups = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(group_label("Global", &theme))
+            .child(global_summon_card);
+        #[cfg(target_os = "macos")]
+        let shortcut_groups = shortcut_groups.child(quick_terminal_card);
+        let shortcut_groups = shortcut_groups
+            .child(div().h(px(8.0)))
+            .child(group_label("General", &theme))
+            .child(general_card);
+
         section_content(
             "Keyboard Shortcuts",
             "Click a shortcut to record a new key combination.",
             theme,
         )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(group_label("Global", &theme))
-                .child(global_summon_card)
-                .child(div().h(px(8.0)))
-                .child(group_label("General", &theme))
-                .child(general_card),
-        )
+        .child(shortcut_groups)
         .child(
             div()
                 .flex()

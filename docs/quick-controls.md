@@ -18,6 +18,7 @@ Watch the short flow once, then use the table below as a reference.
 | Show or hide the agent panel | <kbd>⌘</kbd> <kbd>L</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>L</kbd> |
 | Show or hide vertical tabs | <kbd>⌘</kbd> <kbd>B</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>B</kbd> |
 | Cycle bottom-bar mode | <kbd>⌘</kbd> <kbd>;</kbd> | <kbd>⌃</kbd> <kbd>;</kbd> |
+| Show or hide Quick Terminal | <kbd>⌘</kbd> <kbd>Backslash</kbd> after enabling | Not available |
 
 ## Input modes
 
@@ -40,6 +41,16 @@ planning, code help, or a careful change made with your approval.
 These modes are why the input bar exists. It is not a second terminal prompt and
 not a chat box glued to the side. It is a short path from what you are looking at
 to the next action.
+
+## Quick Terminal on macOS
+
+Quick Terminal is an optional macOS-only floating terminal. Enable it in
+Settings -> Keys, then use the shortcut to slide down a dedicated Con window
+from the top of the active screen.
+
+It is separate from the main window. Hiding it keeps its live tabs, panes, cwd,
+and scrollback. Closing its last tab or exiting its last shell destroys it, and
+the next shortcut creates a fresh one.
 
 ## A good default flow
 

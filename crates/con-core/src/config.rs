@@ -352,6 +352,12 @@ fn default_global_summon() -> String {
 fn default_global_summon_enabled() -> bool {
     false
 }
+fn default_quick_terminal_enabled() -> bool {
+    false
+}
+fn default_quick_terminal() -> String {
+    "cmd-\\".into()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -383,6 +389,8 @@ pub struct KeybindingConfig {
     pub close_surface: String,
     pub global_summon_enabled: bool,
     pub global_summon: String,
+    pub quick_terminal_enabled: bool,
+    pub quick_terminal: String,
 }
 
 impl Default for KeybindingConfig {
@@ -415,6 +423,8 @@ impl Default for KeybindingConfig {
             close_surface: default_close_surface(),
             global_summon_enabled: default_global_summon_enabled(),
             global_summon: default_global_summon(),
+            quick_terminal_enabled: default_quick_terminal_enabled(),
+            quick_terminal: default_quick_terminal(),
         }
     }
 }
@@ -657,5 +667,45 @@ restore_terminal_text = false
         let config: Config = toml::from_str(content).unwrap();
 
         assert!(!config.appearance.restore_terminal_text);
+    }
+
+    #[test]
+    fn default_keybindings_include_quick_terminal_fields() {
+        let config = Config::default();
+        assert!(!config.keybindings.quick_terminal_enabled);
+        assert_eq!(config.keybindings.quick_terminal, "cmd-\\");
+    }
+
+    #[test]
+    fn serialized_config_omits_removed_quick_terminal_always_on_top_field() {
+        let config = Config::default();
+        let serialized = toml::to_string(&config).unwrap();
+        assert!(!serialized.contains("quick_terminal_always_on_top"));
+    }
+
+    #[test]
+    fn legacy_configs_receive_quick_terminal_defaults() {
+        let content = r#"
+[keybindings]
+global_summon_enabled = true
+global_summon = "alt-space"
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+
+        assert!(!config.keybindings.quick_terminal_enabled);
+        assert_eq!(config.keybindings.quick_terminal, "cmd-\\");
+    }
+
+    #[test]
+    fn loaded_configs_preserve_explicit_quick_terminal_fields() {
+        let content = r#"
+[keybindings]
+quick_terminal_enabled = true
+quick_terminal = "cmd-\\"
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+
+        assert!(config.keybindings.quick_terminal_enabled);
+        assert_eq!(config.keybindings.quick_terminal, "cmd-\\");
     }
 }

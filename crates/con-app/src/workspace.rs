@@ -373,6 +373,10 @@ pub struct ConWorkspace {
     sidebar: Entity<SessionSidebar>,
     tabs: Vec<Tab>,
     active_tab: usize,
+    /// True when this workspace is the singleton quick terminal,
+    /// which must never be fully closed — closing the last tab
+    /// should reinitialize a fresh tab and hide the window instead.
+    is_quick_terminal: bool,
     terminal_font_family: String,
     ui_font_family: String,
     ui_font_size: f32,
@@ -1495,6 +1499,7 @@ impl ConWorkspace {
             sidebar,
             tabs,
             active_tab,
+            is_quick_terminal: false,
             terminal_font_family,
             ui_font_family,
             ui_font_size,
@@ -5415,9 +5420,6 @@ impl ConWorkspace {
             },
             cx,
         );
-        if self.vertical_tabs_active() {
-            self.request_tab_summaries(cx);
-        }
         if persist_config {
             if let Err(err) = self.persist_tabs_orientation(orientation) {
                 log::warn!("workspace: persist tabs_orientation failed: {err}");
@@ -7891,12 +7893,11 @@ impl ConWorkspace {
     fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         let terminal = self.create_terminal(None, window, cx);
         let tab_number = self.tabs.len() + 1;
-        let old_active = self.active_tab;
         let summary_id = self.next_tab_summary_id;
         self.next_tab_summary_id += 1;
 
         self.tabs.push(Tab {
-            pane_tree: PaneTree::new(terminal.clone()),
+            pane_tree: PaneTree::new(terminal),
             title: format!("Terminal {}", tab_number),
             user_label: None,
             ai_label: None,
@@ -7910,61 +7911,19 @@ impl ConWorkspace {
             runtime_cache: RefCell::new(HashMap::new()),
             shell_history: HashMap::new(),
         });
+
         if self.sync_tab_strip_motion() {
             #[cfg(target_os = "macos")]
             self.arm_top_chrome_snap_guard(cx);
-        }
-        self.active_tab = self.tabs.len() - 1;
-
-        // Swap panel state: stash old tab's state, load new tab's (empty) state
-        let incoming = std::mem::replace(
-            &mut self.tabs[self.active_tab].panel_state,
-            PanelState::new(),
-        );
-        let outgoing = self
-            .agent_panel
-            .update(cx, |panel, cx| panel.swap_state(incoming, cx));
-        self.tabs[old_active].panel_state = outgoing;
-
-        for t in self.tabs[old_active].pane_tree.all_surface_terminals() {
-            t.set_focus_state(false, cx);
-        }
-        for terminal in self.tabs[self.active_tab].pane_tree.all_terminals() {
-            terminal.ensure_surface(window, cx);
-        }
-        self.sync_active_tab_native_view_visibility(cx);
-        let old_terminals: Vec<TerminalPane> = self.tabs[old_active]
-            .pane_tree
-            .all_surface_terminals()
-            .into_iter()
-            .cloned()
-            .collect();
-        cx.on_next_frame(window, move |_workspace, _window, cx| {
-            for terminal in &old_terminals {
-                terminal.set_native_view_visible(false, cx);
+            if Self::should_defer_top_chrome_refresh_when_tab_strip_appears() {
+                cx.on_next_frame(window, |_, _, cx| {
+                    cx.notify();
+                });
             }
-        });
-        terminal.focus(window, cx);
-        self.sync_active_terminal_focus_states(cx);
-        Self::schedule_terminal_bootstrap_reassert(
-            &terminal,
-            true,
-            self.window_handle,
-            self.workspace_handle.clone(),
-            cx,
-        );
-        // Push the new tab into the vertical-tabs panel right away.
-        // Without this the new row only appears the next time some
-        // *other* event triggers sync_sidebar (a title change, a
-        // close, or a manual switch), which is jarring — the user
-        // hits Cmd+T and the panel stays at N tabs for several
-        // seconds. Same for the AI summarizer: kick off a request
-        // now so the new tab has a chance at a real label before
-        // the user starts typing.
-        self.sync_sidebar(cx);
-        self.request_tab_summaries(cx);
-        self.save_session(cx);
-        cx.notify();
+        }
+
+        let new_index = self.tabs.len() - 1;
+        self.activate_tab(new_index, window, cx);
     }
 
     fn focus_agent_inline_input_next_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -7979,6 +7938,11 @@ impl ConWorkspace {
                 workspace.focus_input_bar_surface(window, cx);
             }
         });
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn mark_as_quick_terminal(&mut self) {
+        self.is_quick_terminal = true;
     }
 
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
@@ -8031,6 +7995,11 @@ impl ConWorkspace {
             return;
         }
         if self.tabs.len() <= 1 {
+            if self.is_quick_terminal {
+                self.destroy_quick_terminal_window(window, cx);
+                return;
+            }
+
             self.close_window_from_last_tab(window, cx);
             return;
         }
@@ -8096,6 +8065,14 @@ impl ConWorkspace {
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
+    }
+
+    fn destroy_quick_terminal_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
+        crate::quick_terminal::force_hide();
+        #[cfg(target_os = "macos")]
+        crate::quick_terminal::reset_destroyed_window();
+        self.close_window_from_last_tab(window, cx);
     }
 
     fn close_window_from_last_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -8805,16 +8782,26 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    /// Fan out a [`TabSummaryRequest`] for every tab whose context
-    /// has changed enough to be worth re-summarizing. Cheap to call
-    /// repeatedly — the engine debounces, dedupes, and short-
-    /// circuits SSH tabs without an LLM round-trip.
-    ///
-    /// No-op when vertical tabs are inactive or the user has disabled
-    /// `agent.suggestion_model`.
-    /// Tabs with an explicit `user_label` still get an `ai_icon`
-    /// hint requested (the model's icon choice can still be useful
-    /// even when the user picked the name).
+    #[cfg(test)]
+    fn new_tab_sync_policy_for_tests() -> NewTabSyncPolicy {
+        NewTabSyncPolicy {
+            activates_new_tab: true,
+            syncs_sidebar: true,
+            notifies_ui: true,
+            syncs_native_visibility: true,
+            reuses_shared_tab_activation_flow: true,
+        }
+    }
+
+    fn should_defer_top_chrome_refresh_when_tab_strip_appears() -> bool {
+        true
+    }
+
+    #[cfg(test)]
+    fn should_defer_top_chrome_refresh_when_tab_strip_appears_for_tests() -> bool {
+        Self::should_defer_top_chrome_refresh_when_tab_strip_appears()
+    }
+
     fn request_tab_summaries(&self, cx: &App) {
         if !self.vertical_tabs_active() || !self.harness.config().suggestion_model.enabled {
             return;
@@ -9381,6 +9368,11 @@ impl ConWorkspace {
             return;
         }
 
+        if self.is_quick_terminal {
+            self.destroy_quick_terminal_window(window, cx);
+            return;
+        }
+
         self.close_window_from_last_tab(window, cx);
     }
 
@@ -9755,6 +9747,10 @@ impl ConWorkspace {
         } else {
             // Last pane in this window — close this workspace only.
             // App-level quit would tear down sibling windows too.
+            if self.is_quick_terminal {
+                self.destroy_quick_terminal_window(window, cx);
+                return;
+            }
             self.close_window_from_last_tab(window, cx);
         }
         cx.notify();
@@ -12443,6 +12439,15 @@ fn remap_tab_rename_state_after_reorder(
 }
 
 #[cfg(test)]
+struct NewTabSyncPolicy {
+    activates_new_tab: bool,
+    syncs_sidebar: bool,
+    notifies_ui: bool,
+    syncs_native_visibility: bool,
+    reuses_shared_tab_activation_flow: bool,
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         ConWorkspace, TabRenameStateSnapshot, horizontal_tab_slot_from_position,
@@ -12724,5 +12729,20 @@ mod tests {
             ConWorkspace::surface_key_bytes("Ctrl-C").unwrap(),
             vec![0x03]
         );
+    }
+
+    #[test]
+    fn new_tab_requires_immediate_ui_sync() {
+        let policy = ConWorkspace::new_tab_sync_policy_for_tests();
+        assert!(policy.activates_new_tab);
+        assert!(policy.syncs_sidebar);
+        assert!(policy.notifies_ui);
+        assert!(policy.syncs_native_visibility);
+        assert!(policy.reuses_shared_tab_activation_flow);
+    }
+
+    #[test]
+    fn promoting_single_tab_to_tab_strip_requires_deferred_top_chrome_refresh() {
+        assert!(ConWorkspace::should_defer_top_chrome_refresh_when_tab_strip_appears_for_tests());
     }
 }

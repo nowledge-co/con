@@ -126,6 +126,11 @@ It also includes the optional global Summon / Hide Con shortcut. That shortcut
 is off by default because global hotkeys can conflict with launchers and window
 managers.
 
+On macOS, Keys also includes Quick Terminal. It is off by default. When enabled,
+it opens a dedicated floating Con window from anywhere, separate from the main
+window. The default shortcut is <kbd>⌘</kbd> <kbd>Backslash</kbd>, and you can
+record a different one if it conflicts with your setup.
+
 Change shortcuts when the default conflicts with muscle memory. Leave them alone
 when the built-in flow already works. A good setup should reduce decisions, not
 create a private language you have to remember.

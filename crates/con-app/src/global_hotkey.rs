@@ -12,66 +12,100 @@ unsafe extern "C" {
         callback: extern "C" fn(),
     ) -> bool;
     fn con_unregister_global_hotkey();
+    fn con_register_quick_terminal_hotkey(
+        key_code: u32,
+        shift: bool,
+        control: bool,
+        alt: bool,
+        command: bool,
+        callback: extern "C" fn(),
+    ) -> bool;
+    fn con_unregister_quick_terminal_hotkey();
     fn con_app_is_active() -> bool;
 }
 
 thread_local! {
     static GLOBAL_HOTKEY_APP: RefCell<Option<AsyncApp>> = const { RefCell::new(None) };
+    static HOTKEYS_SUSPENDED: RefCell<bool> = const { RefCell::new(false) };
 }
 
 pub fn init(cx: &App, keybindings: &KeybindingConfig) {
     GLOBAL_HOTKEY_APP.with(|app| {
         *app.borrow_mut() = Some(cx.to_async());
     });
-    update_registration(keybindings);
+    update_from_keybindings(keybindings);
 }
 
 pub fn update_from_keybindings(keybindings: &KeybindingConfig) {
-    update_registration(keybindings);
-}
-
-fn update_registration(keybindings: &KeybindingConfig) {
-    if !keybindings.global_summon_enabled {
-        unsafe { con_unregister_global_hotkey() };
+    if hotkeys_suspended() {
         return;
     }
 
-    let binding = &keybindings.global_summon;
+    register_hotkey(
+        keybindings.global_summon_enabled,
+        &keybindings.global_summon,
+        "global hotkey",
+        || unsafe { con_unregister_global_hotkey() },
+        |key_code, shift, control, alt, command, callback| unsafe {
+            con_register_global_hotkey(key_code, shift, control, alt, command, callback)
+        },
+        on_global_hotkey_pressed,
+    );
+    register_hotkey(
+        keybindings.quick_terminal_enabled,
+        &keybindings.quick_terminal,
+        "quick terminal",
+        || unsafe { con_unregister_quick_terminal_hotkey() },
+        |key_code, shift, control, alt, command, callback| unsafe {
+            con_register_quick_terminal_hotkey(key_code, shift, control, alt, command, callback)
+        },
+        on_quick_terminal_pressed,
+    );
+}
+
+fn register_hotkey(
+    enabled: bool,
+    binding: &str,
+    label: &str,
+    unregister: impl Fn(),
+    register: impl Fn(u32, bool, bool, bool, bool, extern "C" fn()) -> bool,
+    callback: extern "C" fn(),
+) {
+    if !enabled {
+        unregister();
+        return;
+    }
+
     let Some(keystroke) = parse_global_hotkey(binding) else {
-        unsafe { con_unregister_global_hotkey() };
+        unregister();
         if !binding.trim().is_empty() {
-            log::warn!(
-                "global hotkey: unsupported binding {:?}, disabling",
-                binding
-            );
+            log::warn!("{label}: unsupported binding {:?}, disabling", binding);
         }
         return;
     };
 
     let Some(key_code) = gpui_key_to_keycode(&keystroke.key) else {
-        unsafe { con_unregister_global_hotkey() };
+        unregister();
         log::warn!(
-            "global hotkey: unsupported key {:?} in binding {:?}, disabling",
+            "{label}: unsupported key {:?} in binding {:?}, disabling",
             keystroke.key,
             binding
         );
         return;
     };
 
-    let ok = unsafe {
-        con_register_global_hotkey(
-            key_code,
-            keystroke.modifiers.shift,
-            keystroke.modifiers.control,
-            keystroke.modifiers.alt,
-            keystroke.modifiers.platform,
-            on_global_hotkey_pressed,
-        )
-    };
+    let ok = register(
+        key_code,
+        keystroke.modifiers.shift,
+        keystroke.modifiers.control,
+        keystroke.modifiers.alt,
+        keystroke.modifiers.platform,
+        callback,
+    );
 
     if !ok {
-        unsafe { con_unregister_global_hotkey() };
-        log::warn!("global hotkey: failed to register binding {:?}", binding);
+        unregister();
+        log::warn!("{label}: failed to register binding {:?}", binding);
     }
 }
 
@@ -100,8 +134,51 @@ extern "C" fn on_global_hotkey_pressed() {
     });
 }
 
+extern "C" fn on_quick_terminal_pressed() {
+    // Capture the frontmost app NOW — still inside the Carbon hotkey callback,
+    // before macOS activates con as the hotkey owner. By the time the async
+    // spawn runs, con is already frontmost and capture_return_pid() would
+    // filter it out, losing the pid we need to restore focus on hide.
+    let pre_captured_pid = crate::quick_terminal::capture_frontmost_pid_before_activation();
+
+    GLOBAL_HOTKEY_APP.with(|app| {
+        let Some(app) = app.borrow().clone() else {
+            return;
+        };
+
+        app.spawn(async move |cx| {
+            cx.update(|cx| {
+                crate::quick_terminal::toggle_with_pid(pre_captured_pid, cx);
+            });
+        })
+        .detach();
+    });
+}
+
 pub fn is_app_active() -> bool {
     unsafe { con_app_is_active() }
+}
+
+pub fn suspend_global_hotkeys(_keybindings: &KeybindingConfig) {
+    unsafe {
+        con_unregister_global_hotkey();
+        con_unregister_quick_terminal_hotkey();
+    }
+    HOTKEYS_SUSPENDED.with(|s| *s.borrow_mut() = true);
+}
+
+pub fn resume_global_hotkeys(keybindings: &KeybindingConfig) {
+    HOTKEYS_SUSPENDED.with(|s| *s.borrow_mut() = false);
+    update_from_keybindings(keybindings);
+}
+
+fn hotkeys_suspended() -> bool {
+    HOTKEYS_SUSPENDED.with(|s| *s.borrow())
+}
+
+#[cfg(test)]
+pub fn is_suspended() -> bool {
+    hotkeys_suspended()
 }
 
 // Keep this in sync with ghostty_view.rs.
@@ -187,6 +264,7 @@ fn gpui_key_to_keycode(key: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use con_core::config::KeybindingConfig;
 
     #[test]
     fn parses_default_summon_hotkey() {
@@ -196,7 +274,24 @@ mod tests {
     }
 
     #[test]
+    fn parses_default_quick_terminal_hotkey() {
+        let keystroke = parse_global_hotkey("cmd-\\").expect("cmd-\\ should parse");
+        assert!(keystroke.modifiers.platform);
+        assert_eq!(keystroke.key, "\\");
+    }
+
+    #[test]
     fn rejects_unmodified_keys() {
         assert!(parse_global_hotkey("space").is_none());
+    }
+
+    #[test]
+    fn suspend_global_hotkeys_sets_flag_and_allows_resume() {
+        let kb = KeybindingConfig::default();
+        assert!(!is_suspended());
+        suspend_global_hotkeys(&kb);
+        assert!(is_suspended());
+        resume_global_hotkeys(&kb);
+        assert!(!is_suspended());
     }
 }
