@@ -2,9 +2,10 @@ use con_core::session::{PaneLayoutState, PaneSplitDirection, SurfaceState};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, InteractiveElementExt, Sizable,
+    ActiveTheme, Icon, InteractiveElementExt, Sizable,
+    button::{Button, ButtonVariants},
     input::{Input, InputState},
-    menu::{ContextMenuExt, PopupMenuItem},
+    menu::{ContextMenuExt, DropdownMenu as _, PopupMenuItem},
     tooltip::Tooltip,
 };
 
@@ -198,10 +199,18 @@ pub struct PaneTree {
 
 impl PaneTree {
     pub fn new(terminal: TerminalPane) -> Self {
+        Self::new_with_surface_options(terminal, SurfaceCreateOptions::plain(None))
+    }
+
+    pub fn new_with_surface_options(terminal: TerminalPane, options: SurfaceCreateOptions) -> Self {
+        let mut surface = PaneSurface::new(0, terminal);
+        surface.title = options.title;
+        surface.owner = options.owner;
+        surface.close_pane_when_last = options.close_pane_when_last;
         Self {
             root: PaneNode::Leaf {
                 id: 0,
-                surfaces: vec![PaneSurface::new(0, terminal)],
+                surfaces: vec![surface],
                 active_surface_id: 0,
             },
             focused_pane_id: 0,
@@ -1409,29 +1418,24 @@ impl PaneTree {
             theme.foreground.opacity(0.52)
         };
         let btn_color = theme.foreground.opacity(0.52);
-        let btn_hover_bg = theme.foreground.opacity(0.08);
 
-        // ⋮ options button
+        // ⋮ options button. Use gpui-component Button + dropdown menu so
+        // left-click opens the menu and does not also start a pane drag.
         let close_pane_cb_for_menu = close_pane_cb.clone();
         let toggle_zoom_cb_for_menu = toggle_zoom_cb.clone();
         let zoom_label = if is_zoomed { "Restore" } else { "Maximize" };
-        let options_btn = div()
-            .id(ElementId::Name(format!("pane-options-{pane_id}").into()))
-            .flex()
-            .items_center()
-            .justify_center()
-            .size(px(20.0))
-            .flex_shrink_0()
+        let options_btn = Button::new(format!("pane-options-{pane_id}"))
+            .ghost()
+            .xsmall()
+            .compact()
             .rounded(px(4.0))
-            .cursor_pointer()
-            .hover(move |s| s.bg(btn_hover_bg))
-            .child(
-                svg()
+            .tooltip("Pane options")
+            .icon(
+                Icon::default()
                     .path("phosphor/dots-three-vertical.svg")
-                    .size(px(11.0))
                     .text_color(btn_color),
             )
-            .context_menu(move |menu, _window, _cx| {
+            .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
                 let toggle_cb = toggle_zoom_cb_for_menu.clone();
                 let close_cb = close_pane_cb_for_menu.clone();
                 let mut menu = menu.item(
@@ -1440,9 +1444,10 @@ impl PaneTree {
                     }),
                 );
                 if has_splits {
-                    menu = menu.item(PopupMenuItem::new("Close Pane").on_click(move |_, window, cx| {
-                        close_cb(pane_id, window, cx);
-                    }));
+                    menu =
+                        menu.item(PopupMenuItem::new("Close Pane").on_click(move |_, window, cx| {
+                            close_cb(pane_id, window, cx);
+                        }));
                 }
                 menu
             });

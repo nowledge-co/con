@@ -9448,6 +9448,10 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.toggle_focused_pane_zoom(window, cx);
+    }
+
+    fn toggle_focused_pane_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.has_active_tab() {
             return;
         }
@@ -9481,20 +9485,7 @@ impl ConWorkspace {
         }
         // Focus the target pane first so toggle_zoom_focused acts on it.
         self.tabs[self.active_tab].pane_tree.focus(pane_id);
-        let was_zoomed = self.tabs[self.active_tab]
-            .pane_tree
-            .zoomed_pane_id()
-            .is_some();
-        if !self.tabs[self.active_tab].pane_tree.toggle_zoom_focused() {
-            return;
-        }
-        #[cfg(target_os = "macos")]
-        self.mark_active_tab_terminal_native_layout_pending(cx);
-        self.notify_active_tab_terminal_views(cx);
-        self.active_terminal().focus(window, cx);
-        self.sync_active_terminal_focus_states(cx);
-        self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
-        cx.notify();
+        self.toggle_focused_pane_zoom(window, cx);
     }
 
     /// Detach a pane from the active tab's split tree and promote it to a new tab.
@@ -9537,7 +9528,7 @@ impl ConWorkspace {
             .collect();
 
         // Remove the pane from the split tree.
-        if !self.close_pane_in_tab(tab_idx, pane_id, window, cx) {
+        if !self.remove_pane_in_tab(tab_idx, pane_id, window, cx, false) {
             return;
         }
 
@@ -9545,7 +9536,13 @@ impl ConWorkspace {
         let tab_number = self.tabs.len() + 1;
         let summary_id = self.next_tab_summary_id;
         self.next_tab_summary_id += 1;
-        let mut new_pane_tree = PaneTree::new(active_surface.terminal.clone());
+        let active_options = SurfaceCreateOptions {
+            title: active_surface.title.clone(),
+            owner: active_surface.owner.clone(),
+            close_pane_when_last: active_surface.close_pane_when_last,
+        };
+        let mut new_pane_tree =
+            PaneTree::new_with_surface_options(active_surface.terminal.clone(), active_options);
 
         // Re-add any additional surfaces into the new pane tree.
         for surface in &other_surfaces {
@@ -9599,6 +9596,17 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.remove_pane_in_tab(tab_idx, pane_id, window, cx, true)
+    }
+
+    fn remove_pane_in_tab(
+        &mut self,
+        tab_idx: usize,
+        pane_id: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        shutdown_closing_terminals: bool,
+    ) -> bool {
         if tab_idx >= self.tabs.len() || self.tabs[tab_idx].pane_tree.pane_count() <= 1 {
             return false;
         }
@@ -9628,16 +9636,22 @@ impl ConWorkspace {
                 sync_visibility_after_close = true;
             }
 
-            cx.on_next_frame(window, move |_workspace, _window, cx| {
-                for terminal in &closing_terminals {
-                    terminal.shutdown_surface(cx);
-                }
-                if tab_is_visible {
-                    for terminal in &surviving_terminals {
-                        terminal.notify(cx);
+            if shutdown_closing_terminals {
+                cx.on_next_frame(window, move |_workspace, _window, cx| {
+                    for terminal in &closing_terminals {
+                        terminal.shutdown_surface(cx);
                     }
+                    if tab_is_visible {
+                        for terminal in &surviving_terminals {
+                            terminal.notify(cx);
+                        }
+                    }
+                });
+            } else if tab_is_visible {
+                for terminal in &surviving_terminals {
+                    terminal.notify(cx);
                 }
-            });
+            }
 
             if tab_idx == self.active_tab {
                 focus_after_close = Some(pane_tree.focused_terminal().clone());
@@ -11552,6 +11566,12 @@ impl Render for ConWorkspace {
                             cx.notify();
                             return;
                         }
+                        // Clear any title drag that was initiated by mouse-down but never
+                        // consumed by mouse-move (plain click on title bar).
+                        if let Ok(mut guard) = this.pending_pane_title_drag_init.lock() {
+                            guard.take();
+                        }
+
                         if this.active_tab >= this.tabs.len() {
                             return;
                         }
