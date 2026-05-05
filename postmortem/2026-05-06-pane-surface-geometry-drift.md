@@ -31,6 +31,9 @@ from fresh layout.
 - Re-focusing the already-active surface also runs this geometry checkpoint, so
   a user or orchestrator can repair a drifted pane by selecting the surface it
   is already using.
+- Surface focus preserves Con's zoom/layout visibility sequencing. If focusing
+  a surface clears a pane zoom, native visibility waits for the layout handoff
+  instead of exposing a stale AppKit frame.
 - `GhosttyView::update_frame` no longer trusts cached bounds alone. It also
   checks that Ghostty's embedded surface reports the backing pixel size implied
   by the current GPUI bounds before taking the fast early-return.

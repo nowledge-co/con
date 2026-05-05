@@ -1957,7 +1957,7 @@ impl ConWorkspace {
         });
     }
 
-    fn schedule_active_terminal_focus(&self, cx: &mut Context<Self>) {
+    fn schedule_active_terminal_focus(&self, was_zoomed: bool, cx: &mut Context<Self>) {
         let window_handle = self.window_handle;
         let workspace_handle = self.workspace_handle.clone();
         cx.defer(move |cx| {
@@ -1972,7 +1972,9 @@ impl ConWorkspace {
                             .focused_terminal()
                             .clone();
                         terminal.ensure_surface(window, cx);
-                        workspace.sync_active_tab_native_view_visibility(cx);
+                        workspace.sync_active_tab_native_view_visibility_now_or_after_layout(
+                            was_zoomed, window, cx,
+                        );
                         terminal.focus(window, cx);
                         workspace.sync_active_terminal_focus_states(cx);
                         cx.notify();
@@ -3541,6 +3543,8 @@ impl ConWorkspace {
                     Ok(tab_idx) => match self.resolve_surface_target_for_tab(tab_idx, target) {
                         Ok(resolved) => {
                             let surface_id = resolved.surface_id;
+                            let was_zoomed =
+                                self.tabs[tab_idx].pane_tree.zoomed_pane_id().is_some();
                             let changed = self.tabs[tab_idx].pane_tree.focus_surface(surface_id);
                             let resolved = match self.resolve_surface_target_for_tab(
                                 tab_idx,
@@ -3552,30 +3556,24 @@ impl ConWorkspace {
                                     return;
                                 }
                             };
+                            #[cfg(target_os = "macos")]
                             let active_tab_needs_focus_sync = tab_idx == self.active_tab;
-                            #[cfg(target_os = "macos")]
-                            let should_notify = changed || active_tab_needs_focus_sync;
                             #[cfg(not(target_os = "macos"))]
-                            let should_notify = changed;
+                            let active_tab_needs_focus_sync = changed && tab_idx == self.active_tab;
 
-                            #[cfg(target_os = "macos")]
                             if active_tab_needs_focus_sync {
+                                #[cfg(target_os = "macos")]
                                 self.mark_tab_terminal_native_layout_pending(tab_idx, cx);
+                                #[cfg(target_os = "macos")]
                                 self.notify_tab_terminal_views(tab_idx, cx);
                                 self.sync_active_terminal_focus_states(cx);
-                                self.schedule_active_terminal_focus(cx);
-                            }
-                            #[cfg(not(target_os = "macos"))]
-                            if changed && active_tab_needs_focus_sync {
-                                self.sync_active_tab_native_view_visibility(cx);
-                                self.sync_active_terminal_focus_states(cx);
-                                self.schedule_active_terminal_focus(cx);
+                                self.schedule_active_terminal_focus(was_zoomed, cx);
                             }
                             if changed {
                                 self.sync_sidebar(cx);
                                 self.save_session(cx);
                             }
-                            if should_notify {
+                            if changed || active_tab_needs_focus_sync {
                                 cx.notify();
                             }
                             Self::send_control_result(
@@ -9643,6 +9641,10 @@ impl ConWorkspace {
         if !self.has_active_tab() {
             return;
         }
+        let was_zoomed = self.tabs[self.active_tab]
+            .pane_tree
+            .zoomed_pane_id()
+            .is_some();
         let changed = self.tabs[self.active_tab]
             .pane_tree
             .focus_surface(surface_id);
@@ -9671,7 +9673,7 @@ impl ConWorkspace {
             .clone();
         terminal.ensure_surface(window, cx);
         #[cfg(target_os = "macos")]
-        self.sync_active_tab_native_view_visibility_now_or_after_layout(false, window, cx);
+        self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
         #[cfg(not(target_os = "macos"))]
         self.sync_active_tab_native_view_visibility(cx);
         if changed {
