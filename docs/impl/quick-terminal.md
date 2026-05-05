@@ -59,12 +59,14 @@ There is no parallel session model.
 It owns only minimal runtime state:
 
 - `raw_ptr`: native window pointer, if the Quick Terminal window currently exists
+- `opening`: in-flight creation guard while GPUI/AppKit is still opening the window
 - `visible`: whether the existing Quick Terminal window is currently shown
 - `return_pid`: previously frontmost app pid captured for restore-on-hide
 
 Responsibilities:
 
 - lazy creation on first toggle
+- duplicate creation prevention while the first lazy window is still opening
 - show/hide dispatch for an existing Quick Terminal window
 - destruction-state reset when the Quick Terminal window is removed
 

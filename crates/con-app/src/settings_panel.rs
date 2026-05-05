@@ -4432,8 +4432,11 @@ impl SettingsPanel {
         let global_summon_enabled = self.config.keybindings.global_summon_enabled;
         let global_summon_value = self.config.keybindings.global_summon.clone();
         let global_summon_recording = recording.as_deref() == Some("global_summon");
+        #[cfg(target_os = "macos")]
         let quick_terminal_enabled = self.config.keybindings.quick_terminal_enabled;
+        #[cfg(target_os = "macos")]
         let quick_terminal_value = self.config.keybindings.quick_terminal.clone();
+        #[cfg(target_os = "macos")]
         let quick_terminal_recording = recording.as_deref() == Some("quick_terminal");
         let theme = cx.theme();
 
@@ -4619,6 +4622,7 @@ impl SettingsPanel {
                 ),
         );
 
+        #[cfg(target_os = "macos")]
         let quick_terminal_badge = if quick_terminal_recording {
             div()
                 .min_h(px(28.0))
@@ -4649,6 +4653,7 @@ impl SettingsPanel {
                 .into_any_element()
         };
 
+        #[cfg(target_os = "macos")]
         let quick_terminal_card = card(theme, card_opacity)
             .child(
                 div()
@@ -4751,23 +4756,25 @@ impl SettingsPanel {
                     ),
             );
 
+        let shortcut_groups = div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(group_label("Global", &theme))
+            .child(global_summon_card);
+        #[cfg(target_os = "macos")]
+        let shortcut_groups = shortcut_groups.child(quick_terminal_card);
+        let shortcut_groups = shortcut_groups
+            .child(div().h(px(8.0)))
+            .child(group_label("General", &theme))
+            .child(general_card);
+
         section_content(
             "Keyboard Shortcuts",
             "Click a shortcut to record a new key combination.",
             theme,
         )
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(8.0))
-                .child(group_label("Global", &theme))
-                .child(global_summon_card)
-                .child(quick_terminal_card)
-                .child(div().h(px(8.0)))
-                .child(group_label("General", &theme))
-                .child(general_card),
-        )
+        .child(shortcut_groups)
         .child(
             div()
                 .flex()

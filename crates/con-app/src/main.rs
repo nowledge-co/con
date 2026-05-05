@@ -591,10 +591,14 @@ pub(crate) fn open_quick_terminal(config: con_core::Config, session: Session, cx
                 .and_then(crate::quick_terminal::window_from_view_ptr);
             if let Some(raw_ptr) = raw_ptr {
                 crate::quick_terminal::store_window_ptr(raw_ptr);
+            } else {
+                crate::quick_terminal::opening_failed();
+                log::error!("Failed to resolve quick terminal native window");
             }
 
             cx.new(|cx| gpui_component::Root::new(view, window, cx).bg(cx.theme().transparent))
         }) {
+            crate::quick_terminal::opening_failed();
             log::error!("Failed to open quick terminal: {err}");
         }
     })
@@ -1265,20 +1269,6 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new("cmd-~", PreviousWindow, Some("Input")),
         KeyBinding::new("cmd-<", PreviousWindow, Some("Input")),
     ]);
-}
-
-/// Guard against starting the control socket more than once per process.
-/// Multiple workspaces (normal window + quick terminal) share the same
-/// Unix socket path, so only the first workspace binds it.
-static CONTROL_SOCKET_STARTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-pub(crate) fn control_socket_started() -> bool {
-    CONTROL_SOCKET_STARTED.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-pub(crate) fn mark_control_socket_started() {
-    CONTROL_SOCKET_STARTED.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Install a panic hook that writes every panic (including from

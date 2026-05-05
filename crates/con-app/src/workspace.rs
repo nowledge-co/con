@@ -944,21 +944,14 @@ impl ConWorkspace {
         let (control_request_tx, control_request_rx) = crossbeam_channel::unbounded();
         let (shell_suggestion_tx, shell_suggestion_rx) = crossbeam_channel::unbounded();
         let (tab_summary_tx, tab_summary_rx) = crossbeam_channel::unbounded();
-        let control_socket = if crate::control_socket_started() {
-            None
-        } else {
-            match con_core::spawn_control_socket_server(
-                harness.runtime_handle(),
-                control_request_tx,
-            ) {
-                Ok(handle) => {
-                    crate::mark_control_socket_started();
-                    Some(handle)
-                }
-                Err(err) => {
-                    log::error!("Failed to start con control socket: {}", err);
-                    None
-                }
+        let control_socket = match con_core::spawn_control_socket_server(
+            harness.runtime_handle(),
+            control_request_tx,
+        ) {
+            Ok(handle) => Some(handle),
+            Err(err) => {
+                log::error!("Failed to start con control socket: {}", err);
+                None
             }
         };
         let model_registry = ModelRegistry::new();

@@ -5,8 +5,22 @@ use std::cell::RefCell;
 #[derive(Debug, Default, Clone, Copy)]
 struct QuickTerminalState {
     raw_ptr: Option<usize>,
+    opening: bool,
     visible: bool,
     return_pid: Option<i32>,
+}
+
+fn begin_opening(state: &mut QuickTerminalState) -> bool {
+    if state.raw_ptr.is_some() || state.opening {
+        return false;
+    }
+
+    state.opening = true;
+    true
+}
+
+fn finish_opening(state: &mut QuickTerminalState) {
+    state.opening = false;
 }
 
 fn prepare_force_hide(state: &mut QuickTerminalState) -> Option<i32> {
@@ -26,7 +40,7 @@ unsafe extern "C" {
 
 thread_local! {
     static QUICK_TERMINAL_STATE: RefCell<QuickTerminalState> =
-        const { RefCell::new(QuickTerminalState { raw_ptr: None, visible: false, return_pid: None }) };
+        const { RefCell::new(QuickTerminalState { raw_ptr: None, opening: false, visible: false, return_pid: None }) };
 }
 
 pub fn init(_cx: &App, _keybindings: &KeybindingConfig) {}
@@ -35,6 +49,7 @@ pub fn store_window_ptr(window_ptr: *mut std::ffi::c_void) {
     QUICK_TERMINAL_STATE.with(|state| {
         let mut state = state.borrow_mut();
         state.raw_ptr = Some(window_ptr as usize);
+        finish_opening(&mut state);
         let current_pid = std::process::id() as i32;
         let frontmost_pid = unsafe { con_quick_terminal_frontmost_app_pid() };
         state.return_pid = remember_return_pid(current_pid, Some(frontmost_pid));
@@ -75,12 +90,23 @@ pub fn toggle(cx: &mut App) {
         return;
     }
 
+    let should_open = QUICK_TERMINAL_STATE.with(|state| begin_opening(&mut state.borrow_mut()));
+    if !should_open {
+        return;
+    }
+
     let config = con_core::Config::load().unwrap_or_default();
     crate::open_quick_terminal(
         config,
         crate::fresh_window_session_with_history_for_cwd(default_quick_terminal_cwd()),
         cx,
     );
+}
+
+pub fn opening_failed() {
+    QUICK_TERMINAL_STATE.with(|state| {
+        finish_opening(&mut state.borrow_mut());
+    });
 }
 
 /// Returns the default working directory for the quick terminal.
@@ -153,13 +179,15 @@ pub fn reset_destroyed_window() {
 #[cfg(test)]
 mod tests {
     use super::{
-        QuickTerminalState, default_quick_terminal_cwd, prepare_force_hide, remember_return_pid,
+        QuickTerminalState, begin_opening, default_quick_terminal_cwd, finish_opening,
+        prepare_force_hide, remember_return_pid,
     };
 
     #[test]
     fn quick_terminal_state_defaults_are_hidden_and_empty() {
         let state = QuickTerminalState::default();
         assert_eq!(state.raw_ptr, None);
+        assert!(!state.opening);
         assert!(!state.visible);
         assert_eq!(state.return_pid, None);
     }
@@ -187,13 +215,9 @@ mod tests {
 
     #[test]
     fn reset_clears_destroyed_window_state() {
-        let mut state = QuickTerminalState {
-            raw_ptr: Some(1),
-            visible: true,
-            return_pid: Some(99),
-        };
-        state = QuickTerminalState::default();
+        let state = QuickTerminalState::default();
         assert_eq!(state.raw_ptr, None);
+        assert!(!state.opening);
         assert!(!state.visible);
         assert_eq!(state.return_pid, None);
     }
@@ -202,12 +226,29 @@ mod tests {
     fn force_hide_preparation_hides_and_consumes_saved_pid() {
         let mut state = QuickTerminalState {
             raw_ptr: Some(1),
+            opening: false,
             visible: true,
             return_pid: Some(99),
         };
         assert_eq!(prepare_force_hide(&mut state), Some(99));
         assert!(!state.visible);
         assert_eq!(state.return_pid, None);
+    }
+
+    #[test]
+    fn begin_opening_is_single_flight_until_window_is_stored_or_fails() {
+        let mut state = QuickTerminalState::default();
+        assert!(begin_opening(&mut state));
+        assert!(state.opening);
+        assert!(!begin_opening(&mut state));
+
+        finish_opening(&mut state);
+        assert!(!state.opening);
+        assert!(begin_opening(&mut state));
+
+        state.raw_ptr = Some(1);
+        finish_opening(&mut state);
+        assert!(!begin_opening(&mut state));
     }
 
     #[test]
