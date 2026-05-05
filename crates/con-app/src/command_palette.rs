@@ -66,6 +66,13 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         shortcut: "secondary-n",
         category: "App",
     },
+    #[cfg(target_os = "macos")]
+    PaletteAction {
+        id: "quick-terminal",
+        label: "Quick Terminal",
+        shortcut: "",
+        category: "App",
+    },
     PaletteAction {
         id: "new-tab",
         label: "New Tab",

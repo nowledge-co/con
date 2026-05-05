@@ -5139,6 +5139,10 @@ impl ConWorkspace {
             "new-window" => {
                 cx.dispatch_action(&crate::NewWindow);
             }
+            #[cfg(target_os = "macos")]
+            "quick-terminal" => {
+                cx.dispatch_action(&crate::ToggleQuickTerminal);
+            }
             "toggle-agent" => {
                 self.toggle_agent_panel(&ToggleAgentPanel, window, cx);
             }
