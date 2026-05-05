@@ -2,124 +2,155 @@
 
 ## Overview
 
-Con now has a macOS-only quick terminal that behaves like a global hidden terminal for the current app run.
+Con has a macOS-only **Quick Terminal**: a special Con window that can be shown or hidden with a global hotkey.
 
-It is intentionally implemented as a **single special Con window**, not a parallel terminal subsystem.
+It is **not** a separate terminal subsystem. It is a normal `ConWorkspace` with a small amount of quick-terminal-specific lifecycle and AppKit behavior around it.
 
-Core behavior:
+Current product behavior:
 
 - global toggle via `Cmd+\\`
-- created together with the first normal Con window
-- starts hidden
+- lazily created on first toggle
+- hidden by default because it does not exist until first toggle
 - slides down from the top of the current screen
-- full visible width
-- default height is half the visible screen height
+- uses full visible screen width
+- defaults to half the visible screen height
 - can be resized vertically from the bottom edge
-- keeps its terminal/session state while hidden
 - can be configured as always-on-top
-- restores the previously frontmost app when hidden
-- disappears when the Con process exits
+- restores the previously frontmost app when hidden via the toggle path
+- auto-hides when it loses key focus
+- keeps its tabs / panes / shell state while hidden
+- is destroyed when its last tab closes or its last shell exits
+- is recreated fresh on the next toggle after destruction
 
 ## Product rules
 
-1. The quick terminal is a singleton within one running Con app instance.
-2. It is pre-created with the first normal Con window, not lazily created on first toggle.
-3. It starts hidden and is later controlled only by toggle show/hide.
-4. It owns its own long-lived terminal session for the lifetime of the app run.
-5. It has no titlebar and no traffic-light window controls.
-6. It is pinned to the top of the current screen and always uses full visible width.
-7. Width is not user-adjustable in practice; height is adjustable from the bottom edge.
-8. The live AppKit window frame is the source of truth for current height during the app run.
-9. No extra persisted hotkey-window geometry/config state is required.
+1. Quick Terminal is a singleton **controller concept** within one running Con process.
+2. The Quick Terminal window is **lazy**, not pre-created.
+3. If the Quick Terminal window exists and is hidden, toggling shows the same live workspace again.
+4. If the Quick Terminal window has been destroyed, the next toggle creates a **fresh** Quick Terminal.
+5. Quick Terminal has no titlebar and no traffic-light window controls.
+6. It is pinned to the top of the active screen and always uses the full visible width.
+7. Width is not user-adjustable in practice; height is adjusted from the bottom edge.
+8. The live AppKit frame is the source of truth for height while the window exists.
+9. No extra persisted Quick Terminal geometry/config state is stored.
 10. Layout-only tab UI changes must not trigger LLM tab-summary requests.
 
-## Final architecture
+## Architecture
 
 ### Workspace model
 
-The quick terminal is a normal `ConWorkspace` with hotkey-specific creation and window behavior.
+Quick Terminal is a normal `ConWorkspace` marked with `is_quick_terminal`.
 
-There is no second terminal model and no duplicate session model.
+It reuses the standard workspace model for:
 
-This means the quick terminal naturally keeps:
-
-- cwd
-- shell state
-- scrollback
-- panes
 - tabs
-- focus state inside the workspace
+- panes
+- shell sessions
+- cwd
+- scrollback
+- focus
+- sidebar / top chrome behavior
 
-for as long as the app process remains alive.
+There is no parallel session model.
 
 ### Rust controller
 
-`crates/con-app/src/quick_terminal.rs` is intentionally thin.
+`crates/con-app/src/quick_terminal.rs` is intentionally small.
 
-It owns only runtime singleton control state:
+It owns only minimal runtime state:
 
-- async app handle
-- native window pointer
-- visible/hidden flag
-- previously frontmost app pid for restore-on-hide
-- runtime always-on-top application
+- `raw_ptr`: native window pointer, if the Quick Terminal window currently exists
+- `visible`: whether the existing Quick Terminal window is currently shown
+- `return_pid`: previously frontmost app pid captured for restore-on-hide
 
-It does **not** own mirrored terminal/session/geometry state.
+Responsibilities:
+
+- lazy creation on first toggle
+- show/hide dispatch for an existing Quick Terminal window
+- always-on-top reapplication
+- destruction-state reset when the Quick Terminal window is removed
+
+It does **not** mirror tabs, panes, session contents, or geometry history.
 
 ### Native/AppKit layer
 
-`crates/con-app/src/objc/quick_terminal_trampoline.m` owns the macOS-specific window behavior:
+`crates/con-app/src/objc/quick_terminal_trampoline.m` owns macOS-specific window behavior:
 
-- borderless configuration
-- slide-in / slide-out animation
-- app activation on show
-- app restore on hide
-- top-pinned geometry normalization
-- full-width enforcement
+- borderless + resizable configuration
+- top-pinned full-width geometry normalization
 - minimum-height clamp
+- slide-in / slide-out animation
+- Con activation on show
+- restore of the previous app on toggle-hide
+- auto-hide on `NSWindowDidResignKeyNotification`
 
-A key implementation detail is that the hotkey layer must **not replace GPUI's own `NSWindowDelegate`**. Earlier versions did this and broke GPUI's activation / focus / layout lifecycle, which caused the quick terminal to appear visually present but behave as if input and top chrome were stalled until a manual resize happened.
-
-The final implementation keeps GPUI's delegate chain intact.
+A key constraint is that Quick Terminal must **not** replace GPUI's own native delegate chain. The final implementation keeps GPUI's window lifecycle intact and layers Quick Terminal behavior around it.
 
 ## Lifecycle
 
 ### Creation
 
-When the first normal Con window opens:
+Quick Terminal is created lazily.
 
-1. Con opens the requested normal window.
-2. Con also opens the singleton quick terminal.
-3. The quick terminal uses `HOME` as its default cwd.
-4. The quick terminal is immediately configured as hidden.
+When the global Quick Terminal hotkey fires and no Quick Terminal window exists:
 
-There is no `pending_show`, `creating`, or first-toggle creation flow in the final design.
+1. Con loads the current config.
+2. Con creates a fresh session with history and `HOME` as the default cwd on macOS.
+3. Con opens a new special Con window via `open_quick_terminal(...)`.
+4. The new window is marked as a Quick Terminal workspace.
+5. The native window pointer is captured.
+6. The window is configured and immediately shown with slide-in animation.
+
+There is no eager startup creation anymore.
 
 ### Show
 
-On global hotkey press, if the quick terminal is hidden:
+If the Quick Terminal window already exists and is hidden:
 
 1. Capture the current frontmost app pid unless it is already Con.
-2. Recompute the window frame against the current screen.
-3. Force full visible width.
-4. Keep the current window height, clamped to screen bounds.
+2. Recompute the frame against the current visible screen.
+3. Keep full visible width.
+4. Keep the current live height, clamped to bounds.
 5. Activate Con.
-6. Make the quick terminal key/front.
+6. Make the Quick Terminal key/front.
 7. Animate it downward from the top edge.
 
 ### Hide
 
-On global hotkey press, if the quick terminal is visible:
+If the Quick Terminal window exists and is visible, there are two hide paths.
 
-1. Animate it upward off-screen.
+#### Toggle hide
+
+On global hotkey press:
+
+1. Animate upward off-screen.
 2. Keep the window alive.
 3. Restore the previously frontmost app if one was captured.
 
+#### Focus-loss auto-hide
+
+When the user clicks elsewhere and the Quick Terminal resigns key:
+
+1. Animate upward off-screen.
+2. Keep the window alive.
+3. Do **not** force app restore; macOS naturally activates what the user clicked.
+
 ### Destruction
 
-The quick terminal lives only as long as the Con app process lives.
+Quick Terminal is destroyed when its live workspace is exhausted.
 
-When the app exits, the quick terminal exits too.
+Destroy paths:
+
+- closing the last tab
+- last shell / pane exiting
+
+In those paths Con:
+
+1. hides the Quick Terminal window
+2. clears the Quick Terminal controller state
+3. closes the Quick Terminal workspace window
+
+This means the next toggle creates a new Quick Terminal from scratch.
 
 ## Geometry
 
@@ -128,53 +159,97 @@ When the app exits, the quick terminal exits too.
 On creation:
 
 - x = visible left edge
-- y = top-pinned shown position
 - width = visible screen width
 - height = visible screen height / 2
+- y = off-screen top position before slide-in
 
-### Show-time geometry normalization
+### Show-time normalization
 
-Before each show:
+Before each show, AppKit recomputes the frame from the current screen:
 
-- recompute current screen visible bounds
 - force x to visible left
 - force width to visible width
-- reuse the current live height
-- clamp height into valid screen bounds
-- place y so the top edge stays pinned
-
-This makes the quick terminal adapt automatically to display changes without extra persistence machinery.
+- reuse the current live height from the window frame
+- if the current height is invalid, fall back to half-screen height
+- clamp height to `[min_height, visible_screen_height]`
+- pin the top edge to the visible top edge
 
 ### Resize behavior
 
-User-facing resize behavior is intentionally simple:
+User-facing behavior is intentionally simple:
 
-- width stays aligned to full visible width
-- top edge remains pinned
-- effective resize happens on the bottom edge
-- height change stays in the live window frame
+- width remains full visible width
+- top edge stays pinned
+- bottom edge is the effective resize edge
+- live window height is reused across hide/show while the window exists
 
-We deliberately do **not** persist hotkey height across launches.
+Quick Terminal height is **not** persisted across destruction or across app relaunches.
+
+## Session behavior
+
+Quick Terminal preserves live state only while its window still exists.
+
+### While hidden
+
+If the user simply toggles it off, Quick Terminal keeps:
+
+- cwd
+- shell state
+- tabs
+- panes
+- scrollback
+- focus inside the workspace
+
+### After destruction
+
+If the last tab closes or the last shell exits:
+
+- the Quick Terminal window is destroyed
+- controller state is reset
+- the next toggle creates a fresh Quick Terminal
+- old cwd / shell state is not reused by Quick Terminal-specific logic
 
 ## Settings
 
-User-configurable settings remain:
+User-configurable settings are:
 
-- hotkey-window enabled toggle
-- hotkey-window keybinding
-- hotkey-window always-on-top toggle
+- Quick Terminal enabled toggle
+- Quick Terminal keybinding
+- Quick Terminal always-on-top toggle
 
-These settings are reapplied at runtime when settings are saved.
+These are reapplied at runtime when settings are saved.
 
-What is intentionally **not** stored anymore:
+During key recording in settings, both global hotkeys are suspended so Quick Terminal / Global Summon do not fire while recording a shortcut.
 
-- saved quick terminal height
-- extra hotkey geometry persistence fields
+What is intentionally **not** stored:
+
+- saved Quick Terminal height
+- extra Quick Terminal geometry persistence fields
 - mirrored Rust-side remembered height state
+- cross-destruction Quick Terminal session memory
 
-## Tab and summarizer behavior
+## Global Summon vs Quick Terminal
 
-The quick terminal uses the same tab model as normal windows.
+These are separate features.
+
+### Quick Terminal
+
+- global hidden terminal window
+- toggle-oriented
+- special borderless top-pinned window
+- can preserve live terminal state while hidden
+- destroyed when its last tab / shell exits
+
+### Global Summon
+
+- operates on the main Con window behavior
+- toggles the main Con window in/out rather than using the special Quick Terminal window
+
+The two hotkeys are registered independently.
+
+## Tabs and summarizer behavior
+
+Quick Terminal uses the same tab model as normal Con windows.
 
 Important rule:
 
@@ -183,78 +258,90 @@ Important rule:
 
 In particular, switching horizontal/vertical tab presentation must not send LLM requests.
 
-During this work, `new_tab` behavior was also tightened so new-tab activation reuses the shared tab activation flow instead of maintaining a separate hotkey-only tab-switch path.
+Related cleanup from this work:
+
+- new-tab activation inside Quick Terminal was aligned with shared workspace activation flow
+- top chrome refresh behavior was fixed so tab UI does not require a manual resize to appear
 
 ## Important implementation lessons
 
-### 1. Do not replace GPUI's window delegate
+### 1. Do not replace GPUI's native delegate ownership
 
-This was the most important bug discovered during implementation.
+Earlier iterations interfered with GPUI's native lifecycle. The visible result was a Quick Terminal that appeared on screen but behaved as if input, top chrome, and focus were stalled until the user manually resized the window.
 
-Replacing the native window delegate caused GPUI to miss key activation / resize / frame callbacks. The visible symptom was that the quick terminal appeared, but buttons, shortcuts, focus, and top chrome behaved as if they were stalled until a manual resize occurred.
+The final implementation keeps GPUI's delegate ownership intact.
 
-The correct fix was to keep GPUI's delegate ownership intact.
+### 2. Avoid duplicated workspace/session state machines
 
-### 2. Avoid duplicated state machines
+Earlier designs added extra concepts such as:
 
-Intermediate versions introduced extra state such as:
+- eager creation
+- reinitialize-on-last-tab-close
+- mirrored remembered height
+- extra creation state flags
 
-- lazy creation
-- pending show
-- creating flags
-- mirrored height memory
+These increased complexity without improving the product behavior.
 
-These made the system harder to reason about and were ultimately unnecessary.
+The final model is simpler:
 
-The final design is simpler because the live window and workspace are the primary sources of truth.
+- if the Quick Terminal window exists, reuse it
+- if it is destroyed, recreate it fresh
 
-### 3. Reuse shared workspace behavior
+### 3. Reuse shared workspace behavior whenever possible
 
-When hotkey behavior diverged into custom tab activation / synchronization code, regressions appeared in focus and tab rendering.
+Diverging into Quick-Terminal-specific tab activation or layout behavior created rendering and focus regressions.
 
-The final design prefers reusing existing `ConWorkspace` flows and only adding a narrow hotkey-specific shell around them.
+The final implementation works best when Quick Terminal reuses normal `ConWorkspace` flows and only adds a narrow lifecycle shell around them.
 
 ## File map
 
 Primary files:
 
 - `crates/con-app/src/main.rs`
-  - eager hotkey-window creation
-  - hotkey-window options / initial bounds
+  - Quick Terminal window creation entrypoint
+  - Quick Terminal window options / initial bounds
 - `crates/con-app/src/quick_terminal.rs`
   - singleton runtime controller
+  - lazy create / show / hide / destroy-state reset
 - `crates/con-app/src/global_hotkey.rs`
-  - hotkey registration and callback dispatch
+  - global hotkey registration and callback dispatch
 - `crates/con-app/src/objc/quick_terminal_trampoline.m`
-  - AppKit show/hide/configure behavior
+  - AppKit configure / animation / auto-hide behavior
 - `crates/con-app/src/workspace.rs`
-  - shared workspace/tab behavior used by the quick terminal
+  - shared workspace behavior
+  - destroy-on-last-tab / destroy-on-last-shell-exit logic
 
 ## Verification checklist
 
 Manual verification should cover:
 
-- open normal Con window → quick terminal is pre-created hidden
-- `Cmd+\\` toggles show/hide
-- quick terminal focuses correctly on show
-- hide restores the previously frontmost app
+- app launch does **not** pre-create Quick Terminal
+- first `Cmd+\\` lazily creates and shows Quick Terminal
+- second `Cmd+\\` hides it
+- showing again reuses the same live workspace if it was only hidden
+- Quick Terminal focuses correctly on show
+- toggle-hide restores the previously frontmost app
+- clicking elsewhere auto-hides Quick Terminal
 - default cwd is `HOME`
 - full-width top-pinned appearance
 - default half-screen height
 - bottom-edge height resize works
-- quick terminal keeps its session state across hide/show
+- Quick Terminal keeps its session state across hide/show while alive
 - always-on-top setting applies correctly
-- add tab / `Cmd+T` works normally inside the quick terminal
+- add tab / `Cmd+T` works normally inside Quick Terminal
 - tab UI renders without requiring a manual resize
 - changing tab layout does not trigger LLM summary requests
+- closing the last tab destroys Quick Terminal
+- shell exit on the last pane destroys Quick Terminal
+- after destruction, next `Cmd+\\` creates a fresh Quick Terminal
 
-## Current scope
+## Scope
 
 This implementation is macOS-only.
 
 Non-goals for now:
 
-- cross-launch hotkey session persistence beyond existing Con session behavior
-- persistent geometry restoration across app relaunches
-- a background daemon or app-without-window resident mode
-- non-macOS quick terminal behavior
+- persistent Quick Terminal geometry across app relaunches
+- preserving Quick Terminal state after destruction
+- a background daemon or resident no-window app mode
+- non-macOS Quick Terminal behavior

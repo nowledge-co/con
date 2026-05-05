@@ -7680,83 +7680,6 @@ impl ConWorkspace {
         self.is_quick_terminal = true;
     }
 
-    fn hide_quick_terminal_for_reinit() {
-        #[cfg(target_os = "macos")]
-        {
-            crate::quick_terminal::mark_hidden();
-            crate::quick_terminal::force_hide();
-        }
-    }
-
-    fn rebuild_quick_terminal_single_tab(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-        closing_terminals: Vec<TerminalPane>,
-    ) {
-        let terminal = self.create_terminal(
-            crate::quick_terminal::default_quick_terminal_cwd()
-                .as_deref()
-                .and_then(|p| p.to_str()),
-            window,
-            cx,
-        );
-        // Focus the new terminal while we still have the window context
-        // so GPUI remembers it for the next toggle.
-        terminal.focus(window, cx);
-
-        let summary_id = self.next_tab_summary_id;
-        self.next_tab_summary_id += 1;
-        self.tabs.push(Tab {
-            pane_tree: PaneTree::new(terminal),
-            title: "Terminal 1".to_string(),
-            user_label: None,
-            ai_label: None,
-            ai_icon: None,
-            summary_id,
-            needs_attention: false,
-            session: AgentSession::new(),
-            agent_routing: Self::default_agent_routing(self.harness.config()),
-            panel_state: PanelState::new(),
-            runtime_trackers: RefCell::new(HashMap::new()),
-            runtime_cache: RefCell::new(HashMap::new()),
-            shell_history: HashMap::new(),
-        });
-        self.active_tab = 0;
-        cx.notify();
-
-        cx.on_next_frame(window, move |_workspace, _window, cx| {
-            for terminal in &closing_terminals {
-                terminal.shutdown_surface(cx);
-            }
-        });
-    }
-
-    /// Reinitialize the quick terminal with a fresh tab and hide the window.
-    /// Called when the last tab is closed via Cmd+W or when the shell in the
-    /// last pane exits (Ctrl+D). The quick terminal must never be fully
-    /// removed while the app is running.
-    fn reinitialize_quick_terminal_and_hide(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        Self::hide_quick_terminal_for_reinit();
-
-        let index = self.active_tab;
-        let closing_terminals: Vec<TerminalPane> = self.tabs[index]
-            .pane_tree
-            .all_surface_terminals()
-            .into_iter()
-            .cloned()
-            .collect();
-        let _summary_id = self.tabs[index].summary_id;
-        self.tab_summary_engine.forget(_summary_id);
-        self.tabs.remove(index);
-
-        self.rebuild_quick_terminal_single_tab(window, cx, closing_terminals);
-    }
-
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
         // If the active tab has multiple panes, close the focused pane first.
         // Only close the entire tab when it's down to a single pane.
@@ -7808,7 +7731,7 @@ impl ConWorkspace {
         }
         if self.tabs.len() <= 1 {
             if self.is_quick_terminal {
-                self.reinitialize_quick_terminal_and_hide(window, cx);
+                self.destroy_quick_terminal_window(window, cx);
                 return;
             }
 
@@ -7876,6 +7799,14 @@ impl ConWorkspace {
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
+    }
+
+    fn destroy_quick_terminal_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
+        crate::quick_terminal::force_hide();
+        #[cfg(target_os = "macos")]
+        crate::quick_terminal::reset_destroyed_window();
+        self.close_window_from_last_tab(window, cx);
     }
 
     fn close_window_from_last_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -9546,7 +9477,7 @@ impl ConWorkspace {
             // Last pane in this window — close this workspace only.
             // App-level quit would tear down sibling windows too.
             if self.is_quick_terminal {
-                self.reinitialize_quick_terminal_and_hide(window, cx);
+                self.destroy_quick_terminal_window(window, cx);
                 return;
             }
             self.close_window_from_last_tab(window, cx);

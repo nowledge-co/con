@@ -9,6 +9,11 @@ struct QuickTerminalState {
     return_pid: Option<i32>,
 }
 
+fn prepare_force_hide(state: &mut QuickTerminalState) -> Option<i32> {
+    state.visible = false;
+    state.return_pid.take()
+}
+
 unsafe extern "C" {
     fn con_quick_terminal_configure(window_ptr: *mut std::ffi::c_void, always_on_top: bool);
     fn con_quick_terminal_set_level(window_ptr: *mut std::ffi::c_void, always_on_top: bool);
@@ -27,33 +32,17 @@ pub fn init(_cx: &App, keybindings: &KeybindingConfig) {
     set_always_on_top(keybindings.quick_terminal_always_on_top);
 }
 
-fn should_create_with_first_normal_window(existing_ptr: Option<usize>) -> bool {
-    existing_ptr.is_none()
-}
-
-pub fn ensure_created_for_app_run(cx: &mut App) {
-    let should_create = QUICK_TERMINAL_STATE.with(|state| {
-        should_create_with_first_normal_window(state.borrow().raw_ptr)
-    });
-    if !should_create {
-        return;
-    }
-
-    let config = con_core::Config::load().unwrap_or_default();
-    crate::open_quick_terminal(
-        config,
-        crate::fresh_window_session_with_history_for_cwd(default_quick_terminal_cwd()),
-        cx,
-    );
-}
-
 pub fn store_window_ptr(window_ptr: *mut std::ffi::c_void, always_on_top: bool) {
     QUICK_TERMINAL_STATE.with(|state| {
         let mut state = state.borrow_mut();
         state.raw_ptr = Some(window_ptr as usize);
-        state.visible = false;
+        let current_pid = std::process::id() as i32;
+        let frontmost_pid = unsafe { con_quick_terminal_frontmost_app_pid() };
+        state.return_pid = remember_return_pid(current_pid, Some(frontmost_pid));
+        state.visible = true;
     });
     unsafe { con_quick_terminal_configure(window_ptr, always_on_top) };
+    unsafe { con_quick_terminal_slide_in(window_ptr) };
 }
 
 pub fn window_from_view_ptr(view_ptr: *mut std::ffi::c_void) -> Option<*mut std::ffi::c_void> {
@@ -61,7 +50,7 @@ pub fn window_from_view_ptr(view_ptr: *mut std::ffi::c_void) -> Option<*mut std:
     (!window_ptr.is_null()).then_some(window_ptr)
 }
 
-pub fn toggle(_cx: &mut App) {
+pub fn toggle(cx: &mut App) {
     let window_ptr = QUICK_TERMINAL_STATE.with(|state| state.borrow().raw_ptr);
 
     if let Some(window_ptr) = window_ptr {
@@ -69,7 +58,7 @@ pub fn toggle(_cx: &mut App) {
             let mut state = state.borrow_mut();
             let raw = window_ptr as *mut std::ffi::c_void;
             if state.visible {
-                let return_pid = take_return_pid(&mut state.return_pid);
+                let return_pid = state.return_pid.take();
                 unsafe {
                     con_quick_terminal_slide_out(raw, return_pid.unwrap_or(0));
                 }
@@ -87,7 +76,12 @@ pub fn toggle(_cx: &mut App) {
         return;
     }
 
-    log::warn!("quick terminal toggle requested before singleton window was created");
+    let config = con_core::Config::load().unwrap_or_default();
+    crate::open_quick_terminal(
+        config,
+        crate::fresh_window_session_with_history_for_cwd(default_quick_terminal_cwd()),
+        cx,
+    );
 }
 
 /// Returns the default working directory for the quick terminal.
@@ -103,20 +97,13 @@ pub fn default_quick_terminal_cwd() -> Option<std::path::PathBuf> {
     None
 }
 
-/// Set the visible flag to false without any animation. Used at the start
-/// of reinitialize_quick_terminal_and_hide to prevent the auto-hide observer
-/// from competing with the intentional slide-out.
-pub fn mark_hidden() {
-    QUICK_TERMINAL_STATE.with(|state| state.borrow_mut().visible = false);
-}
-
 /// Always slide the window off-screen, regardless of the current visible
 /// flag. Consumes the saved return pid (captured during toggle-in) so
 /// focus returns to the previously active app, not the con main window.
 pub fn force_hide() {
     QUICK_TERMINAL_STATE.with(|state| {
         let mut state = state.borrow_mut();
-        let return_pid = take_return_pid(&mut state.return_pid);
+        let return_pid = prepare_force_hide(&mut state);
         if let Some(window_ptr) = state.raw_ptr {
             unsafe {
                 con_quick_terminal_slide_out(
@@ -168,40 +155,17 @@ fn remember_return_pid(current_pid: i32, frontmost_pid: Option<i32>) -> Option<i
     frontmost_pid.filter(|pid| *pid != current_pid && *pid > 0)
 }
 
-fn take_return_pid(slot: &mut Option<i32>) -> Option<i32> {
-    slot.take()
+pub fn reset_destroyed_window() {
+    QUICK_TERMINAL_STATE.with(|state| {
+        *state.borrow_mut() = QuickTerminalState::default();
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        QuickTerminalState, remember_return_pid, should_create_with_first_normal_window,
-        take_return_pid,
+        QuickTerminalState, default_quick_terminal_cwd, remember_return_pid, prepare_force_hide,
     };
-
-    #[test]
-    fn disabled_or_empty_binding_disables_quick_terminal_registration() {
-        assert!(!(false && !"cmd-\\".trim().is_empty()));
-        assert!(!(true && !"   ".trim().is_empty()));
-        assert!(true && !"cmd-\\".trim().is_empty());
-    }
-
-    #[test]
-    fn remember_return_pid_ignores_con_itself_and_consumes_saved_pid() {
-        assert_eq!(remember_return_pid(42, Some(7)), Some(7));
-        assert_eq!(remember_return_pid(42, Some(42)), None);
-        assert_eq!(remember_return_pid(42, None), None);
-
-        let mut slot = Some(7);
-        assert_eq!(take_return_pid(&mut slot), Some(7));
-        assert_eq!(take_return_pid(&mut slot), None);
-    }
-
-    #[test]
-    fn creates_quick_terminal_only_once_per_app_run() {
-        assert!(should_create_with_first_normal_window(None));
-        assert!(!should_create_with_first_normal_window(Some(1)));
-    }
 
     #[test]
     fn quick_terminal_state_defaults_are_hidden_and_empty() {
@@ -212,19 +176,51 @@ mod tests {
     }
 
     #[test]
-    fn take_return_pid_clears_force_hide_restore_target() {
+    fn quick_terminal_binding_default_is_non_empty() {
+        assert!(!con_core::config::KeybindingConfig::default()
+            .quick_terminal
+            .trim()
+            .is_empty());
+    }
+
+    #[test]
+    fn remember_return_pid_ignores_con_itself_and_consumes_saved_pid() {
+        assert_eq!(remember_return_pid(42, Some(7)), Some(7));
+        assert_eq!(remember_return_pid(42, Some(42)), None);
+        assert_eq!(remember_return_pid(42, None), None);
+
+        let mut slot = Some(7);
+        assert_eq!(slot.take(), Some(7));
+        assert_eq!(slot.take(), None);
+    }
+
+    #[test]
+    fn reset_clears_destroyed_window_state() {
         let mut state = QuickTerminalState {
             raw_ptr: Some(1),
             visible: true,
             return_pid: Some(99),
         };
-        assert_eq!(take_return_pid(&mut state.return_pid), Some(99));
+        state = QuickTerminalState::default();
+        assert_eq!(state.raw_ptr, None);
+        assert!(!state.visible);
         assert_eq!(state.return_pid, None);
     }
 
     #[test]
-    fn quick_terminal_uses_a_dedicated_default_cwd() {
-        let home = dirs::home_dir();
-        assert!(home.is_some());
+    fn force_hide_preparation_hides_and_consumes_saved_pid() {
+        let mut state = QuickTerminalState {
+            raw_ptr: Some(1),
+            visible: true,
+            return_pid: Some(99),
+        };
+        assert_eq!(prepare_force_hide(&mut state), Some(99));
+        assert!(!state.visible);
+        assert_eq!(state.return_pid, None);
+    }
+
+    #[test]
+    fn default_quick_terminal_cwd_uses_home_dir() {
+        assert_eq!(default_quick_terminal_cwd(), dirs::home_dir());
     }
 }

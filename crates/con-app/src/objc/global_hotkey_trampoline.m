@@ -169,6 +169,14 @@ void con_unregister_global_hotkey(void) {
         g_con_hotkey_ref = NULL;
     }
     g_con_hotkey_callback = NULL;
+
+    // Tear down the shared Carbon event handler when no hotkey remains
+    // registered — avoids dispatching every global key event through a
+    // no-op handler.
+    if (g_con_qt_hotkey_ref == NULL && g_con_hotkey_handler != NULL) {
+        RemoveEventHandler(g_con_hotkey_handler);
+        g_con_hotkey_handler = NULL;
+    }
 }
 
 void con_unregister_quick_terminal_hotkey(void) {
@@ -177,6 +185,11 @@ void con_unregister_quick_terminal_hotkey(void) {
         g_con_qt_hotkey_ref = NULL;
     }
     g_con_qt_hotkey_callback = NULL;
+
+    if (g_con_hotkey_ref == NULL && g_con_hotkey_handler != NULL) {
+        RemoveEventHandler(g_con_hotkey_handler);
+        g_con_hotkey_handler = NULL;
+    }
 }
 
 bool con_app_is_active(void) {

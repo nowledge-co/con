@@ -12,9 +12,16 @@ static char kResignKeyObserverKey;
 static NSRect con_quick_terminal_frame(NSWindow *window, bool visible) {
     NSScreen *screen = window.screen ?: NSScreen.mainScreen;
     NSRect visibleFrame = screen.visibleFrame;
-    NSRect frame = window.frame;
-    CGFloat clampedHeight = fmin(fmax(NSHeight(frame), CON_QUICK_TERMINAL_MIN_HEIGHT), visibleFrame.size.height);
+    CGFloat halfHeight = visibleFrame.size.height / 2.0;
+    // Use the window's current height if GPUI has already applied it,
+    // otherwise fall back to half the screen height (the initial default).
+    CGFloat height = NSHeight(window.frame);
+    if (height <= 0.0) {
+        height = halfHeight;
+    }
+    CGFloat clampedHeight = fmin(fmax(height, CON_QUICK_TERMINAL_MIN_HEIGHT), visibleFrame.size.height);
 
+    NSRect frame;
     frame.origin.x = visibleFrame.origin.x;
     frame.size.width = visibleFrame.size.width;
     frame.size.height = clampedHeight;
@@ -69,7 +76,9 @@ void con_quick_terminal_set_level(void *window_ptr, bool always_on_top) {
         return;
     }
 
-    window.level = always_on_top ? NSFloatingWindowLevel : NSNormalWindowLevel;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        window.level = always_on_top ? NSFloatingWindowLevel : NSNormalWindowLevel;
+    });
 }
 
 void *con_quick_terminal_window_from_view(void *view_ptr) {

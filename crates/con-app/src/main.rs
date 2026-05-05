@@ -501,8 +501,6 @@ pub(crate) fn open_con_window(
     exit_on_error: bool,
     cx: &mut App,
 ) {
-    #[cfg(target_os = "macos")]
-    crate::quick_terminal::ensure_created_for_app_run(cx);
 
     let window_options = default_window_options(&config, cx);
     cx.spawn(async move |cx| {
@@ -595,17 +593,17 @@ pub(crate) fn open_quick_terminal(config: con_core::Config, session: Session, cx
 
             cx.new(|cx| gpui_component::Root::new(view, window, cx).bg(cx.theme().transparent))
         }) {
-            log::error!("Failed to open hotkey window: {err}");
+            log::error!("Failed to open quick terminal: {err}");
         }
     })
     .detach();
 }
 
-fn fresh_window_session_with_history() -> Session {
+pub(crate) fn fresh_window_session_with_history() -> Session {
     fresh_window_session_with_history_for_cwd(None)
 }
 
-fn fresh_window_session_with_history_for_cwd(cwd: Option<std::path::PathBuf>) -> Session {
+pub(crate) fn fresh_window_session_with_history_for_cwd(cwd: Option<std::path::PathBuf>) -> Session {
     let persisted = Session::load().unwrap_or_default();
     let persisted_history = GlobalHistoryState::load().unwrap_or_default();
     let mut session = Session::default();
