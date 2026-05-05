@@ -4,9 +4,16 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.59` - 2026-05-04
+## `v0.1.0-beta.61` - 2026-05-05
 
 ### Added
+
+**Tabs**
+
+- Added inline rename for horizontal tabs. Double-click a tab title to edit it
+  in place, with focus-time select-all, Enter/blur save, and Escape cancel.
+- Added browser-style drag reorder for horizontal tabs, including left/right
+  drop slots and a real trailing drop target after the last tab.
 
 **Distribution**
 
@@ -50,6 +57,18 @@ con is still pre-release, so entries may group related beta work while the produ
 - Added `cmd-s` (macOS) / `ctrl-s` (Windows/Linux) keybinding to trigger Save Changes from anywhere in the settings panel.
 - Added `cmd-w` (macOS) / `ctrl-w` (Windows/Linux) to close the standalone settings window or save-and-dismiss in panel mode. Closing via `cmd-w` now correctly reverts any unsaved standalone preview changes, matching the existing Escape path.
 - Save Changes button in the standalone settings window now shows a `⌘ S` / `Ctrl S` keycap hint.
+
+### Fixed
+
+**Tabs**
+
+- Made sidebar and horizontal tab rename lifecycles consistent: unchanged
+  rename blur restores terminal focus without pinning smart AI/SSH/CWD labels,
+  while real edits still persist as explicit user names.
+- Prevented Escape-cancelled rename editors from committing through delayed blur
+  events, even if the user immediately reopens rename on the same tab.
+- Kept macOS titlebar dragging from stealing tab drag/click interactions while
+  preserving the normal double-click titlebar behavior.
 
 ## `v0.1.0-beta.57` - 2026-05-03
 

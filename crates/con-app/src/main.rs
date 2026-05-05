@@ -355,6 +355,13 @@ fn default_window_options(config: &con_core::Config, cx: &mut App) -> WindowOpti
         titlebar: default_titlebar_options(transparent),
         window_decorations: default_window_decorations(),
         window_background: default_window_background(config, transparent),
+        // macOS: disable NSWindow's native `isMovable` drag so that
+        // GPUI elements (tabs, sidebar) can start their own drags
+        // without the window also moving. The top_bar renders an
+        // explicit `start_window_move()` on mouse-down in the empty
+        // titlebar area to restore the drag-to-move gesture.
+        #[cfg(target_os = "macos")]
+        is_movable: false,
         ..Default::default()
     }
 }
