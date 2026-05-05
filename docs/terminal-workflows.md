@@ -31,6 +31,10 @@ there when one visible pane should host several terminal sessions.
 
 When in doubt, open Command Palette and search by the action name.
 
+On macOS, [Quick Terminal](quick-terminal.md) can give you a separate
+drop-down terminal from anywhere on the system. It is optional and off by
+default.
+
 ## Tabs and windows
 
 Use a new tab when the work belongs to the same window. Use a new window when
