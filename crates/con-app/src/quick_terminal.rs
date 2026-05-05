@@ -106,15 +106,10 @@ pub fn mark_hidden() {
     QUICK_TERMINAL_VISIBLE.with(|v| *v.borrow_mut() = false);
 }
 
-/// Slide the quick terminal window off-screen without toggling visible state
-/// or capturing a return pid. Used when the last tab is closed — the window
-/// reinitializes and hides but must remain alive for the next toggle.
-pub fn hide() {
-    let is_visible = QUICK_TERMINAL_VISIBLE.with(|v| *v.borrow());
-    if !is_visible {
-        return;
-    }
-    QUICK_TERMINAL_VISIBLE.with(|v| *v.borrow_mut() = false);
+/// Always slide the window off-screen, regardless of the current visible
+/// flag. Called from reinitialize_quick_terminal_and_hide after mark_hidden()
+/// already disabled the auto-hide guard.
+pub fn force_hide() {
     QUICK_TERMINAL_RAW_PTR.with(|slot| {
         let window_ptr = *slot.borrow();
         if let Some(window_ptr) = window_ptr {
@@ -123,6 +118,18 @@ pub fn hide() {
             }
         }
     });
+}
+
+/// Slide the quick terminal window off-screen, but only if currently
+/// visible. No-ops when already hidden to avoid double-hide during
+/// resign-key animations.
+pub fn hide() {
+    let is_visible = QUICK_TERMINAL_VISIBLE.with(|v| *v.borrow());
+    if !is_visible {
+        return;
+    }
+    QUICK_TERMINAL_VISIBLE.with(|v| *v.borrow_mut() = false);
+    force_hide();
 }
 
 /// Called from ObjC when the quick terminal window resigns key (user clicked

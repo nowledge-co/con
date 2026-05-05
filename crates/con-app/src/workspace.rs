@@ -7740,7 +7740,7 @@ impl ConWorkspace {
         });
 
         #[cfg(target_os = "macos")]
-        crate::quick_terminal::hide();
+        crate::quick_terminal::force_hide();
     }
 
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
