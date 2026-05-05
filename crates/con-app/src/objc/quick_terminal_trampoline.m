@@ -6,8 +6,27 @@
 static const CGFloat CON_QUICK_TERMINAL_MIN_HEIGHT = 280.0;
 
 extern void con_quick_terminal_handle_resign_key(void);
+extern void con_quick_terminal_remember_active_app(int32_t pid);
 
 static char kResignKeyObserverKey;
+static id gActiveAppObserver = nil;
+
+void con_quick_terminal_init(void) {
+    if (gActiveAppObserver != nil) {
+        return;
+    }
+
+    gActiveAppObserver = [NSWorkspace.sharedWorkspace.notificationCenter
+        addObserverForName:NSWorkspaceDidActivateApplicationNotification
+                  object:nil
+                   queue:NSOperationQueue.mainQueue
+              usingBlock:^(NSNotification *notification) {
+        NSRunningApplication *app = notification.userInfo[NSWorkspaceApplicationKey];
+        if (app != nil) {
+            con_quick_terminal_remember_active_app((int32_t)app.processIdentifier);
+        }
+    }];
+}
 
 static NSRect con_quick_terminal_frame(NSWindow *window, bool visible) {
     NSScreen *screen = window.screen ?: NSScreen.mainScreen;

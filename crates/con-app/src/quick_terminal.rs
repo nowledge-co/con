@@ -7,6 +7,7 @@ struct QuickTerminalState {
     opening: bool,
     visible: bool,
     return_pid: Option<i32>,
+    last_non_con_pid: Option<i32>,
 }
 
 fn begin_opening(state: &mut QuickTerminalState) -> bool {
@@ -25,7 +26,21 @@ fn finish_opening(state: &mut QuickTerminalState) {
 fn capture_return_pid() -> Option<i32> {
     let current_pid = std::process::id() as i32;
     let frontmost_pid = unsafe { con_quick_terminal_frontmost_app_pid() };
-    remember_return_pid(current_pid, Some(frontmost_pid))
+    let captured = remember_return_pid(current_pid, Some(frontmost_pid));
+    if captured.is_some() {
+        QUICK_TERMINAL_STATE.with(|state| state.borrow_mut().last_non_con_pid = captured);
+    }
+    captured.or_else(|| QUICK_TERMINAL_STATE.with(|state| state.borrow().last_non_con_pid))
+}
+
+/// Record an externally observed active app pid. This lets the quick terminal
+/// restore focus even when the global-hotkey callback runs after macOS has
+/// already made con frontmost.
+pub fn remember_active_app_pid(pid: i32) {
+    let current_pid = std::process::id() as i32;
+    if let Some(pid) = remember_return_pid(current_pid, Some(pid)) {
+        QUICK_TERMINAL_STATE.with(|state| state.borrow_mut().last_non_con_pid = Some(pid));
+    }
 }
 
 /// Capture the frontmost app pid synchronously from the Carbon hotkey
@@ -42,6 +57,7 @@ fn prepare_force_hide(state: &mut QuickTerminalState) -> Option<i32> {
 
 unsafe extern "C" {
     fn con_quick_terminal_configure(window_ptr: *mut std::ffi::c_void);
+    fn con_quick_terminal_init();
     fn con_quick_terminal_prepare_destroy(window_ptr: *mut std::ffi::c_void);
     fn con_quick_terminal_slide_in(window_ptr: *mut std::ffi::c_void);
     fn con_quick_terminal_slide_out(window_ptr: *mut std::ffi::c_void, return_pid: i32);
@@ -54,11 +70,13 @@ unsafe extern "C" {
 
 thread_local! {
     static QUICK_TERMINAL_STATE: RefCell<QuickTerminalState> =
-        const { RefCell::new(QuickTerminalState { raw_ptr: None, opening: false, visible: false, return_pid: None }) };
+        const { RefCell::new(QuickTerminalState { raw_ptr: None, opening: false, visible: false, return_pid: None, last_non_con_pid: None }) };
 }
 
 /// Keep the module loaded; actual Quick Terminal work is lazy on first toggle.
-pub fn init(_cx: &App) {}
+pub fn init(_cx: &App) {
+    unsafe { con_quick_terminal_init() };
+}
 
 pub fn store_window_ptr(window_ptr: *mut std::ffi::c_void) {
     let fallback_return_pid = capture_return_pid();
@@ -189,6 +207,12 @@ pub fn hide() {
     });
 }
 
+/// Called from ObjC when NSWorkspace reports an active app change.
+#[unsafe(no_mangle)]
+extern "C" fn con_quick_terminal_remember_active_app(pid: i32) {
+    remember_active_app_pid(pid);
+}
+
 /// Called from ObjC when the quick terminal window resigns key (user clicked
 /// elsewhere). Hides the window automatically like iTerm2's hotkey window.
 #[unsafe(no_mangle)]
@@ -237,6 +261,7 @@ mod tests {
         assert!(!state.opening);
         assert!(!state.visible);
         assert_eq!(state.return_pid, None);
+        assert_eq!(state.last_non_con_pid, None);
     }
 
     #[test]
@@ -276,6 +301,7 @@ mod tests {
             opening: false,
             visible: true,
             return_pid: Some(99),
+            last_non_con_pid: None,
         };
         assert_eq!(prepare_force_hide(&mut state), Some(99));
         assert!(!state.visible);
