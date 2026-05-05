@@ -496,8 +496,8 @@ remains future work.
 
 If Ghostty's upstream source shape drifts and the macOS embedding patch cannot
 be applied, the build disables the hook and emits a Cargo warning instead of
-failing the whole app build. That makes terminal text restore an enhancement,
-not a build-time dependency for casual local builds. macOS release packaging
+failing the whole app build. That keeps terminal text restore optional for
+casual local builds. macOS release packaging
 sets `CON_REQUIRE_GHOSTTY_INITIAL_OUTPUT=1`, so the same drift blocks release
 artifacts and forces the patch to be rebased before shipping.
 

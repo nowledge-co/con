@@ -51,6 +51,8 @@ use gpui_component::{
     input::{Escape as InputEscape, Input, InputEvent, InputState},
     menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
 };
+use std::cell::Cell;
+use std::rc::Rc;
 use std::time::Duration;
 
 /// Width of the always-visible icon rail in collapsed mode.
@@ -106,7 +108,15 @@ enum PanelMode {
 struct RenameState {
     index: usize,
     session_id: u64,
+    generation: u64,
     input: Entity<InputState>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RenameLifecycleStateSnapshot {
+    active_generation: Option<u64>,
+    cancelled_generation: Option<u64>,
 }
 
 /// What the user is currently dragging.
@@ -158,6 +168,12 @@ pub struct SessionSidebar {
     effective_panel_max_width: f32,
     /// Inline rename state, `Some` while the user is editing a label.
     rename: Option<RenameState>,
+    /// Escape-cancel marker so a subsequent blur from the old input
+    /// does not commit the just-cancelled rename.
+    rename_cancelled_generation: Option<u64>,
+    /// Monotonic generation for sidebar rename editors so stale blur
+    /// events from an older input cannot commit after a reopen.
+    rename_generation: u64,
     /// The rail-icon index currently under the cursor. Drives the
     /// floating hover card. Cleared on rail mouse-leave.
     hovered_rail: Option<usize>,
@@ -189,6 +205,10 @@ pub struct SidebarRename {
     pub session_id: u64,
     /// `None` clears the user override and falls back to smart naming.
     pub label: Option<String>,
+    /// False when rename ended without a user edit. This lets the
+    /// workspace restore terminal focus without freezing a smart label
+    /// into an explicit user override.
+    pub changed_by_user: bool,
 }
 pub struct SidebarDuplicate {
     pub session_id: u64,
@@ -228,6 +248,8 @@ impl SessionSidebar {
             panel_width: PANEL_WIDTH,
             effective_panel_max_width: PANEL_MAX_WIDTH,
             rename: None,
+            rename_cancelled_generation: None,
+            rename_generation: 0,
             hovered_rail: None,
             drop_slot: None,
             rail_drag_origin_y: None,
@@ -323,6 +345,8 @@ impl SessionSidebar {
             return;
         }
         let session_id = self.sessions[index].id;
+        let generation = self.rename_generation;
+        self.rename_generation += 1;
         let initial = self.sessions[index].name.clone();
         let input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
@@ -331,18 +355,36 @@ impl SessionSidebar {
             s
         });
 
+        let select_all_on_focus = Rc::new(Cell::new(true));
+        let changed_by_user = Rc::new(Cell::new(false));
         cx.subscribe_in(&input, window, {
-            move |this, input_entity, event: &InputEvent, _window, cx| match event {
-                InputEvent::PressEnter { .. } => {
+            let select_all_on_focus = select_all_on_focus.clone();
+            let changed_by_user = changed_by_user.clone();
+            move |this, input_entity, event: &InputEvent, window, cx| match event {
+                InputEvent::Focus if select_all_on_focus.replace(false) => {
+                    window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
+                }
+                InputEvent::Change => {
+                    changed_by_user.set(true);
+                }
+                InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                    if this.rename_cancelled_generation == Some(generation)
+                        || this.rename.as_ref().map(|rename| rename.generation) != Some(generation)
+                    {
+                        if this.rename_cancelled_generation == Some(generation) {
+                            this.rename_cancelled_generation = None;
+                        }
+                        return;
+                    }
                     let value = input_entity.read(cx).value().to_string();
-                    let value = value.trim();
-                    let label = if value.is_empty() {
-                        None
-                    } else {
-                        Some(value.to_string())
-                    };
-                    cx.emit(SidebarRename { session_id, label });
+                    let label = normalize_sidebar_rename_label(&value);
+                    cx.emit(SidebarRename {
+                        session_id,
+                        label,
+                        changed_by_user: changed_by_user.get(),
+                    });
                     this.rename = None;
+                    this.rename_cancelled_generation = None;
                     cx.notify();
                 }
                 _ => {}
@@ -354,13 +396,15 @@ impl SessionSidebar {
         self.rename = Some(RenameState {
             index,
             session_id,
+            generation,
             input,
         });
         cx.notify();
     }
 
     fn cancel_rename(&mut self, cx: &mut Context<Self>) {
-        if self.rename.take().is_some() {
+        if let Some(rename) = self.rename.take() {
+            self.rename_cancelled_generation = Some(rename.generation);
             cx.notify();
         }
     }
@@ -514,12 +558,7 @@ impl SessionSidebar {
                 .hover(move |s| if is_active { s } else { s.bg(hover_bg) })
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |this, _, _, cx| {
-                        if let Some(state) = &this.rename {
-                            if state.index != i {
-                                this.rename = None;
-                            }
-                        }
+                    cx.listener(move |_this, _, _, cx| {
                         cx.emit(SidebarSelect { index: i });
                     }),
                 )
@@ -527,6 +566,9 @@ impl SessionSidebar {
                     MouseButton::Middle,
                     cx.listener(move |_this, _, _, cx| cx.emit(SidebarCloseTab { session_id })),
                 )
+                .on_double_click(cx.listener(move |this, _, window, cx| {
+                    this.start_rename_by_id(session_id, window, cx);
+                }))
                 .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                     let want = if *hovered { Some(i) } else { None };
                     if this.hovered_rail != want {
@@ -1050,12 +1092,7 @@ impl SessionSidebar {
             .hover(move |s| if is_active { s } else { s.bg(hover_bg) })
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
-                    if let Some(state) = &this.rename {
-                        if state.index != i {
-                            this.rename = None;
-                        }
-                    }
+                cx.listener(move |_this, _, _, cx| {
                     cx.emit(SidebarSelect { index: i });
                 }),
             )
@@ -1357,6 +1394,7 @@ fn build_row_context_menu(
                         cx.emit(SidebarRename {
                             session_id,
                             label: None,
+                            changed_by_user: true,
                         })
                     });
                 }
@@ -1445,4 +1483,91 @@ where
                 .text_color(theme.muted_foreground.opacity(0.72)),
         )
         .on_mouse_down(MouseButton::Left, handler)
+}
+
+#[cfg(test)]
+fn begin_rename_lifecycle(generation: &mut u64, _session_id: u64) -> RenameLifecycleStateSnapshot {
+    let current_generation = *generation;
+    *generation += 1;
+    RenameLifecycleStateSnapshot {
+        active_generation: Some(current_generation),
+        cancelled_generation: None,
+    }
+}
+
+#[cfg(test)]
+fn cancel_rename_lifecycle(state: RenameLifecycleStateSnapshot) -> RenameLifecycleStateSnapshot {
+    RenameLifecycleStateSnapshot {
+        active_generation: None,
+        cancelled_generation: state.active_generation,
+    }
+}
+
+#[cfg(test)]
+fn begin_rename_after_cancel_lifecycle(
+    generation: &mut u64,
+    state: RenameLifecycleStateSnapshot,
+    session_id: u64,
+) -> RenameLifecycleStateSnapshot {
+    let next = begin_rename_lifecycle(generation, session_id);
+    RenameLifecycleStateSnapshot {
+        active_generation: next.active_generation,
+        cancelled_generation: state.cancelled_generation,
+    }
+}
+
+#[cfg(test)]
+fn blur_should_commit_for_lifecycle(
+    state: RenameLifecycleStateSnapshot,
+    blur_generation: u64,
+) -> bool {
+    state.cancelled_generation != Some(blur_generation)
+        && state.active_generation == Some(blur_generation)
+}
+
+fn normalize_sidebar_rename_label(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        begin_rename_after_cancel_lifecycle, begin_rename_lifecycle,
+        blur_should_commit_for_lifecycle, cancel_rename_lifecycle, normalize_sidebar_rename_label,
+    };
+
+    #[test]
+    fn normalize_sidebar_rename_label_trims_and_clears_blank_values() {
+        assert_eq!(normalize_sidebar_rename_label(""), None);
+        assert_eq!(normalize_sidebar_rename_label("   \t  \n"), None);
+        assert_eq!(
+            normalize_sidebar_rename_label("  hello  "),
+            Some("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn stale_blur_after_escape_and_same_tab_reopen_should_not_commit() {
+        let mut generation = 0;
+        let state = begin_rename_lifecycle(&mut generation, 42);
+        let cancelled_generation = state.active_generation.unwrap();
+        let state = cancel_rename_lifecycle(state);
+        let reopened = begin_rename_after_cancel_lifecycle(&mut generation, state, 42);
+
+        assert!(!blur_should_commit_for_lifecycle(
+            reopened,
+            cancelled_generation
+        ));
+
+        let active_generation = reopened.active_generation.unwrap();
+        assert!(blur_should_commit_for_lifecycle(
+            reopened,
+            active_generation
+        ));
+    }
 }

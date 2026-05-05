@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -11,8 +11,8 @@ use gpui::{prelude::FluentBuilder as _, *};
 #[cfg(target_os = "macos")]
 use gpui_component::Theme;
 use gpui_component::{
-    ActiveTheme,
-    input::{InputEvent, InputState},
+    ActiveTheme, Sizable,
+    input::{Escape as InputEscape, Input, InputEvent, InputState},
     tooltip::Tooltip,
 };
 use serde_json::json;
@@ -244,8 +244,9 @@ use crate::settings_panel::{
     self, AppearancePreview, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
 };
 use crate::sidebar::{
-    NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry, SessionSidebar, SidebarCloseOthers,
-    SidebarCloseTab, SidebarDuplicate, SidebarRename, SidebarReorder, SidebarSelect,
+    DraggedTab, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry, SessionSidebar,
+    SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate, SidebarRename, SidebarReorder,
+    SidebarSelect,
 };
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use con_terminal::TerminalTheme;
@@ -282,6 +283,21 @@ use con_core::{
     SuggestionContext, SuggestionEngine, TabIconKind, TabSummary, TabSummaryEngine,
     TabSummaryRequest,
 };
+
+/// Inline rename editor for the horizontal tab strip.
+struct TabRenameEditor {
+    tab_id: u64,
+    tab_index: usize,
+    generation: u64,
+    input: Entity<InputState>,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TabRenameStateSnapshot {
+    tab_id: u64,
+    tab_index: usize,
+}
 
 struct Tab {
     pane_tree: PaneTree,
@@ -473,6 +489,21 @@ pub struct ConWorkspace {
     window_close_prepared: bool,
     /// Ordered, coalescing session persistence worker.
     session_save_tx: crossbeam_channel::Sender<SessionSaveRequest>,
+    /// Inline rename state for the horizontal tab strip.
+    tab_rename: Option<TabRenameEditor>,
+    /// Escape-cancel marker so the subsequent input blur does not
+    /// auto-save the value we meant to discard.
+    tab_rename_cancelled_generation: Option<u64>,
+    /// Monotonic generation for horizontal tab rename editors so stale
+    /// blur events from an older input cannot commit after a reopen.
+    tab_rename_generation: u64,
+    /// Drop slot (0..=N) tracked while a DraggedTab is in flight over
+    /// the horizontal tab strip. Slot K = "insert before tab K".
+    tab_strip_drop_slot: Option<usize>,
+    /// macOS titlebar drag is initiated explicitly after actual mouse
+    /// movement so double-click still reaches the titlebar handler.
+    #[cfg(target_os = "macos")]
+    top_bar_should_move: bool,
 }
 
 #[derive(Clone)]
@@ -1558,6 +1589,12 @@ impl ConWorkspace {
             workspace_handle: cx.weak_entity(),
             window_close_prepared: false,
             session_save_tx,
+            tab_rename: None,
+            tab_rename_cancelled_generation: None,
+            tab_rename_generation: 0,
+            tab_strip_drop_slot: None,
+            #[cfg(target_os = "macos")]
+            top_bar_should_move: false,
         }
     }
 
@@ -1603,6 +1640,12 @@ impl ConWorkspace {
 
     fn active_terminal(&self) -> &TerminalPane {
         self.tabs[self.active_tab].pane_tree.focused_terminal()
+    }
+
+    fn refocus_active_terminal(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.has_active_tab() {
+            self.focus_terminal(window, cx);
+        }
     }
 
     fn sync_active_terminal_focus_states(&self, cx: &mut App) {
@@ -4599,16 +4642,10 @@ impl ConWorkspace {
         &mut self,
         _sidebar: &Entity<SessionSidebar>,
         event: &SidebarRename,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Empty / whitespace-only labels reset to smart auto-naming.
-        let new_label = event
-            .label
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
+        let new_label = event.label.as_deref().and_then(normalize_tab_user_label);
         let Some(index) = self
             .tabs
             .iter()
@@ -4616,12 +4653,18 @@ impl ConWorkspace {
         else {
             return;
         };
+        if !event.changed_by_user {
+            self.refocus_active_terminal(window, cx);
+            return;
+        }
         if self.tabs[index].user_label == new_label {
+            self.refocus_active_terminal(window, cx);
             return;
         }
         self.tabs[index].user_label = new_label;
         self.sync_sidebar(cx);
         self.save_session(cx);
+        self.refocus_active_terminal(window, cx);
         cx.notify();
     }
 
@@ -4763,6 +4806,8 @@ impl ConWorkspace {
             }
         }
 
+        self.remap_tab_rename_state_after_reorder(&old_order);
+
         // Re-locate the active tab by stable summary_id rather than
         // index arithmetic (which had its own off-by-one in the
         // previous version).
@@ -4773,6 +4818,234 @@ impl ConWorkspace {
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
+    }
+
+    /// Reorder a tab identified by `session_id` to drop slot `to`
+    /// (0..=tabs.len()). Called from the horizontal tab strip drag/drop.
+    fn reorder_tab_by_id(&mut self, session_id: u64, to: usize, cx: &mut Context<Self>) {
+        let Some(from) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.summary_id == session_id)
+        else {
+            return;
+        };
+        if from >= self.tabs.len() || to > self.tabs.len() {
+            return;
+        }
+        if from == to || from + 1 == to {
+            return;
+        }
+        let old_order: Vec<u64> = self.tabs.iter().map(|tab| tab.summary_id).collect();
+        let active_id = self.tabs[self.active_tab].summary_id;
+        let insert_at = if from < to { to - 1 } else { to };
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(insert_at, tab);
+
+        let new_positions: HashMap<u64, usize> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(idx, tab)| (tab.summary_id, idx))
+            .collect();
+        let mut remapped_pending = HashMap::new();
+        for (old_idx, pending) in std::mem::take(&mut self.pending_control_agent_requests) {
+            if let Some(summary_id) = old_order.get(old_idx)
+                && let Some(&new_idx) = new_positions.get(summary_id)
+            {
+                remapped_pending.insert(new_idx, pending);
+            }
+        }
+        self.pending_control_agent_requests = remapped_pending;
+
+        for pending in &mut self.pending_create_pane_requests {
+            if let Some(summary_id) = old_order.get(pending.tab_idx)
+                && let Some(&new_idx) = new_positions.get(summary_id)
+            {
+                pending.tab_idx = new_idx;
+            }
+        }
+
+        for pending in &mut self.pending_window_control_requests {
+            if let PendingWindowControlRequest::TabsClose { tab_idx, .. } = pending
+                && let Some(summary_id) = old_order.get(*tab_idx)
+                && let Some(&new_idx) = new_positions.get(summary_id)
+            {
+                *tab_idx = new_idx;
+            }
+        }
+
+        for pending in &mut self.pending_surface_control_requests {
+            let tab_idx = match pending {
+                PendingSurfaceControlRequest::Create { tab_idx, .. }
+                | PendingSurfaceControlRequest::Split { tab_idx, .. }
+                | PendingSurfaceControlRequest::Close { tab_idx, .. } => tab_idx,
+            };
+            if let Some(summary_id) = old_order.get(*tab_idx)
+                && let Some(&new_idx) = new_positions.get(summary_id)
+            {
+                *tab_idx = new_idx;
+            }
+        }
+
+        self.remap_tab_rename_state_after_reorder(&old_order);
+
+        if let Some(new_active) = self.tabs.iter().position(|t| t.summary_id == active_id) {
+            self.active_tab = new_active;
+        }
+
+        self.sync_sidebar(cx);
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    /// Begin an inline rename for the tab at `index` in the horizontal strip.
+    /// Creates a local InputState that replaces the tab title in the strip.
+    fn begin_tab_rename(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        let tab_id = tab.summary_id;
+        let generation = self.tab_rename_generation;
+        self.tab_rename_generation += 1;
+        // Seed from the rendered tab label so focus→blur without edits
+        // preserves AI/SSH/CWD-derived naming instead of materializing the
+        // raw terminal title as a new explicit label.
+        let terminal = tab.pane_tree.focused_terminal();
+        let hostname = self.effective_remote_host_for_tab(index, terminal, cx);
+        let title = terminal.title(cx);
+        let current_dir = terminal.current_dir(cx);
+        let initial = tab_rename_initial_label(
+            tab.user_label.as_deref(),
+            tab.ai_label.as_deref(),
+            tab.ai_icon.map(|kind| kind.svg_path()),
+            hostname.as_deref(),
+            title.as_deref(),
+            current_dir.as_deref(),
+            index,
+        );
+
+        let input = cx.new(|cx| {
+            let mut state = InputState::new(window, cx);
+            state.set_value(&initial, window, cx);
+            state.set_placeholder("Tab name", window, cx);
+            state
+        });
+
+        let select_all_on_focus = Rc::new(Cell::new(true));
+        let changed_by_user = Rc::new(Cell::new(false));
+        cx.subscribe_in(&input, window, {
+            let select_all_on_focus = select_all_on_focus.clone();
+            let changed_by_user = changed_by_user.clone();
+            move |this, input_entity, event: &InputEvent, window, cx| match event {
+                InputEvent::Focus if select_all_on_focus.replace(false) => {
+                    window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
+                }
+                InputEvent::Change => {
+                    changed_by_user.set(true);
+                }
+                InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                    if this.tab_rename_cancelled_generation == Some(generation)
+                        || this.tab_rename.as_ref().map(|rename| rename.generation)
+                            != Some(generation)
+                    {
+                        if this.tab_rename_cancelled_generation == Some(generation) {
+                            this.tab_rename_cancelled_generation = None;
+                        }
+                        return;
+                    }
+                    let value = input_entity.read(cx).value().to_string();
+                    this.commit_tab_rename(tab_id, value, changed_by_user.get(), window, cx);
+                }
+                _ => {}
+            }
+        })
+        .detach();
+
+        self.tab_rename = Some(TabRenameEditor {
+            tab_id,
+            tab_index: index,
+            generation,
+            input: input.clone(),
+        });
+        self.tab_rename_cancelled_generation = None;
+        input.update(cx, |state, cx| state.focus(window, cx));
+        cx.notify();
+    }
+
+    fn commit_tab_rename(
+        &mut self,
+        tab_id: u64,
+        value: String,
+        changed_by_user: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.tab_index_for_summary_id(tab_id) else {
+            self.tab_rename = None;
+            self.tab_rename_cancelled_generation = None;
+            cx.notify();
+            return;
+        };
+
+        let Some(tab) = self.tabs.get_mut(index) else {
+            self.tab_rename = None;
+            self.tab_rename_cancelled_generation = None;
+            cx.notify();
+            return;
+        };
+
+        let Some(label) = tab_rename_commit_label(&value, changed_by_user) else {
+            self.tab_rename = None;
+            self.tab_rename_cancelled_generation = None;
+            self.refocus_active_terminal(window, cx);
+            cx.notify();
+            return;
+        };
+        let changed = tab.user_label != label;
+        tab.user_label = label;
+        self.tab_rename = None;
+        self.tab_rename_cancelled_generation = None;
+
+        if changed {
+            self.sync_sidebar(cx);
+            self.save_session(cx);
+        }
+        self.refocus_active_terminal(window, cx);
+        cx.notify();
+    }
+
+    fn remap_tab_rename_state_after_close(&mut self, closed_index: usize) {
+        self.tab_rename =
+            self.tab_rename
+                .take()
+                .and_then(|state| match state.tab_index.cmp(&closed_index) {
+                    std::cmp::Ordering::Less => Some(state),
+                    std::cmp::Ordering::Equal => None,
+                    std::cmp::Ordering::Greater => Some(TabRenameEditor {
+                        tab_id: state.tab_id,
+                        tab_index: state.tab_index - 1,
+                        generation: state.generation,
+                        input: state.input,
+                    }),
+                });
+    }
+
+    fn remap_tab_rename_state_after_reorder(&mut self, old_order: &[u64]) {
+        let rename_summary_id = self
+            .tab_rename
+            .as_ref()
+            .and_then(|state| old_order.get(state.tab_index))
+            .copied();
+        if let Some(summary_id) = rename_summary_id
+            && let Some(new_index) = self
+                .tabs
+                .iter()
+                .position(|tab| tab.summary_id == summary_id)
+            && let Some(state) = self.tab_rename.as_mut()
+        {
+            state.tab_index = new_index;
+        }
     }
 
     fn on_sidebar_close_others(
@@ -7751,6 +8024,7 @@ impl ConWorkspace {
         let was_active = index == self.active_tab;
         self.reindex_pending_control_agent_requests_after_tab_close(index);
         self.reindex_pending_surface_control_requests_after_tab_close(index);
+        self.remap_tab_rename_state_after_close(index);
         let removed = self.tabs.remove(index);
         // Drop the closed tab's cached AI summary so a future tab
         // assigned the same summary_id (which won't happen, since
@@ -10223,6 +10497,33 @@ impl Render for ConWorkspace {
         {
             top_bar = top_bar
                 .window_control_area(WindowControlArea::Drag)
+                .on_mouse_down_out(cx.listener(|this, _, _, _| {
+                    this.top_bar_should_move = false;
+                }))
+                .on_mouse_up(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        this.top_bar_should_move = false;
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, _, _| {
+                        // NSWindow.isMovable is set to false so GPUI
+                        // element drags (tab reorder, etc.) don't also
+                        // move the window. Match Zed's GPUI titlebar
+                        // pattern: arm on mouse-down, start native drag
+                        // only after actual mouse movement so double
+                        // click can still zoom/minimize the window.
+                        this.top_bar_should_move = true;
+                    }),
+                )
+                .on_mouse_move(cx.listener(|this, _, window, _| {
+                    if this.top_bar_should_move {
+                        this.top_bar_should_move = false;
+                        window.start_window_move();
+                    }
+                }))
                 .on_click(|event, window, _cx| {
                     if event.click_count() == 2 {
                         window.titlebar_double_click();
@@ -10248,20 +10549,70 @@ impl Render for ConWorkspace {
         // Tabs container — appears only when there is real tab selection to do.
         // In vertical-tabs mode the side panel owns the tab list so we keep
         // this strip empty even with multiple tabs.
+        // Clear stale drop indicator when no drag is in flight.
+        if self.tab_strip_drop_slot.is_some() && !cx.has_active_drag() {
+            self.tab_strip_drop_slot = None;
+        }
+
         let show_horizontal_tabs = self.horizontal_tabs_visible();
-        let mut tabs_container = div().flex().flex_1().min_w_0().items_end();
+        let tab_count = self.tabs.len();
+        let tab_strip_drop_slot = self.tab_strip_drop_slot;
+        // Snapshot rename state for this render frame.
+        let renaming_tab_index = self.tab_rename.as_ref().map(|r| r.tab_index);
+        let rename_input = self.tab_rename.as_ref().map(|r| r.input.clone());
+        let mut tabs_container = div()
+            .id("tab-strip-container")
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .items_end()
+            // Container-level drop fallback — catches drops in the gaps
+            // between tabs. The trailing after-last-tab slot is handled
+            // by a dedicated element with real bounds below.
+            .on_drag_move::<DraggedTab>(cx.listener(
+                move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                    if point_in_bounds(&event.event.position, &event.bounds)
+                        && this.tab_strip_drop_slot == Some(tab_count)
+                    {
+                        this.tab_strip_drop_slot = None;
+                        cx.notify();
+                    }
+                },
+            ))
+            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                let to = this.tab_strip_drop_slot.unwrap_or(tab_count);
+                this.tab_strip_drop_slot = None;
+                this.reorder_tab_by_id(dragged.session_id, to, cx);
+                cx.notify();
+            }));
 
         if show_horizontal_tabs {
             for (index, tab) in self.tabs.iter().enumerate() {
                 let is_active = index == self.active_tab;
                 let needs_attention = tab.needs_attention && !is_active;
                 let terminal = tab.pane_tree.focused_terminal();
-                let title = terminal.title(cx).unwrap_or_else(|| tab.title.clone());
+                let session_id = tab.summary_id;
+                let hostname_for_tab = self.effective_remote_host_for_tab(index, terminal, cx);
+                let title_for_tab = terminal.title(cx);
+                let dir_for_tab = terminal.current_dir(cx);
+                let presentation = smart_tab_presentation(
+                    tab.user_label.as_deref(),
+                    tab.ai_label.as_deref(),
+                    tab.ai_icon.map(|k| k.svg_path()),
+                    hostname_for_tab.as_deref(),
+                    title_for_tab.as_deref(),
+                    dir_for_tab.as_deref(),
+                    index,
+                );
+                let tab_icon = presentation.icon;
 
-                let display_title: String = if title.chars().count() > 24 {
-                    format!("{}…", &title[..title.floor_char_boundary(22)])
+                let display_title: String = if presentation.name.chars().count() > 24 {
+                    format!(
+                        "{}…",
+                        &presentation.name[..presentation.name.floor_char_boundary(22)]
+                    )
                 } else {
-                    title
+                    presentation.name
                 };
 
                 let close_id = ElementId::Name(format!("tab-close-{}", index).into());
@@ -10297,9 +10648,26 @@ impl Render for ConWorkspace {
                             .text_color(theme.muted_foreground.opacity(0.5)),
                     );
 
+                // Drop indicator: 2px vertical line on the left edge of
+                // this tab when drop_slot == index, or on the right edge
+                // of the last tab when drop_slot == tab_count.
+                let show_indicator_left =
+                    tab_strip_drop_slot == Some(index) && cx.has_active_drag();
+                let show_indicator_right = index + 1 == tab_count
+                    && tab_strip_drop_slot == Some(tab_count)
+                    && cx.has_active_drag();
+                let indicator_color = theme.primary;
+
+                let dragged = DraggedTab {
+                    session_id,
+                    label: display_title.clone().into(),
+                    icon: tab_icon,
+                };
+
                 let mut tab_el = div()
                     .id(ElementId::Name(format!("tab-{}", index).into()))
                     .group("tab")
+                    .relative()
                     .flex()
                     .flex_1()
                     .min_w_0()
@@ -10316,15 +10684,61 @@ impl Render for ConWorkspace {
                     // activates. Same treatment as the `+`, caption
                     // buttons, and tab-close controls in this file.
                     .occlude()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.activate_tab(index, window, cx);
-                    }))
+                    // Left mouse-down: stop propagation so the event
+                    // doesn't bubble to top_bar's start_window_move()
+                    // on macOS (which steals mouseDragged events and
+                    // prevents on_drag from firing). pending_mouse_down
+                    // is registered after mouse_down_listeners in GPUI
+                    // and runs first in bubble phase (rev order), so
+                    // on_click / on_drag still work correctly.
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |_this, _, _, cx| {
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_click(
+                        cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                            if event.click_count() == 2 {
+                                this.begin_tab_rename(index, window, cx);
+                            } else {
+                                this.activate_tab(index, window, cx);
+                            }
+                        }),
+                    )
                     .on_mouse_down(
                         MouseButton::Middle,
                         cx.listener(move |this, _, window, cx| {
                             this.close_tab_by_index(index, window, cx);
                         }),
-                    );
+                    )
+                    .on_drag(
+                        dragged,
+                        |dragged: &DraggedTab, _offset, _window, cx: &mut App| {
+                            cx.new(|_| dragged.clone())
+                        },
+                    )
+                    .on_drag_move::<DraggedTab>(cx.listener(
+                        move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                            let Some(slot) = horizontal_tab_slot_from_position(
+                                event.event.position,
+                                event.bounds,
+                                index,
+                            ) else {
+                                return;
+                            };
+                            if this.tab_strip_drop_slot != Some(slot) {
+                                this.tab_strip_drop_slot = Some(slot);
+                                cx.notify();
+                            }
+                        },
+                    ))
+                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                        let to = this.tab_strip_drop_slot.unwrap_or(index);
+                        this.tab_strip_drop_slot = None;
+                        this.reorder_tab_by_id(dragged.session_id, to, cx);
+                        cx.notify();
+                    }));
 
                 if is_active {
                     tab_el = tab_el
@@ -10337,10 +10751,37 @@ impl Render for ConWorkspace {
                         .rounded_t(px(6.0))
                         .bg(theme.background.opacity(0.14))
                         .text_color(theme.muted_foreground.opacity(0.72))
-                        .hover(|s| {
+                        .hover(|s: gpui::StyleRefinement| {
                             s.bg(theme.background.opacity(0.20))
                                 .text_color(theme.foreground.opacity(0.82))
                         });
+                }
+
+                // Left drop indicator line
+                if show_indicator_left {
+                    tab_el = tab_el.child(
+                        div()
+                            .absolute()
+                            .top(px(4.0))
+                            .bottom(px(4.0))
+                            .left(px(-1.0))
+                            .w(px(2.0))
+                            .rounded(px(1.0))
+                            .bg(indicator_color),
+                    );
+                }
+                // Right drop indicator line (after last tab)
+                if show_indicator_right {
+                    tab_el = tab_el.child(
+                        div()
+                            .absolute()
+                            .top(px(4.0))
+                            .bottom(px(4.0))
+                            .right(px(-1.0))
+                            .w(px(2.0))
+                            .rounded(px(1.0))
+                            .bg(indicator_color),
+                    );
                 }
 
                 let mut tab_content = div().flex().items_center().gap(px(5.0)).w_full().min_w_0();
@@ -10377,7 +10818,62 @@ impl Render for ConWorkspace {
                 );
 
                 tab_content = tab_content.child(close_button);
+
+                // When this tab is being renamed, replace the title text
+                // with an inline Input. Escape cancels; Enter confirms
+                // (handled in begin_tab_rename's subscribe_in).
+                let is_renaming = renaming_tab_index == Some(index);
+                if is_renaming {
+                    if let Some(input) = rename_input.clone() {
+                        tab_content = div()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.0))
+                            .w_full()
+                            .min_w_0()
+                            .on_action(cx.listener(|this, _: &InputEscape, _, cx| {
+                                if let Some(editor) = this.tab_rename.as_ref() {
+                                    this.tab_rename_cancelled_generation = Some(editor.generation);
+                                }
+                                this.tab_rename = None;
+                                cx.notify();
+                            }))
+                            .child(Input::new(&input).small().appearance(false));
+                    }
+                }
+
                 tabs_container = tabs_container.child(tab_el.child(tab_content));
+
+                if index + 1 == tab_count {
+                    tabs_container = tabs_container.child(
+                        div()
+                            .id(ElementId::Name(format!("tab-trailing-drop-{index}").into()))
+                            .w(px(12.0))
+                            .h_full()
+                            .flex_shrink_0()
+                            .on_drag_move::<DraggedTab>(cx.listener(
+                                move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                                    let Some(slot) = trailing_drop_slot_from_position(
+                                        event.event.position,
+                                        event.bounds,
+                                        tab_count,
+                                    ) else {
+                                        return;
+                                    };
+                                    if this.tab_strip_drop_slot != Some(slot) {
+                                        this.tab_strip_drop_slot = Some(slot);
+                                        cx.notify();
+                                    }
+                                },
+                            ))
+                            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                                let to = this.tab_strip_drop_slot.unwrap_or(tab_count);
+                                this.tab_strip_drop_slot = None;
+                                this.reorder_tab_by_id(dragged.session_id, to, cx);
+                                cx.notify();
+                            })),
+                    );
+                }
             }
         }
 
@@ -10429,6 +10925,9 @@ impl Render for ConWorkspace {
                         cx,
                     )
                 })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.new_tab(&NewTab, window, cx);
                 }))
@@ -10464,6 +10963,9 @@ impl Render for ConWorkspace {
                         window,
                         cx,
                     )
+                })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
                 })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_vertical_tabs(&ToggleVerticalTabs, window, cx);
@@ -10505,6 +11007,9 @@ impl Render for ConWorkspace {
                         cx,
                     )
                 })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_input_bar(&crate::ToggleInputBar, window, cx);
                 }))
@@ -10544,6 +11049,9 @@ impl Render for ConWorkspace {
                         window,
                         cx,
                     )
+                })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
                 })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_agent_panel(&ToggleAgentPanel, window, cx);
@@ -10588,6 +11096,9 @@ impl Render for ConWorkspace {
                             window,
                             cx,
                         )
+                    })
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                        cx.stop_propagation();
                     })
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_settings(&settings_panel::ToggleSettings, window, cx);
@@ -11725,6 +12236,31 @@ fn smart_tab_presentation(
     }
 }
 
+fn tab_rename_initial_label(
+    user_label: Option<&str>,
+    ai_label: Option<&str>,
+    ai_icon: Option<&'static str>,
+    hostname: Option<&str>,
+    title: Option<&str>,
+    current_dir: Option<&str>,
+    tab_index: usize,
+) -> String {
+    if let Some(label) = user_label.filter(|label| !label.trim().is_empty()) {
+        label.to_string()
+    } else {
+        smart_tab_presentation(
+            user_label,
+            ai_label,
+            ai_icon,
+            hostname,
+            title,
+            current_dir,
+            tab_index,
+        )
+        .name
+    }
+}
+
 fn cwd_subtitle(current_dir: Option<&str>) -> Option<String> {
     let dir = current_dir?;
     let home = std::env::var("HOME").ok();
@@ -11828,6 +12364,82 @@ fn longest_common_prefix<'a>(values: impl IntoIterator<Item = &'a str>) -> Strin
     prefix
 }
 
+fn point_in_bounds(p: &gpui::Point<gpui::Pixels>, b: &gpui::Bounds<gpui::Pixels>) -> bool {
+    p.x >= b.origin.x
+        && p.x < b.origin.x + b.size.width
+        && p.y >= b.origin.y
+        && p.y < b.origin.y + b.size.height
+}
+
+fn horizontal_tab_slot_from_position(
+    cursor: gpui::Point<gpui::Pixels>,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    index: usize,
+) -> Option<usize> {
+    if !point_in_bounds(&cursor, &bounds) {
+        return None;
+    }
+    let local_x = cursor.x - bounds.origin.x;
+    let half = bounds.size.width / 2.0;
+    Some(if local_x < half { index } else { index + 1 })
+}
+
+fn trailing_drop_slot_from_position(
+    cursor: gpui::Point<gpui::Pixels>,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    slot: usize,
+) -> Option<usize> {
+    point_in_bounds(&cursor, &bounds).then_some(slot)
+}
+
+fn tab_rename_commit_label(value: &str, changed_by_user: bool) -> Option<Option<String>> {
+    changed_by_user.then(|| normalize_tab_user_label(value))
+}
+
+fn normalize_tab_user_label(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+#[cfg(test)]
+fn remap_tab_rename_state_after_close(
+    rename: Option<TabRenameStateSnapshot>,
+    cancelled_id: Option<u64>,
+    closed_index: usize,
+) -> (Option<TabRenameStateSnapshot>, Option<u64>) {
+    let rename = rename.and_then(|state| match state.tab_index.cmp(&closed_index) {
+        std::cmp::Ordering::Less => Some(state),
+        std::cmp::Ordering::Equal => None,
+        std::cmp::Ordering::Greater => Some(TabRenameStateSnapshot {
+            tab_id: state.tab_id,
+            tab_index: state.tab_index - 1,
+        }),
+    });
+    (rename, cancelled_id)
+}
+
+#[cfg(test)]
+fn remap_tab_rename_state_after_reorder(
+    rename: Option<TabRenameStateSnapshot>,
+    cancelled_id: Option<u64>,
+    old_order: &[u64],
+    new_order: &[u64],
+) -> (Option<TabRenameStateSnapshot>, Option<u64>) {
+    let rename = rename.and_then(|state| {
+        let summary_id = *old_order.get(state.tab_index)?;
+        let tab_index = new_order.iter().position(|id| *id == summary_id)?;
+        Some(TabRenameStateSnapshot {
+            tab_id: state.tab_id,
+            tab_index,
+        })
+    });
+    (rename, cancelled_id)
+}
+
 #[cfg(test)]
 struct NewTabSyncPolicy {
     activates_new_tab: bool,
@@ -11839,7 +12451,272 @@ struct NewTabSyncPolicy {
 
 #[cfg(test)]
 mod tests {
-    use super::ConWorkspace;
+    use super::{
+        ConWorkspace, TabRenameStateSnapshot, horizontal_tab_slot_from_position,
+        normalize_tab_user_label, remap_tab_rename_state_after_close,
+        remap_tab_rename_state_after_reorder, tab_rename_commit_label, tab_rename_initial_label,
+        trailing_drop_slot_from_position,
+    };
+    use gpui::{Bounds, Point, Size, px};
+
+    #[test]
+    fn normalize_tab_user_label_trims_and_clears_blank_values() {
+        assert_eq!(normalize_tab_user_label(""), None);
+        assert_eq!(normalize_tab_user_label("   \t  \n"), None);
+        assert_eq!(
+            normalize_tab_user_label("  hello  "),
+            Some("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn tab_rename_commit_label_only_persists_user_edits() {
+        assert_eq!(tab_rename_commit_label("Deploy", false), None);
+        assert_eq!(
+            tab_rename_commit_label("  Deploy  ", true),
+            Some(Some("Deploy".to_string()))
+        );
+        assert_eq!(tab_rename_commit_label("   ", true), Some(None));
+    }
+
+    #[test]
+    fn remap_tab_rename_state_after_close_drops_closed_tab_and_preserves_cancelled_id() {
+        assert_eq!(
+            remap_tab_rename_state_after_close(
+                Some(TabRenameStateSnapshot {
+                    tab_id: 30,
+                    tab_index: 2,
+                }),
+                Some(40),
+                2,
+            ),
+            (None, Some(40))
+        );
+        assert_eq!(
+            remap_tab_rename_state_after_close(
+                Some(TabRenameStateSnapshot {
+                    tab_id: 50,
+                    tab_index: 4,
+                }),
+                Some(50),
+                1,
+            ),
+            (
+                Some(TabRenameStateSnapshot {
+                    tab_id: 50,
+                    tab_index: 3,
+                }),
+                Some(50)
+            )
+        );
+    }
+
+    #[test]
+    fn remap_tab_rename_state_after_reorder_tracks_tab_identity() {
+        let old_order = vec![10_u64, 20, 30, 40];
+        let new_order = vec![30_u64, 10, 20, 40];
+        assert_eq!(
+            remap_tab_rename_state_after_reorder(
+                Some(TabRenameStateSnapshot {
+                    tab_id: 30,
+                    tab_index: 2,
+                }),
+                Some(30),
+                &old_order,
+                &new_order,
+            ),
+            (
+                Some(TabRenameStateSnapshot {
+                    tab_id: 30,
+                    tab_index: 0,
+                }),
+                Some(30)
+            )
+        );
+    }
+
+    #[test]
+    fn tab_rename_initial_label_prefers_rendered_presentation_over_raw_title() {
+        assert_eq!(
+            tab_rename_initial_label(
+                None,
+                None,
+                None,
+                Some("prod-1.example.com"),
+                Some("ssh prod-1.example.com"),
+                Some("/Users/sundy/src/con-terminal"),
+                0,
+            ),
+            "prod-1.example.com"
+        );
+
+        assert_eq!(
+            tab_rename_initial_label(
+                None,
+                Some("Deploy"),
+                Some("phosphor/rocket.svg"),
+                None,
+                Some("zsh"),
+                Some("/Users/sundy/src/con-terminal"),
+                0,
+            ),
+            "Deploy"
+        );
+    }
+
+    #[test]
+    fn trailing_drop_slot_uses_real_bounds() {
+        let bounds = Bounds {
+            origin: Point {
+                x: px(340.0),
+                y: px(20.0),
+            },
+            size: Size {
+                width: px(88.0),
+                height: px(30.0),
+            },
+        };
+
+        assert_eq!(
+            trailing_drop_slot_from_position(
+                Point {
+                    x: px(400.0),
+                    y: px(25.0)
+                },
+                bounds,
+                5,
+            ),
+            Some(5)
+        );
+        assert_eq!(
+            trailing_drop_slot_from_position(
+                Point {
+                    x: px(429.0),
+                    y: px(25.0)
+                },
+                bounds,
+                5,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn horizontal_tab_slot_ignores_cursor_outside_bounds() {
+        let bounds = Bounds {
+            origin: Point {
+                x: px(100.0),
+                y: px(20.0),
+            },
+            size: Size {
+                width: px(80.0),
+                height: px(30.0),
+            },
+        };
+        assert_eq!(
+            horizontal_tab_slot_from_position(
+                Point {
+                    x: px(90.0),
+                    y: px(25.0)
+                },
+                bounds,
+                3
+            ),
+            None
+        );
+        assert_eq!(
+            horizontal_tab_slot_from_position(
+                Point {
+                    x: px(181.0),
+                    y: px(25.0)
+                },
+                bounds,
+                3
+            ),
+            None
+        );
+        assert_eq!(
+            horizontal_tab_slot_from_position(
+                Point {
+                    x: px(120.0),
+                    y: px(10.0)
+                },
+                bounds,
+                3
+            ),
+            None
+        );
+        assert_eq!(
+            horizontal_tab_slot_from_position(
+                Point {
+                    x: px(120.0),
+                    y: px(51.0)
+                },
+                bounds,
+                3
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn horizontal_tab_slot_uses_left_and_right_halves() {
+        let bounds = Bounds {
+            origin: Point {
+                x: px(100.0),
+                y: px(20.0),
+            },
+            size: Size {
+                width: px(80.0),
+                height: px(30.0),
+            },
+        };
+        assert_eq!(
+            horizontal_tab_slot_from_position(
+                Point {
+                    x: px(110.0),
+                    y: px(25.0)
+                },
+                bounds,
+                3
+            ),
+            Some(3)
+        );
+        assert_eq!(
+            horizontal_tab_slot_from_position(
+                Point {
+                    x: px(150.0),
+                    y: px(25.0)
+                },
+                bounds,
+                3
+            ),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn top_bar_clickables_explicitly_consume_left_mouse_down() {
+        let source = include_str!("workspace.rs");
+        for control_id in [
+            "tab-new",
+            "toggle-vertical-tabs",
+            "toggle-input-bar",
+            "toggle-agent-panel",
+            "toggle-settings",
+        ] {
+            let marker = format!(".id(\"{control_id}\")");
+            let start = source
+                .find(&marker)
+                .unwrap_or_else(|| panic!("missing top bar control {control_id}"));
+            let snippet = &source[start..source.len().min(start + 1200)];
+            assert!(
+                snippet.contains(".on_mouse_down(MouseButton::Left, |_, _, cx| {")
+                    && snippet.contains("cx.stop_propagation();"),
+                "top bar control {control_id} must consume left mouse-down before parent drag"
+            );
+        }
+    }
 
     #[test]
     fn surface_key_bytes_preserves_literal_character_case() {

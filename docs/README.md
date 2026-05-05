@@ -1,54 +1,61 @@
-# Documentation
+# con docs
 
-This is the map for Con's docs. Start with the user guides unless you are
-building or changing Con itself.
+con is a terminal first. If you hide the input bar and agent panel, it should
+feel like a fast, elegant terminal with nothing extra in the way.
 
-The source of truth for the public docs navigation is
-[`docs/manifest.json`](manifest.json). When you add, rename, or remove a page,
-update that manifest in the same PR. CI validates the manifest, and changes
-merged to `main` trigger a rebuild of `con.nowledge.co/docs`.
+When you ask for AI, con uses the terminal objects you already work with:
+panes, SSH sessions, tmux panes, TUIs, visible output, and working directories.
+When a one-off routine becomes worth repeating, skills let you keep it as a
+slash command. When you build on top of con, `con-cli` and surfaces give
+external agents a real terminal to drive.
 
-## User Guides
+Start with the page that matches what you are trying to do.
 
-| Need | Read |
-| --- | --- |
-| See what Con looks like | [Screenshot gallery](screenshots.md) |
-| Save and reuse a project layout | [Workspace layout profiles](workspace-layout-profiles-guide.md) |
-| See what changed in the latest beta | [Release notes](../CHANGELOG.md) |
-| Install Con | [Install section in README](../README.md#install) |
-| Learn the main shortcuts | [Quick controls in README](../README.md#2-min-know-how) |
-
-## Product And Design
+## Start
 
 | Need | Read |
 | --- | --- |
-| Understand the product direction | [Architecture and vision](../DESIGN.md) |
-| Understand the UI principles | [Design language](design/con-design-language.md) |
-| Understand the UX model | [Product and flow spec](design/con-ux-product-spec.md) |
-| Understand visual system details | [Visual spec](design/con-ui-visual-spec.md) |
+| Install con | [Install](install.md) |
+| Learn the main controls | [Quick controls](quick-controls.md) |
+| Work with tabs, panes, broadcast, links, and pane zoom | [Terminal workflows](terminal-workflows.md) |
+| Connect providers, tune appearance, and edit shortcuts | [Settings](settings.md) |
 
-## Developer Docs
+## Use con every day
 
 | Need | Read |
 | --- | --- |
-| Build, run, and test locally | [Contributor quickstart](../HACKING.md) |
-| Understand the agent harness | [Agent harness](impl/agent-harness.md) |
-| Use the local control API | [Socket API](impl/socket-api.md) |
-| Validate the CLI/control plane | [con-cli E2E](impl/con-cli-e2e.md) |
-| Understand pane-local surfaces | [Pane surfaces](impl/pane-surfaces.md) |
-| Understand restorable workspaces internals | [Restorable workspaces](impl/restorable-workspaces.md) |
-| Understand terminal rendering | [Terminal rendering](impl/terminal-rendering.md) |
-| Package macOS releases | [macOS release flow](impl/macos-release.md) |
-| Track Windows port status | [Windows port](impl/windows-port.md) |
-| Track Linux port status | [Linux port](impl/linux-port.md) |
+| Use the agent panel without leaving the terminal | [Built-in agent](agent.md) |
+| Turn a repeated terminal routine into a slash command | [Skills and workflows](skills-and-workflows.md) |
+| Save or share a project layout | [Workspace profiles](workspace-layout-profiles-guide.md) |
+| See the app | [Screenshots](screenshots.md) |
+| See what changed | [Changelog](../CHANGELOG.md) |
 
-## Research Notes
+## Build on con
 
-These are internal study notes. They are useful when changing architecture, but
-most users should not need them.
+| Need | Read |
+| --- | --- |
+| Drive con from scripts, test runners, or external agents | [con-cli and surfaces](con-cli.md) |
 
-- [GPUI](study/gpui.md)
-- [Ghostty VT](study/ghostty-vt.md)
-- [Rig](study/rig.md)
-- [Socket control patterns](study/socket-control-patterns.md)
-- [Markdown renderer architecture](study/markdown-renderer-architecture.md)
+## Platform status
+
+- macOS is the primary beta platform.
+- Windows is in preview.
+- Linux is in preview.
+
+Platform-specific limits are tracked in the source repository:
+[Windows](https://github.com/nowledge-co/con-terminal/issues/34) and
+[Linux](https://github.com/nowledge-co/con-terminal/issues/18).
+
+## Contributor docs
+
+These public docs are for people using con. If you want to build or change con
+itself, start with the contributor quickstart in the source repository. The
+implementation notes in `docs/impl/` and `docs/study/` are written for
+contributors, not for the hosted docs navigation.
+
+## Source of truth
+
+The public docs navigation comes from [`docs/manifest.json`](manifest.json).
+When a PR adds, renames, or removes a public docs page, update the manifest in
+that PR. CI checks the manifest, and merges to `main` rebuild
+`con.nowledge.co/docs`.

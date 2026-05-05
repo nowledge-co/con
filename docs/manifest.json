@@ -3,79 +3,33 @@
   "repository": "nowledge-co/con-terminal",
   "defaultRef": "main",
   "extra": [
+    { "label": "Changelog", "path": "CHANGELOG.md", "route": "/changelog/" },
     { "label": "License", "path": "LICENSE", "route": "/docs/license/" }
   ],
   "groups": [
     {
       "label": "Start",
       "items": [
-        { "label": "Overview", "path": "README.md", "route": "/docs/" },
-        { "label": "Install", "path": "README.md", "hash": "install" },
-        { "label": "Quick controls", "path": "README.md", "hash": "2-min-know-how" },
-        { "label": "Docs index", "path": "docs/README.md", "route": "/docs/index/" },
-        { "label": "Changelog", "path": "CHANGELOG.md", "route": "/changelog/" }
+        { "label": "Welcome", "path": "docs/README.md", "route": "/docs/" },
+        { "label": "Install", "path": "docs/install.md" },
+        { "label": "Quick controls", "path": "docs/quick-controls.md" },
+        { "label": "Built-in agent", "path": "docs/agent.md" },
+        { "label": "Settings", "path": "docs/settings.md" }
       ]
     },
     {
-      "label": "User guides",
+      "label": "Use con",
       "items": [
-        { "label": "Screenshot gallery", "path": "docs/screenshots.md" },
+        { "label": "Terminal workflows", "path": "docs/terminal-workflows.md" },
+        { "label": "Skills and workflows", "path": "docs/skills-and-workflows.md" },
         { "label": "Workspace profiles", "path": "docs/workspace-layout-profiles-guide.md" },
-        { "label": "Contributor setup", "path": "HACKING.md", "route": "/docs/hacking/" },
-        { "label": "Architecture", "path": "DESIGN.md", "route": "/docs/design/" }
+        { "label": "Screenshots", "path": "docs/screenshots.md" }
       ]
     },
     {
-      "label": "Product design",
+      "label": "Build on con",
       "items": [
-        { "label": "Design language", "path": "docs/design/con-design-language.md" },
-        { "label": "Product spec", "path": "docs/design/con-ux-product-spec.md" },
-        { "label": "Visual spec", "path": "docs/design/con-ui-visual-spec.md" },
-        { "label": "Prototype addendum", "path": "docs/design/con-prototype-addendum.md" }
-      ]
-    },
-    {
-      "label": "Implementation",
-      "items": [
-        { "label": "Agent harness", "path": "docs/impl/agent-harness.md" },
-        { "label": "Agent runtime control plane", "path": "docs/impl/agent-runtime-control-plane.md" },
-        { "label": "Socket API", "path": "docs/impl/socket-api.md" },
-        { "label": "CLI E2E", "path": "docs/impl/con-cli-e2e.md" },
-        { "label": "Pane surfaces", "path": "docs/impl/pane-surfaces.md" },
-        { "label": "Pane runtime observer", "path": "docs/impl/pane-runtime-observer.md" },
-        { "label": "Agent tool surface", "path": "docs/impl/agent-tool-surface.md" },
-        { "label": "Restorable workspaces", "path": "docs/impl/restorable-workspaces.md" },
-        { "label": "Terminal rendering", "path": "docs/impl/terminal-rendering.md" },
-        { "label": "Vertical tabs", "path": "docs/impl/vertical-tabs.md" },
-        { "label": "Build system", "path": "docs/impl/build-system.md" },
-        { "label": "macOS release", "path": "docs/impl/macos-release.md" },
-        { "label": "macOS terminal profiling", "path": "docs/impl/macos-terminal-profiling.md" },
-        { "label": "Windows port", "path": "docs/impl/windows-port.md" },
-        { "label": "Linux port", "path": "docs/impl/linux-port.md" }
-      ]
-    },
-    {
-      "label": "Agent benchmark",
-      "items": [
-        { "label": "Terminal agent benchmark", "path": "docs/impl/terminal-agent-benchmark.md" },
-        { "label": "Improvement loop", "path": "docs/impl/terminal-agent-improvement-loop.md" },
-        { "label": "Improvement log", "path": "docs/impl/terminal-agent-improvement-log.md" }
-      ]
-    },
-    {
-      "label": "Research",
-      "items": [
-        { "label": "GPUI", "path": "docs/study/gpui.md" },
-        { "label": "GPUI Linux interop gap", "path": "docs/study/gpui-linux-interop-gap.md" },
-        { "label": "GPUI external swapchain PR", "path": "docs/study/gpui-external-swapchain-upstream-pr.md" },
-        { "label": "Ghostty VT", "path": "docs/study/ghostty-vt.md" },
-        { "label": "Ghostty Linux embed gap", "path": "docs/study/ghostty-linux-embed-gap.md" },
-        { "label": "Rig", "path": "docs/study/rig.md" },
-        { "label": "Terminal control plane", "path": "docs/study/terminal-control-plane.md" },
-        { "label": "Socket patterns", "path": "docs/study/socket-control-patterns.md" },
-        { "label": "Markdown renderer", "path": "docs/study/markdown-renderer-architecture.md" },
-        { "label": "Linux port feasibility", "path": "docs/study/linux-port-feasibility.md" },
-        { "label": "Windows app reference", "path": "docs/study/pr-12167-windows-apprt-reference.md" }
+        { "label": "con-cli and surfaces", "path": "docs/con-cli.md" }
       ]
     }
   ]

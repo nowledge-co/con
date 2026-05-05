@@ -120,7 +120,7 @@ Following the Nowledge Graph Design System's **borderless, colorless** philosoph
 
 ### Theme Switching
 
-- Should be instant and seamless
+- Should switch instantly, without visible UI churn
 - All semantic tokens must work in both themes
 - Contrast ratios must meet accessibility in both modes
 

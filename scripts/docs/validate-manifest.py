@@ -83,8 +83,8 @@ def main() -> int:
             seen_routes[route] = repo_path
             seen_pages.add(repo_path)
 
-    if "README.md" not in seen_pages:
-        errors.append("README.md must be included as a renderable page")
+    if "docs/README.md" not in seen_pages:
+        errors.append("docs/README.md must be included as the public docs index")
     if "CHANGELOG.md" not in seen_pages:
         errors.append("CHANGELOG.md must be included as a renderable page")
 

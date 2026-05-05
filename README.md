@@ -28,9 +28,9 @@ If you're an old-school terminal user and only want enough AI harness when neede
 
 ## What it does
 
-- a terminal that's fast, elegant
+- a terminal that is fast and elegant
 - a built-in AI harness that can read context, ask before acting, and work directly in the terminal you can already see
-- terminal-native workflows for `ssh`, `tmux`, and coding-agent CLIs
+- terminal-native workflows for CLI work, with `ssh`, `tmux`, and coding-agent-aware orchestration
 
 ## Status
 
@@ -129,17 +129,22 @@ To build from source, see `HACKING.md`.
 
 Start here:
 
-- [Install](#install) — get Con on macOS, Windows, or Linux.
-- [Quick controls](#2-min-know-how) — focus switching, agent panel, and command modes.
-- [Screenshot gallery](docs/screenshots.md) — a visual tour of the app.
-- [Workspace layout profiles](docs/workspace-layout-profiles-guide.md) — save a project layout, reopen it later, or share it with a team.
-- [Release notes](CHANGELOG.md) — what changed in each beta.
+- [Install](docs/install.md): get con on macOS, Windows, or Linux.
+- [Quick controls](docs/quick-controls.md): focus switching, agent panel, and command modes.
+- [Terminal workflows](docs/terminal-workflows.md): tabs, panes, broadcast, pane zoom, links, and surfaces.
+- [Built-in agent](docs/agent.md): use AI help without leaving the terminal.
+- [Settings](docs/settings.md): choose providers, themes, suggestions, skills, and shortcuts.
+- [Skills and workflows](docs/skills-and-workflows.md): turn repeated terminal routines into project or personal slash commands.
+- [Workspace layout profiles](docs/workspace-layout-profiles-guide.md): save a project layout, reopen it later, or share it with a team.
+- [con-cli and surfaces](docs/con-cli.md): build scripts, test runners, and external agent orchestrators on top of con.
+- [Screenshot gallery](docs/screenshots.md): a visual tour of the app.
+- [Release notes](CHANGELOG.md): what changed in each beta.
 
-More docs:
+For contributors:
 
-- [Documentation index](docs/README.md) — user guides, design notes, implementation docs, and research.
-- [Contributor quickstart](HACKING.md) — build, test, and release from source.
-- [Architecture](DESIGN.md) — product direction and system design.
+- [Contributor quickstart](HACKING.md): build, test, and release from source.
+- [Architecture](DESIGN.md): product direction and system design.
+- `docs/impl/` and `docs/study/`: implementation records and research notes.
 
 ## License
 
