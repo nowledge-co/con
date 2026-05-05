@@ -10900,6 +10900,9 @@ impl Render for ConWorkspace {
                         cx,
                     )
                 })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.new_tab(&NewTab, window, cx);
                 }))
@@ -10935,6 +10938,9 @@ impl Render for ConWorkspace {
                         window,
                         cx,
                     )
+                })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
                 })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_vertical_tabs(&ToggleVerticalTabs, window, cx);
@@ -10976,6 +10982,9 @@ impl Render for ConWorkspace {
                         cx,
                     )
                 })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_input_bar(&crate::ToggleInputBar, window, cx);
                 }))
@@ -11015,6 +11024,9 @@ impl Render for ConWorkspace {
                         window,
                         cx,
                     )
+                })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
                 })
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_agent_panel(&ToggleAgentPanel, window, cx);
@@ -11059,6 +11071,9 @@ impl Render for ConWorkspace {
                             window,
                             cx,
                         )
+                    })
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                        cx.stop_propagation();
                     })
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_settings(&settings_panel::ToggleSettings, window, cx);
@@ -12630,6 +12645,29 @@ mod tests {
             ),
             Some(4)
         );
+    }
+
+    #[test]
+    fn top_bar_clickables_explicitly_consume_left_mouse_down() {
+        let source = include_str!("workspace.rs");
+        for control_id in [
+            "tab-new",
+            "toggle-vertical-tabs",
+            "toggle-input-bar",
+            "toggle-agent-panel",
+            "toggle-settings",
+        ] {
+            let marker = format!(".id(\"{control_id}\")");
+            let start = source
+                .find(&marker)
+                .unwrap_or_else(|| panic!("missing top bar control {control_id}"));
+            let snippet = &source[start..source.len().min(start + 1200)];
+            assert!(
+                snippet.contains(".on_mouse_down(MouseButton::Left, |_, _, cx| {")
+                    && snippet.contains("cx.stop_propagation();"),
+                "top bar control {control_id} must consume left mouse-down before parent drag"
+            );
+        }
     }
 
     #[test]
