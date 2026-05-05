@@ -6,13 +6,18 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.63`
 
-### Fixed
+### Added
 
 **macOS**
 
 - Added **Quick Terminal** to the command palette on macOS, matching the View
   menu entry so it can be opened while Con is frontmost even when the global
   hotkey is disabled.
+
+### Fixed
+
+**macOS**
+
 - Fixed pane-local surface geometry drift that could make TUI output appear
   clipped after switching between surfaces or changing pane layouts. Activating
   a surface now revalidates Ghostty's embedded terminal size against the
