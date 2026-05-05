@@ -28,6 +28,13 @@ fn capture_return_pid() -> Option<i32> {
     remember_return_pid(current_pid, Some(frontmost_pid))
 }
 
+/// Capture the frontmost app pid synchronously from the Carbon hotkey
+/// callback, before macOS activates con as the hotkey owner. Call this
+/// from the hotkey handler thread and pass the result to `toggle_with_pid`.
+pub fn capture_frontmost_pid_before_activation() -> Option<i32> {
+    capture_return_pid()
+}
+
 fn prepare_force_hide(state: &mut QuickTerminalState) -> Option<i32> {
     state.visible = false;
     state.return_pid.take()
@@ -73,7 +80,22 @@ pub fn window_from_view_ptr(view_ptr: *mut std::ffi::c_void) -> Option<*mut std:
     (!window_ptr.is_null()).then_some(window_ptr)
 }
 
+/// Toggle called from the hotkey handler with a pid captured *before*
+/// macOS activates con as the hotkey owner. This is the preferred entry
+/// point from `global_hotkey.rs`.
+pub fn toggle_with_pid(pre_captured_pid: Option<i32>, cx: &mut App) {
+    toggle_inner(pre_captured_pid, cx);
+}
+
+/// Toggle called without a pre-captured pid (e.g. from a menu action).
+/// Captures the frontmost pid at call time — may already be con itself
+/// if called after activation, but is better than nothing.
 pub fn toggle(cx: &mut App) {
+    let pid = capture_return_pid();
+    toggle_inner(pid, cx);
+}
+
+fn toggle_inner(pre_captured_pid: Option<i32>, cx: &mut App) {
     let window_ptr = QUICK_TERMINAL_STATE.with(|state| state.borrow().raw_ptr);
 
     if let Some(window_ptr) = window_ptr {
@@ -87,7 +109,8 @@ pub fn toggle(cx: &mut App) {
                 }
                 state.visible = false;
             } else {
-                state.return_pid = capture_return_pid();
+                // Use the pre-captured pid (taken before con was activated).
+                state.return_pid = pre_captured_pid;
                 unsafe {
                     con_quick_terminal_slide_in(raw);
                 }
@@ -97,13 +120,12 @@ pub fn toggle(cx: &mut App) {
         return;
     }
 
-    let initial_return_pid = capture_return_pid();
     let should_open = QUICK_TERMINAL_STATE.with(|state| {
         let mut state = state.borrow_mut();
         if !begin_opening(&mut state) {
             return false;
         }
-        state.return_pid = initial_return_pid;
+        state.return_pid = pre_captured_pid;
         true
     });
     if !should_open {

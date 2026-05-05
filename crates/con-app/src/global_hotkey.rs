@@ -131,6 +131,12 @@ extern "C" fn on_global_hotkey_pressed() {
 }
 
 extern "C" fn on_quick_terminal_pressed() {
+    // Capture the frontmost app NOW — still inside the Carbon hotkey callback,
+    // before macOS activates con as the hotkey owner. By the time the async
+    // spawn runs, con is already frontmost and capture_return_pid() would
+    // filter it out, losing the pid we need to restore focus on hide.
+    let pre_captured_pid = crate::quick_terminal::capture_frontmost_pid_before_activation();
+
     GLOBAL_HOTKEY_APP.with(|app| {
         let Some(app) = app.borrow().clone() else {
             return;
@@ -138,7 +144,7 @@ extern "C" fn on_quick_terminal_pressed() {
 
         app.spawn(async move |cx| {
             cx.update(|cx| {
-                crate::quick_terminal::toggle(cx);
+                crate::quick_terminal::toggle_with_pid(pre_captured_pid, cx);
             });
         })
         .detach();
