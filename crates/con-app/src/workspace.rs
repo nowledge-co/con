@@ -7689,6 +7689,12 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Mark the quick terminal as not-visible immediately so the
+        // NSWindowDidResignKeyNotification observer (auto-hide on blur)
+        // does not fire a competing slide-out while we rebuild the tab.
+        #[cfg(target_os = "macos")]
+        crate::quick_terminal::mark_hidden();
+
         let index = self.active_tab;
         let closing_terminals: Vec<TerminalPane> = self.tabs[index]
             .pane_tree
@@ -7700,7 +7706,11 @@ impl ConWorkspace {
         self.tab_summary_engine.forget(_summary_id);
         self.tabs.remove(index);
 
-        let terminal = self.create_terminal(None, window, cx);
+        let terminal = self.create_terminal(
+            dirs::home_dir().as_deref().and_then(|p| p.to_str()),
+            window,
+            cx,
+        );
         let summary_id = self.next_tab_summary_id;
         self.next_tab_summary_id += 1;
         self.tabs.push(Tab {

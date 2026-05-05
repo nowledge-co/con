@@ -86,6 +86,13 @@ pub fn toggle(_cx: &mut App) {
     log::warn!("quick terminal toggle requested before singleton window was created");
 }
 
+/// Set the visible flag to false without any animation. Used at the start
+/// of reinitialize_quick_terminal_and_hide to prevent the auto-hide observer
+/// from competing with the intentional slide-out.
+pub fn mark_hidden() {
+    QUICK_TERMINAL_VISIBLE.with(|v| *v.borrow_mut() = false);
+}
+
 /// Slide the quick terminal window off-screen without toggling visible state
 /// or capturing a return pid. Used when the last tab is closed — the window
 /// reinitializes and hides but must remain alive for the next toggle.
