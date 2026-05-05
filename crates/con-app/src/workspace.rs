@@ -1972,9 +1972,12 @@ impl ConWorkspace {
                             .focused_terminal()
                             .clone();
                         terminal.ensure_surface(window, cx);
+                        #[cfg(target_os = "macos")]
                         workspace.sync_active_tab_native_view_visibility_now_or_after_layout(
                             was_zoomed, window, cx,
                         );
+                        #[cfg(not(target_os = "macos"))]
+                        workspace.sync_active_tab_native_view_visibility(cx);
                         terminal.focus(window, cx);
                         workspace.sync_active_terminal_focus_states(cx);
                         cx.notify();
