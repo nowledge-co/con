@@ -149,15 +149,15 @@ bool con_quick_terminal_activate_app(int32_t pid) {
         return false;
     }
 
-    if (@available(macOS 14.0, *)) {
-        [NSApp yieldActivationToApplication:app];
-        return true;
-    } else {
+    // Explicitly activate the target app. `yieldActivationToApplication:` is
+    // weaker here: when the quick terminal orders out, AppKit may make con's
+    // main window key before the yielded activation wins, so focus appears to
+    // fall back to con. `activateWithOptions` matches the older behavior and
+    // reliably restores the recorded app, which may itself be con.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        return [app activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+    return [app activateWithOptions:NSApplicationActivateIgnoringOtherApps];
 #pragma clang diagnostic pop
-    }
 }
 
 void con_quick_terminal_slide_in(void *window_ptr) {
