@@ -78,6 +78,24 @@ cargo build
 cargo wbuild -p con --release          # → target\release\con-app.exe
 ```
 
+If you have `just` installed, the root `justfile` wraps the common local
+flows:
+
+```bash
+just build          # debug build for the current platform
+just run            # run from source
+just test           # platform-appropriate test set
+just check          # fast type check
+just install        # build and install to the local platform install path
+```
+
+On Windows, those default recipes dispatch through the `cargo w*` aliases
+above, so they produce and run `con-app.exe` instead of trying to build a
+reserved `con.exe` name. Platform-specific release helpers are also available,
+for example `just channel=beta macos-release`,
+`just channel=beta linux-release`, `just arch=x86_64 macos-bundle`, and
+`just windows-build-release`.
+
 ## Run
 
 ```bash
