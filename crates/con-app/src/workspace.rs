@@ -7707,7 +7707,9 @@ impl ConWorkspace {
         self.tabs.remove(index);
 
         let terminal = self.create_terminal(
-            dirs::home_dir().as_deref().and_then(|p| p.to_str()),
+            crate::quick_terminal::default_quick_terminal_cwd()
+                .as_deref()
+                .and_then(|p| p.to_str()),
             window,
             cx,
         );

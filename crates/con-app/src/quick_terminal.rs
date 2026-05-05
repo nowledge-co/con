@@ -36,7 +36,7 @@ pub fn ensure_created_for_app_run(cx: &mut App) {
     let config = con_core::Config::load().unwrap_or_default();
     crate::open_quick_terminal(
         config,
-        crate::fresh_window_session_with_history_for_cwd(crate::default_quick_terminal_cwd()),
+        crate::fresh_window_session_with_history_for_cwd(default_quick_terminal_cwd()),
         cx,
     );
 }
@@ -84,6 +84,19 @@ pub fn toggle(_cx: &mut App) {
     }
 
     log::warn!("quick terminal toggle requested before singleton window was created");
+}
+
+/// Returns the default working directory for the quick terminal.
+/// On macOS this is the user's home directory; on other platforms
+/// it defers to the process working directory.
+#[cfg(target_os = "macos")]
+pub fn default_quick_terminal_cwd() -> Option<std::path::PathBuf> {
+    dirs::home_dir()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn default_quick_terminal_cwd() -> Option<std::path::PathBuf> {
+    None
 }
 
 /// Set the visible flag to false without any animation. Used at the start

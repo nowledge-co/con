@@ -605,16 +605,6 @@ fn fresh_window_session_with_history() -> Session {
     fresh_window_session_with_history_for_cwd(None)
 }
 
-#[cfg(target_os = "macos")]
-fn default_quick_terminal_cwd() -> Option<std::path::PathBuf> {
-    dirs::home_dir()
-}
-
-#[cfg(not(target_os = "macos"))]
-fn default_quick_terminal_cwd() -> Option<std::path::PathBuf> {
-    None
-}
-
 fn fresh_window_session_with_history_for_cwd(cwd: Option<std::path::PathBuf>) -> Session {
     let persisted = Session::load().unwrap_or_default();
     let persisted_history = GlobalHistoryState::load().unwrap_or_default();
