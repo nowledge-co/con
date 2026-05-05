@@ -1718,9 +1718,9 @@ impl ConWorkspace {
             let pane_visible = zoomed_pane_id.is_none_or(|zoomed| zoomed == surface.pane_id);
             // Same-pane surface switches should keep the old surface visible
             // until the newly active one has a committed frame. Hiding it here
-            // creates a one-frame blank pane. Panes outside the focused layout
-            // cannot stay visible because their native frames would be stale.
-            if !pane_visible || surface.pane_id != focused_pane_id {
+            // creates a one-frame blank pane. Active surfaces in other visible
+            // panes should also stay visible; they are not leaving the layout.
+            if !pane_visible || (!surface.is_active && surface.pane_id != focused_pane_id) {
                 surface.terminal.set_native_view_visible(false, cx);
             }
         }
