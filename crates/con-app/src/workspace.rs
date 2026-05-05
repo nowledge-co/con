@@ -407,6 +407,11 @@ pub struct ConWorkspace {
     agent_panel_motion: MotionValue,
     agent_panel_width: f32,
     tab_strip_motion: MotionValue,
+    /// When true, the horizontal tab strip is hidden even though
+    /// `tabs_orientation` is `Horizontal` and there are multiple tabs.
+    /// Toggled by `ToggleVerticalTabs` while in horizontal mode so the
+    /// user can collapse the strip without switching to vertical tabs.
+    horizontal_tabs_collapsed: bool,
     input_bar_visible: bool,
     input_bar_motion: MotionValue,
     /// Tracks whether a modal was open on the last render, so we can
@@ -1530,6 +1535,7 @@ impl ConWorkspace {
             agent_panel_motion: MotionValue::new(if agent_panel_open { 1.0 } else { 0.0 }),
             agent_panel_width,
             tab_strip_motion: MotionValue::new(if has_multiple_tabs { 1.0 } else { 0.0 }),
+            horizontal_tabs_collapsed: false,
             input_bar_visible: session.input_bar_visible,
             input_bar_motion: MotionValue::new(if session.input_bar_visible { 1.0 } else { 0.0 }),
             modal_was_open: false,
@@ -1602,7 +1608,9 @@ impl ConWorkspace {
     }
 
     fn horizontal_tabs_visible(&self) -> bool {
-        matches!(self.tabs_orientation, TabsOrientation::Horizontal) && self.tabs.len() > 1
+        matches!(self.tabs_orientation, TabsOrientation::Horizontal)
+            && self.tabs.len() > 1
+            && !self.horizontal_tabs_collapsed
     }
 
     fn vertical_tabs_active(&self) -> bool {
@@ -5402,6 +5410,11 @@ impl ConWorkspace {
         }
         self.config.appearance.tabs_orientation = orientation;
         self.tabs_orientation = orientation;
+        // When switching away from horizontal tabs, reset the collapsed
+        // state so the strip is visible if the user switches back.
+        if matches!(orientation, TabsOrientation::Vertical) {
+            self.horizontal_tabs_collapsed = false;
+        }
         if persist_config {
             self.sync_settings_panels_tabs_orientation(orientation, cx);
         }
@@ -6970,7 +6983,16 @@ impl ConWorkspace {
             self.save_session(cx);
             cx.notify();
         } else {
-            self.apply_tabs_orientation(TabsOrientation::Vertical, true, cx);
+            // Horizontal-tabs mode: toggle the tab strip collapsed state.
+            // This lets the user hide the strip without switching to
+            // vertical tabs — the strip can be restored with another Cmd+B.
+            self.horizontal_tabs_collapsed = !self.horizontal_tabs_collapsed;
+            if self.sync_tab_strip_motion() {
+                #[cfg(target_os = "macos")]
+                self.arm_top_chrome_snap_guard(cx);
+            }
+            self.save_session(cx);
+            cx.notify();
         }
     }
 
@@ -10952,6 +10974,8 @@ impl Render for ConWorkspace {
             } else {
                 "Expand sidebar"
             }
+        } else if self.horizontal_tabs_collapsed {
+            "Show tab strip"
         } else {
             "Use vertical tabs"
         };
