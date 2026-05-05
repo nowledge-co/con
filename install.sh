@@ -248,7 +248,7 @@ pass "extracted"
 #     con-cli        (control-plane CLI)
 #     LICENSE
 #     README.md
-#     con.desktop
+#     co.nowledge.con.desktop
 #     con.png
 staged_root=""
 for d in "$extract_dir"/*; do
@@ -310,14 +310,22 @@ else
 fi
 
 # Desktop entry — handles "con shows up in the launcher" and
-# "double-clicking a `con://` URL". The tarball ships a templated
-# `con.desktop` that points at /usr/local/bin; rewrite the Exec line
-# to the resolved per-user binary path so it works regardless of
-# whether ~/.local/bin is on the user's PATH.
-if [ -f "$staged_root/con.desktop" ]; then
+# "double-clicking a `con://` URL". The desktop-file basename must match the
+# runtime Wayland app_id, and StartupWMClass must match on X11, otherwise Linux
+# desktops can show duplicate launcher icons or fail to group windows.
+linux_app_id="co.nowledge.con"
+if [ -f "$staged_root/${linux_app_id}.desktop" ]; then
+  sed "s|^Exec=.*|Exec=${target_bin} %U|" "$staged_root/${linux_app_id}.desktop" \
+    > "${apps_dir}/${linux_app_id}.desktop"
+  chmod 644 "${apps_dir}/${linux_app_id}.desktop"
+  rm -f "${apps_dir}/con.desktop"
+elif [ -f "$staged_root/con.desktop" ]; then
+  # Legacy tarballs before the reverse-DNS app_id change shipped con.desktop.
+  # Preserve compatibility when CON_INSTALL_VERSION points at an older release.
   sed "s|^Exec=.*|Exec=${target_bin} %U|" "$staged_root/con.desktop" \
     > "${apps_dir}/con.desktop"
   chmod 644 "${apps_dir}/con.desktop"
+  rm -f "${apps_dir}/${linux_app_id}.desktop"
 fi
 
 if [ -f "$staged_root/con.png" ]; then
