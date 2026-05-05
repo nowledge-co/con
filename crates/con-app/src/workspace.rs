@@ -2405,6 +2405,7 @@ impl ConWorkspace {
         if tab_is_active {
             terminal.focus(window, cx);
             self.sync_active_terminal_focus_states(cx);
+            #[cfg(not(target_os = "macos"))]
             self.sync_active_tab_native_view_visibility(cx);
         } else {
             terminal.set_focus_state(false, cx);
