@@ -1,8 +1,13 @@
 #import <AppKit/AppKit.h>
 #import <QuartzCore/QuartzCore.h>
 #include <dispatch/dispatch.h>
+#include <objc/runtime.h>
 
 static const CGFloat CON_QUICK_TERMINAL_MIN_HEIGHT = 280.0;
+
+extern void con_quick_terminal_handle_resign_key(void);
+
+static char kResignKeyObserverKey;
 
 static NSRect con_quick_terminal_frame(NSWindow *window, bool visible) {
     NSScreen *screen = window.screen ?: NSScreen.mainScreen;
@@ -30,6 +35,21 @@ static void con_quick_terminal_apply_configuration(NSWindow *window, bool always
     window.contentMinSize = NSMakeSize(320.0, CON_QUICK_TERMINAL_MIN_HEIGHT);
     [window setFrame:con_quick_terminal_frame(window, false) display:NO];
     [window orderOut:nil];
+
+    // Auto-hide when the window loses focus (user clicks elsewhere).
+    id oldObserver = objc_getAssociatedObject(window, &kResignKeyObserverKey);
+    if (oldObserver) {
+        [[NSNotificationCenter defaultCenter] removeObserver:oldObserver];
+    }
+    id observer = [[NSNotificationCenter defaultCenter]
+        addObserverForName:NSWindowDidResignKeyNotification
+                    object:window
+                     queue:nil
+                usingBlock:^(NSNotification *note) {
+                    con_quick_terminal_handle_resign_key();
+                }];
+    objc_setAssociatedObject(window, &kResignKeyObserverKey, observer,
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 void con_quick_terminal_configure(void *window_ptr, bool always_on_top) {

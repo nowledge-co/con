@@ -90,15 +90,26 @@ pub fn toggle(_cx: &mut App) {
 /// or capturing a return pid. Used when the last tab is closed — the window
 /// reinitializes and hides but must remain alive for the next toggle.
 pub fn hide() {
+    let is_visible = QUICK_TERMINAL_VISIBLE.with(|v| *v.borrow());
+    if !is_visible {
+        return;
+    }
+    QUICK_TERMINAL_VISIBLE.with(|v| *v.borrow_mut() = false);
     QUICK_TERMINAL_RAW_PTR.with(|slot| {
         let window_ptr = *slot.borrow();
         if let Some(window_ptr) = window_ptr {
             unsafe {
                 con_quick_terminal_slide_out(window_ptr as *mut std::ffi::c_void, 0);
             }
-            QUICK_TERMINAL_VISIBLE.with(|v| *v.borrow_mut() = false);
         }
     });
+}
+
+/// Called from ObjC when the quick terminal window resigns key (user clicked
+/// elsewhere). Hides the window automatically like iTerm2's hotkey window.
+#[unsafe(no_mangle)]
+extern "C" fn con_quick_terminal_handle_resign_key() {
+    hide();
 }
 
 pub fn set_always_on_top(always_on_top: bool) {
