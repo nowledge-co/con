@@ -9370,9 +9370,10 @@ impl ConWorkspace {
 
         if self.is_quick_terminal {
             self.destroy_quick_terminal_window(window, cx);
-        } else {
-            self.close_window_from_last_tab(window, cx);
+            return;
         }
+
+        self.close_window_from_last_tab(window, cx);
     }
 
     fn toggle_pane_zoom(
