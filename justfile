@@ -9,7 +9,7 @@
 # The `arch` parameter defaults to "" — each Unix recipe auto-detects via
 # `uname -m` inside the shell body. Windows recipes never reference arch so
 # `uname` is never invoked there.
-# Override explicitly when needed: just macos-bundle arch=x86_64
+# Override explicitly when needed: just arch=x86_64 macos-bundle
 
 # Use cmd.exe on Windows so recipes work in a plain Developer Command Prompt
 # without requiring Git Bash, Cygwin, or sh on PATH.
@@ -31,42 +31,49 @@ default:
     @just --list
 
 # ── universal dev commands ────────────────────────────────────────────────────
-# Note: build/run/test below use the default feature set (macOS + Linux).
-# On Windows use windows-build / windows-run / windows-test instead —
-# the Windows binary requires --no-default-features --features con/bin-con-app
-# (see .cargo/config.toml for the w* aliases that wrap this).
+# These dispatch to the right platform recipe. Windows must use the `w*` cargo
+# aliases because `CON` is a reserved DOS device name and the Windows binary is
+# feature-gated as `con-app.exe`.
 
-# Debug build — macOS / Linux
+# Debug build — current platform
 build:
-    cargo build -p con
+    {{ if os() == "windows" { "cargo wbuild -p con" } else { "cargo build -p con" } }}
 
-# Release build — macOS / Linux
+# Release build — current platform
 build-release:
-    cargo build --release -p con
+    {{ if os() == "windows" { "cargo wbuild -p con --release" } else { "cargo build --release -p con" } }}
 
-# Run from source — macOS / Linux
+# Run from source — current platform
 run:
-    cargo run -p con
+    {{ if os() == "windows" { "cargo wrun -p con" } else { "cargo run -p con" } }}
 
-# Run all workspace tests — macOS / Linux
+# Run the platform-appropriate test set
 test:
-    cargo test --workspace
+    {{ if os() == "windows" { "cargo wtest -p con-core -p con-cli -p con-agent -p con-terminal" } else { "cargo test --workspace" } }}
 
-# Check without building (all platforms)
+# Check without building — current platform
 check:
-    cargo check --workspace
+    {{ if os() == "windows" { "cargo wcheck -p con" } else { "cargo check --workspace" } }}
 
-# Run clippy on the workspace (all platforms)
+# Run clippy — current platform
 lint:
-    cargo clippy --workspace -- -D warnings
+    {{ if os() == "windows" { "cargo clippy --workspace --no-default-features --features con/bin-con-app -- -D warnings" } else { "cargo clippy --workspace -- -D warnings" } }}
 
 # Clean cargo build artifacts
 clean:
     cargo clean
 
-# Print the current workspace version
+# Build and install to the current platform's local development install path
+install:
+    just channel={{ channel }} arch={{ arch }} {{ if os() == "macos" { "macos-install" } else if os() == "linux" { "linux-install" } else if os() == "windows" { "windows-install" } else { "unsupported-platform" } }}
+
+# Print the current package id, including the workspace version
 version:
-    @grep -A3 '^\[workspace\.package\]' Cargo.toml | awk -F'"' '/^version/{print $2}'
+    @cargo pkgid -p con
+
+unsupported-platform:
+    @echo "Unsupported platform for this justfile"
+    @exit 1
 
 # ── macOS ─────────────────────────────────────────────────────────────────────
 
@@ -75,24 +82,24 @@ version:
 macos-bundle channel=channel arch=arch:
     #!/usr/bin/env bash
     set -euo pipefail
-    resolved_arch="{{arch}}"
+    resolved_arch="{{ arch }}"
     if [[ -z "${resolved_arch}" ]]; then
         resolved_arch="$(uname -m | sed 's/aarch64/arm64/')"
     fi
-    CON_CHANNEL={{channel}} CON_ARCH="${resolved_arch}" ./scripts/macos/build-app.sh
+    CON_CHANNEL={{ channel }} CON_ARCH="${resolved_arch}" ./scripts/macos/build-app.sh
 
 # [macOS] Build .app and copy to /Applications (replaces existing)
 macos-install channel=channel arch=arch: (macos-bundle channel arch)
     #!/usr/bin/env bash
     set -euo pipefail
-    resolved_arch="{{arch}}"
+    resolved_arch="{{ arch }}"
     if [[ -z "${resolved_arch}" ]]; then
         resolved_arch="$(uname -m | sed 's/aarch64/arm64/')"
     fi
     app_name="con"
-    if [[ "{{channel}}" == "beta" ]]; then app_name="con Beta"; fi
-    if [[ "{{channel}}" == "dev" ]];  then app_name="con Dev";  fi
-    src="dist/macos/{{channel}}/${resolved_arch}/${app_name}.app"
+    if [[ "{{ channel }}" == "beta" ]]; then app_name="con Beta"; fi
+    if [[ "{{ channel }}" == "dev" ]];  then app_name="con Dev";  fi
+    src="dist/macos/{{ channel }}/${resolved_arch}/${app_name}.app"
     dst="/Applications/${app_name}.app"
     echo "Installing ${src} → ${dst}"
     rm -rf "${dst}"
@@ -103,14 +110,14 @@ macos-install channel=channel arch=arch: (macos-bundle channel arch)
 macos-bundle-adhoc channel=channel arch=arch: (macos-bundle channel arch)
     #!/usr/bin/env bash
     set -euo pipefail
-    resolved_arch="{{arch}}"
+    resolved_arch="{{ arch }}"
     if [[ -z "${resolved_arch}" ]]; then
         resolved_arch="$(uname -m | sed 's/aarch64/arm64/')"
     fi
     app_name="con"
-    if [[ "{{channel}}" == "beta" ]]; then app_name="con Beta"; fi
-    if [[ "{{channel}}" == "dev" ]];  then app_name="con Dev";  fi
-    bundle="dist/macos/{{channel}}/${resolved_arch}/${app_name}.app"
+    if [[ "{{ channel }}" == "beta" ]]; then app_name="con Beta"; fi
+    if [[ "{{ channel }}" == "dev" ]];  then app_name="con Dev";  fi
+    bundle="dist/macos/{{ channel }}/${resolved_arch}/${app_name}.app"
     echo "Ad-hoc signing ${bundle}"
     codesign --force --deep --sign - "${bundle}"
     echo "Signed (ad-hoc): ${bundle}"
@@ -119,14 +126,14 @@ macos-bundle-adhoc channel=channel arch=arch: (macos-bundle channel arch)
 macos-install-adhoc channel=channel arch=arch: (macos-bundle-adhoc channel arch)
     #!/usr/bin/env bash
     set -euo pipefail
-    resolved_arch="{{arch}}"
+    resolved_arch="{{ arch }}"
     if [[ -z "${resolved_arch}" ]]; then
         resolved_arch="$(uname -m | sed 's/aarch64/arm64/')"
     fi
     app_name="con"
-    if [[ "{{channel}}" == "beta" ]]; then app_name="con Beta"; fi
-    if [[ "{{channel}}" == "dev" ]];  then app_name="con Dev";  fi
-    src="dist/macos/{{channel}}/${resolved_arch}/${app_name}.app"
+    if [[ "{{ channel }}" == "beta" ]]; then app_name="con Beta"; fi
+    if [[ "{{ channel }}" == "dev" ]];  then app_name="con Dev";  fi
+    src="dist/macos/{{ channel }}/${resolved_arch}/${app_name}.app"
     dst="/Applications/${app_name}.app"
     echo "Installing ${src} → ${dst}"
     rm -rf "${dst}"
@@ -138,11 +145,11 @@ macos-install-adhoc channel=channel arch=arch: (macos-bundle-adhoc channel arch)
 macos-release channel=channel arch=arch:
     #!/usr/bin/env bash
     set -euo pipefail
-    resolved_arch="{{arch}}"
+    resolved_arch="{{ arch }}"
     if [[ -z "${resolved_arch}" ]]; then
         resolved_arch="$(uname -m | sed 's/aarch64/arm64/')"
     fi
-    CON_CHANNEL={{channel}} CON_ARCH="${resolved_arch}" ./scripts/macos/release.sh
+    CON_CHANNEL={{ channel }} CON_ARCH="${resolved_arch}" ./scripts/macos/release.sh
 
 # [macOS] Download Sparkle.framework into .sparkle/ (enables auto-update in bundle)
 macos-sparkle-download:
@@ -151,14 +158,14 @@ macos-sparkle-download:
 # [macOS] Open the built app bundle in Finder
 macos-open channel=channel arch=arch:
     #!/usr/bin/env bash
-    resolved_arch="{{arch}}"
+    resolved_arch="{{ arch }}"
     if [[ -z "${resolved_arch}" ]]; then
         resolved_arch="$(uname -m | sed 's/aarch64/arm64/')"
     fi
     app_name="con"
-    if [[ "{{channel}}" == "beta" ]]; then app_name="con Beta"; fi
-    if [[ "{{channel}}" == "dev" ]];  then app_name="con Dev";  fi
-    open "dist/macos/{{channel}}/${resolved_arch}/${app_name}.app"
+    if [[ "{{ channel }}" == "beta" ]]; then app_name="con Beta"; fi
+    if [[ "{{ channel }}" == "dev" ]];  then app_name="con Dev";  fi
+    open "dist/macos/{{ channel }}/${resolved_arch}/${app_name}.app"
 
 # ── Linux ─────────────────────────────────────────────────────────────────────
 
@@ -167,17 +174,17 @@ macos-open channel=channel arch=arch:
 linux-release arch=arch:
     #!/usr/bin/env bash
     set -euo pipefail
-    resolved_arch="{{arch}}"
+    resolved_arch="{{ arch }}"
     if [[ -z "${resolved_arch}" ]]; then
         resolved_arch="$(uname -m | sed 's/aarch64/arm64/')"
     fi
     CON_LINUX_ARCH="${resolved_arch}" ./scripts/linux/release.sh
 
-# [Linux] Install the release binary to ~/.local/bin
+# [Linux] Install the release binaries to ~/.local/bin
 linux-install arch=arch: (linux-release arch)
     #!/usr/bin/env bash
     set -euo pipefail
-    resolved_arch="{{arch}}"
+    resolved_arch="{{ arch }}"
     if [[ -z "${resolved_arch}" ]]; then
         resolved_arch="$(uname -m | sed 's/aarch64/arm64/')"
     fi
@@ -192,6 +199,11 @@ linux-install arch=arch: (linux-release arch)
     cp "${stage_dir}/con" "$HOME/.local/bin/con"
     chmod 755 "$HOME/.local/bin/con"
     echo "Installed ${stage_dir}/con → $HOME/.local/bin/con"
+    if [[ -f "${stage_dir}/con-cli" ]]; then
+        cp "${stage_dir}/con-cli" "$HOME/.local/bin/con-cli"
+        chmod 755 "$HOME/.local/bin/con-cli"
+        echo "Installed ${stage_dir}/con-cli → $HOME/.local/bin/con-cli"
+    fi
 
 # ── Windows (run from Developer Command Prompt for VS 2022) ───────────────────
 
@@ -202,6 +214,7 @@ windows-build:
 # [Windows] Release build
 windows-build-release:
     cargo wbuild -p con --release
+    cargo build -p con-cli --release
 
 # [Windows] Run
 windows-run:
@@ -211,8 +224,15 @@ windows-run:
 windows-test:
     cargo wtest -p con-core -p con-cli -p con-agent -p con-terminal
 
+# [Windows] Build and install local release binaries to the user install root
+windows-install: windows-build-release
+    if not exist "%LOCALAPPDATA%\Programs\con" mkdir "%LOCALAPPDATA%\Programs\con"
+    copy /Y "target\release\con-app.exe" "%LOCALAPPDATA%\Programs\con\con-app.exe"
+    copy /Y "target\release\con-cli.exe" "%LOCALAPPDATA%\Programs\con\con-cli.exe"
+    echo Installed con-app.exe and con-cli.exe to %LOCALAPPDATA%\Programs\con
+
 # ── dist cleanup ──────────────────────────────────────────────────────────────
 
 # Remove all dist/ output
 clean-dist:
-    rm -rf dist/
+    {{ if os() == "windows" { "if exist dist rmdir /s /q dist" } else { "rm -rf dist/" } }}

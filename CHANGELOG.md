@@ -15,6 +15,18 @@ con is still pre-release, so entries may group related beta work while the produ
   and can return focus to the app you were using before it appeared. It is off
   by default; enable it in Settings -> Keys and use Cmd-Backslash or your chosen
   shortcut.
+- Added **New Window** to the macOS Dock menu, so right-clicking the Dock icon
+  can open a fresh Con window without first focusing an existing one.
+
+**Developer Experience**
+
+- Added a cross-platform `justfile` for common build, run, test, release,
+  install, and cleanup flows. The default recipes now dispatch through the
+  Windows-safe `cargo w*` aliases when needed while staying simple on macOS and
+  Linux.
+- Kept project-local `.con/workspace.toml` profiles commit-friendly. Con still
+  treats private runtime state separately, while generated layout profiles can
+  live with the project when a team wants to share them.
 
 ### Changed
 
