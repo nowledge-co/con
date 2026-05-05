@@ -13,6 +13,7 @@
         { "label": "Welcome", "path": "docs/README.md", "route": "/docs/" },
         { "label": "Install", "path": "docs/install.md" },
         { "label": "Quick controls", "path": "docs/quick-controls.md" },
+        { "label": "Quick Terminal", "path": "docs/quick-terminal.md" },
         { "label": "Built-in agent", "path": "docs/agent.md" },
         { "label": "Settings", "path": "docs/settings.md" }
       ]

@@ -69,6 +69,7 @@ Quick controls:
 | Show or hide the bottom input bar | <kbd>⌃</kbd> <kbd>\`</kbd> | <kbd>⌃</kbd> <kbd>\`</kbd> |
 | Show or hide the agent panel | <kbd>⌘</kbd> <kbd>L</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>L</kbd> |
 | Cycle bottom-bar mode | <kbd>⌘</kbd> <kbd>;</kbd> | <kbd>⌃</kbd> <kbd>;</kbd> |
+| Show or hide Quick Terminal | <kbd>⌘</kbd> <kbd>Backslash</kbd> after enabling | Not available |
 
 - Smart mode decides whether your text is a shell command or an agent request.
 - Command mode runs shell commands. With multiple panes, the pane mini map lets you choose the focused pane, all panes, or a selected set.
@@ -135,6 +136,7 @@ Start here:
 
 - [Install](docs/install.md): get con on macOS, Windows, or Linux.
 - [Quick controls](docs/quick-controls.md): focus switching, agent panel, and command modes.
+- [Quick Terminal](docs/quick-terminal.md): set up the optional macOS drop-down terminal.
 - [Terminal workflows](docs/terminal-workflows.md): tabs, panes, broadcast, pane zoom, links, and surfaces.
 - [Built-in agent](docs/agent.md): use AI help without leaving the terminal.
 - [Settings](docs/settings.md): choose providers, themes, suggestions, skills, and shortcuts.

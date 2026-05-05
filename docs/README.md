@@ -17,6 +17,7 @@ Start with the page that matches what you are trying to do.
 | --- | --- |
 | Install con | [Install](install.md) |
 | Learn the main controls | [Quick controls](quick-controls.md) |
+| Open a drop-down terminal from anywhere on macOS | [Quick Terminal](quick-terminal.md) |
 | Work with tabs, panes, broadcast, links, and pane zoom | [Terminal workflows](terminal-workflows.md) |
 | Connect providers, tune appearance, and edit shortcuts | [Settings](settings.md) |
 

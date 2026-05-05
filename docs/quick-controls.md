@@ -44,13 +44,16 @@ to the next action.
 
 ## Quick Terminal on macOS
 
-Quick Terminal is an optional macOS-only floating terminal. Enable it in
+Quick Terminal is an optional macOS-only drop-down terminal. Enable it in
 Settings -> Keys, then use the shortcut to slide down a dedicated Con window
-from the top of the active screen.
+from the top of the active screen, even when another app is frontmost.
 
 It is separate from the main window. Hiding it keeps its live tabs, panes, cwd,
 and scrollback. Closing its last tab or exiting its last shell destroys it, and
 the next shortcut creates a fresh one.
+
+For setup, behavior, and the difference from Summon / Hide Con, see
+[Quick Terminal](quick-terminal.md).
 
 ## A good default flow
 

@@ -15,6 +15,8 @@ con is still pre-release, so entries may group related beta work while the produ
   and can return focus to the app you were using before it appeared. It is off
   by default; enable it in Settings -> Keys and use Cmd-Backslash or your chosen
   shortcut.
+- Added public Quick Terminal documentation covering setup, hide/show behavior,
+  live state, destruction, and the difference from Summon / Hide Con.
 - Added **New Window** to the macOS Dock menu, so right-clicking the Dock icon
   can open a fresh Con window without first focusing an existing one.
 
