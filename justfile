@@ -27,28 +27,32 @@ default:
     @just --list
 
 # ── universal dev commands ────────────────────────────────────────────────────
+# Note: build/run/test below use the default feature set (macOS + Linux).
+# On Windows use windows-build / windows-run / windows-test instead —
+# the Windows binary requires --no-default-features --features con/bin-con-app
+# (see .cargo/config.toml for the w* aliases that wrap this).
 
-# Debug build (current platform)
+# Debug build — macOS / Linux
 build:
     cargo build -p con
 
-# Release build (current platform)
+# Release build — macOS / Linux
 build-release:
     cargo build --release -p con
 
-# Run from source (current platform)
+# Run from source — macOS / Linux
 run:
     cargo run -p con
 
-# Run all workspace tests (current platform)
+# Run all workspace tests — macOS / Linux
 test:
     cargo test --workspace
 
-# Check without building
+# Check without building (all platforms)
 check:
     cargo check --workspace
 
-# Run clippy on the workspace
+# Run clippy on the workspace (all platforms)
 lint:
     cargo clippy --workspace -- -D warnings
 
