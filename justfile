@@ -111,22 +111,25 @@ macos-open channel=channel arch=arch:
 # ── Linux ─────────────────────────────────────────────────────────────────────
 
 # [Linux] Build a release binary and package it
+# Output: dist/con-{version}-linux-{arch}.tar.gz
 linux-release arch=arch:
-    CON_ARCH={{arch}} ./scripts/linux/release.sh
+    CON_LINUX_ARCH={{arch}} ./scripts/linux/release.sh
 
 # [Linux] Install the release binary to ~/.local/bin
 linux-install arch=arch: (linux-release arch)
     #!/usr/bin/env bash
     set -euo pipefail
-    bin="dist/linux/{{arch}}/con"
-    if [[ ! -f "${bin}" ]]; then
-        echo "Binary not found at ${bin} — check scripts/linux/release.sh output"
+    # scripts/linux/release.sh stages to dist/con-{version}-linux-{arch}/
+    # Resolve the versioned staging dir by globbing.
+    stage_dir="$(ls -d dist/con-*-linux-{{arch}} 2>/dev/null | sort -V | tail -1)"
+    if [[ -z "${stage_dir}" || ! -f "${stage_dir}/con" ]]; then
+        echo "Binary not found under dist/con-*-linux-{{arch}}/ — run 'just linux-release' first"
         exit 1
     fi
     mkdir -p "$HOME/.local/bin"
-    cp "${bin}" "$HOME/.local/bin/con"
+    cp "${stage_dir}/con" "$HOME/.local/bin/con"
     chmod 755 "$HOME/.local/bin/con"
-    echo "Installed to $HOME/.local/bin/con"
+    echo "Installed ${stage_dir}/con → $HOME/.local/bin/con"
 
 # ── Windows (run from Developer Command Prompt for VS 2022) ───────────────────
 
