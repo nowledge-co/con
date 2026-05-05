@@ -9368,6 +9368,11 @@ impl ConWorkspace {
             return;
         }
 
+        if self.is_quick_terminal {
+            self.destroy_quick_terminal_window(window, cx);
+            return;
+        }
+
         self.close_window_from_last_tab(window, cx);
     }
 
