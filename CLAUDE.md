@@ -153,7 +153,10 @@ Read the component's source in `3pp/gpui-component/crates/ui/src/` to understand
 - **Real Rig integration.** Tools implement `rig::tool::Tool` trait. Agent built via `client.agent(model).tool(T).build()`. Chat via `Chat::chat()` trait.
 - **Agent transparency.** When the built-in agent runs a command, it executes visibly. No hidden subprocesses.
 - **Shared tokio runtime.** The harness owns a single multi-thread tokio runtime — no thread-per-message.
-- **Config is TOML.** User config at `~/Library/Application Support/con/config.toml` (macOS), `%APPDATA%\con-terminal\config.toml` (Windows), `~/.config/con/config.toml` (Linux). Path resolved at runtime via `con-paths::config_file()` → `dirs::config_dir()`.
+- **Config is TOML.** User config resolved at runtime via `con-paths::config_file()` → `dirs::config_dir()`:
+  - **macOS**: `~/Library/Application Support/con/config.toml` (fallback: `~/.config/con/config.toml` if `dirs::config_dir()` returns None — effectively never on macOS)
+  - **Linux**: `$XDG_CONFIG_HOME/con/config.toml` (defaults to `~/.config/con/config.toml` when `XDG_CONFIG_HOME` is unset)
+  - **Windows**: `%APPDATA%\con-terminal\config.toml` (fallback: `~/.config/con-terminal/config.toml`)
 - **GPUI patterns.** Use `cx.spawn(async move |this, cx| { ... })` for async work. Use if/else for conditional UI (FluentBuilder::when() is not re-exported).
 
 ## Branching
