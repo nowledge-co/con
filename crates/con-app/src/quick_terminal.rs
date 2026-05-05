@@ -66,8 +66,10 @@ pub fn capture_frontmost_pid_before_activation() -> Option<i32> {
 }
 
 fn prepare_force_hide(state: &mut QuickTerminalState) -> Option<i32> {
+    let was_visible = state.visible;
     state.visible = false;
-    state.return_pid.take()
+    let return_pid = state.return_pid.take();
+    was_visible.then_some(return_pid).flatten()
 }
 
 unsafe extern "C" {
@@ -316,6 +318,20 @@ mod tests {
             last_active_pid: None,
         };
         assert_eq!(prepare_force_hide(&mut state), Some(99));
+        assert!(!state.visible);
+        assert_eq!(state.return_pid, None);
+    }
+
+    #[test]
+    fn force_hide_preparation_does_not_restore_when_already_hidden() {
+        let mut state = QuickTerminalState {
+            raw_ptr: Some(1),
+            opening: false,
+            visible: false,
+            return_pid: Some(99),
+            last_active_pid: None,
+        };
+        assert_eq!(prepare_force_hide(&mut state), None);
         assert!(!state.visible);
         assert_eq!(state.return_pid, None);
     }
