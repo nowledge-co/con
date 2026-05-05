@@ -285,6 +285,15 @@ use con_core::{
     TabSummaryRequest,
 };
 
+/// Drag state for pane title bar drag-to-tab promotion.
+#[derive(Clone)]
+struct PaneTitleDragState {
+    pane_id: usize,
+    start_pos: Point<Pixels>,
+    /// True once the cursor has moved more than 8px from start_pos.
+    active: bool,
+}
+
 /// Inline rename editor for the horizontal tab strip.
 struct TabRenameEditor {
     tab_id: u64,
@@ -505,6 +514,12 @@ pub struct ConWorkspace {
     /// movement so double-click still reaches the titlebar handler.
     #[cfg(target_os = "macos")]
     top_bar_should_move: bool,
+    /// Shared bridge between pane title bar on_mouse_down (plain Fn closure)
+    /// and workspace's entity-level mouse-move/up handler. Same pattern as
+    /// `pending_drag_init` for split dividers.
+    pending_pane_title_drag_init: std::sync::Arc<std::sync::Mutex<Option<(usize, Point<Pixels>)>>>,
+    /// Active pane title drag state (set once threshold is crossed).
+    pane_title_drag: Option<PaneTitleDragState>,
 }
 
 #[derive(Clone)]
@@ -1589,6 +1604,8 @@ impl ConWorkspace {
             tab_strip_drop_slot: None,
             #[cfg(target_os = "macos")]
             top_bar_should_move: false,
+            pending_pane_title_drag_init: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            pane_title_drag: None,
         }
     }
 
@@ -9452,6 +9469,129 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    /// Toggle zoom for a specific pane (called from the pane title bar options menu).
+    fn toggle_pane_zoom_for_pane(
+        &mut self,
+        pane_id: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_active_tab() {
+            return;
+        }
+        // Focus the target pane first so toggle_zoom_focused acts on it.
+        self.tabs[self.active_tab].pane_tree.focus(pane_id);
+        let was_zoomed = self.tabs[self.active_tab]
+            .pane_tree
+            .zoomed_pane_id()
+            .is_some();
+        if !self.tabs[self.active_tab].pane_tree.toggle_zoom_focused() {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        self.mark_active_tab_terminal_native_layout_pending(cx);
+        self.notify_active_tab_terminal_views(cx);
+        self.active_terminal().focus(window, cx);
+        self.sync_active_terminal_focus_states(cx);
+        self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
+        cx.notify();
+    }
+
+    /// Detach a pane from the active tab's split tree and promote it to a new tab.
+    fn detach_pane_to_new_tab(
+        &mut self,
+        pane_id: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_active_tab() {
+            return;
+        }
+        let tab_idx = self.active_tab;
+        if self.tabs[tab_idx].pane_tree.pane_count() <= 1 {
+            // Can't detach the only pane — nothing to do.
+            return;
+        }
+
+        // Collect all surfaces for this pane before closing it.
+        let surfaces = self.tabs[tab_idx]
+            .pane_tree
+            .surface_infos(Some(pane_id));
+        if surfaces.is_empty() {
+            return;
+        }
+
+        // Separate active surface (first) from the rest.
+        let active_surface = surfaces
+            .iter()
+            .find(|s| s.is_active)
+            .or_else(|| surfaces.first())
+            .cloned();
+        let Some(active_surface) = active_surface else {
+            return;
+        };
+        let other_surfaces: Vec<_> = surfaces
+            .iter()
+            .filter(|s| s.surface_id != active_surface.surface_id)
+            .cloned()
+            .collect();
+
+        // Remove the pane from the split tree.
+        if !self.close_pane_in_tab(tab_idx, pane_id, window, cx) {
+            return;
+        }
+
+        // Build a new tab with the active terminal as root.
+        let tab_number = self.tabs.len() + 1;
+        let summary_id = self.next_tab_summary_id;
+        self.next_tab_summary_id += 1;
+        let mut new_pane_tree = PaneTree::new(active_surface.terminal.clone());
+
+        // Re-add any additional surfaces into the new pane tree.
+        for surface in &other_surfaces {
+            let opts = SurfaceCreateOptions {
+                title: surface.title.clone(),
+                owner: surface.owner.clone(),
+                close_pane_when_last: surface.close_pane_when_last,
+            };
+            let root_pane_id = new_pane_tree.focused_pane_id();
+            let _ = new_pane_tree.create_surface_in_pane(
+                root_pane_id,
+                surface.terminal.clone(),
+                opts,
+            );
+        }
+
+        self.tabs.push(Tab {
+            pane_tree: new_pane_tree,
+            title: format!("Terminal {}", tab_number),
+            user_label: None,
+            ai_label: None,
+            ai_icon: None,
+            summary_id,
+            needs_attention: false,
+            session: AgentSession::new(),
+            agent_routing: Self::default_agent_routing(self.harness.config()),
+            panel_state: PanelState::new(),
+            runtime_trackers: RefCell::new(HashMap::new()),
+            runtime_cache: RefCell::new(HashMap::new()),
+            shell_history: HashMap::new(),
+        });
+
+        if self.sync_tab_strip_motion() {
+            #[cfg(target_os = "macos")]
+            self.arm_top_chrome_snap_guard(cx);
+            if Self::should_defer_top_chrome_refresh_when_tab_strip_appears() {
+                cx.on_next_frame(window, |_, _, cx| {
+                    cx.notify();
+                });
+            }
+        }
+
+        let new_index = self.tabs.len() - 1;
+        self.activate_tab(new_index, window, cx);
+    }
+
     fn close_pane_in_tab(
         &mut self,
         tab_idx: usize,
@@ -10321,11 +10461,38 @@ impl Render for ConWorkspace {
                     });
                 }
             };
+            let workspace = cx.weak_entity();
+            let close_pane_cb = move |pane_id: usize, window: &mut Window, cx: &mut App| {
+                if let Some(workspace) = workspace.upgrade() {
+                    workspace.update(cx, |workspace, cx| {
+                        let tab_idx = workspace.active_tab;
+                        let _ = workspace.close_pane_in_tab(tab_idx, pane_id, window, cx);
+                    });
+                }
+            };
+            let workspace = cx.weak_entity();
+            let toggle_zoom_cb = move |pane_id: usize, window: &mut Window, cx: &mut App| {
+                if let Some(workspace) = workspace.upgrade() {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.toggle_pane_zoom_for_pane(pane_id, window, cx);
+                    });
+                }
+            };
+            // Pane title drag: use Arc<Mutex> bridge (same pattern as pending_drag_init).
+            let pending_title_drag = self.pending_pane_title_drag_init.clone();
+            let begin_pane_title_drag_cb = move |pane_id: usize, pos: Point<Pixels>| {
+                if let Ok(mut guard) = pending_title_drag.lock() {
+                    *guard = Some((pane_id, pos));
+                }
+            };
             self.tabs[self.active_tab].pane_tree.render(
                 begin_drag_cb,
                 focus_surface_cb,
                 rename_surface_cb,
                 close_surface_cb,
+                close_pane_cb,
+                toggle_zoom_cb,
+                begin_pane_title_drag_cb,
                 self.surface_rename.clone(),
                 pane_divider_color,
                 cx,
@@ -11287,6 +11454,37 @@ impl Render for ConWorkspace {
                             }
                         }
 
+                        // Consume a pending pane title drag initiation.
+                        if let Ok(mut guard) = this.pending_pane_title_drag_init.clone().lock() {
+                            if let Some((pane_id, start_pos)) = guard.take() {
+                                this.pane_title_drag = Some(PaneTitleDragState {
+                                    pane_id,
+                                    start_pos,
+                                    active: false,
+                                });
+                            }
+                        }
+
+                        // Update active pane title drag.
+                        if let Some(ref mut drag) = this.pane_title_drag {
+                            let dx = f32::from(event.position.x) - f32::from(drag.start_pos.x);
+                            let dy = f32::from(event.position.y) - f32::from(drag.start_pos.y);
+                            let dist = (dx * dx + dy * dy).sqrt();
+                            if !drag.active && dist > 8.0 {
+                                drag.active = true;
+                            }
+                            if drag.active {
+                                let top_bar_h = this.current_top_bar_height();
+                                let in_top_bar = f32::from(event.position.y) < top_bar_h;
+                                let tab_count = this.tabs.len();
+                                let new_slot = if in_top_bar { Some(tab_count) } else { None };
+                                if this.tab_strip_drop_slot != new_slot {
+                                    this.tab_strip_drop_slot = new_slot;
+                                    cx.notify();
+                                }
+                            }
+                        }
+
                         // Compute layout-dependent inputs *before* re-borrowing
                         // `this` mutably for the pane tree, otherwise we
                         // collide with the immutable borrow needed by
@@ -11341,7 +11539,7 @@ impl Render for ConWorkspace {
                 })
                 .on_mouse_up(
                     MouseButton::Left,
-                    cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                    cx.listener(|this, event: &MouseUpEvent, _window, cx| {
                         if this.sidebar_drag.is_some() {
                             this.sidebar_drag = None;
                             this.save_session(cx);
@@ -11362,6 +11560,21 @@ impl Render for ConWorkspace {
                             pane_tree.end_drag();
                             for terminal in pane_tree.all_terminals() {
                                 terminal.notify(cx);
+                            }
+                            cx.notify();
+                        }
+
+                        // Complete or cancel pane title drag.
+                        if let Some(drag) = this.pane_title_drag.take() {
+                            this.tab_strip_drop_slot = None;
+                            if drag.active {
+                                let top_bar_h = this.current_top_bar_height();
+                                let in_top_bar = f32::from(event.position.y) < top_bar_h;
+                                if in_top_bar {
+                                    let pane_id = drag.pane_id;
+                                    this.detach_pane_to_new_tab(pane_id, _window, cx);
+                                    return;
+                                }
                             }
                             cx.notify();
                         }
