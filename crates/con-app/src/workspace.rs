@@ -7680,37 +7680,20 @@ impl ConWorkspace {
         self.is_quick_terminal = true;
     }
 
-    /// Reinitialize the quick terminal with a fresh tab and hide the window.
-    /// Called when the last tab is closed via Cmd+W or when the shell in the
-    /// last pane exits (Ctrl+D). The quick terminal must never be fully
-    /// removed while the app is running.
-    fn reinitialize_quick_terminal_and_hide(
+    fn hide_quick_terminal_for_reinit() {
+        #[cfg(target_os = "macos")]
+        {
+            crate::quick_terminal::mark_hidden();
+            crate::quick_terminal::force_hide();
+        }
+    }
+
+    fn rebuild_quick_terminal_single_tab(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
+        closing_terminals: Vec<TerminalPane>,
     ) {
-        // Suppress the auto-hide observer so it doesn't fire a competing
-        // slide-out while we tear down the tab.
-        #[cfg(target_os = "macos")]
-        crate::quick_terminal::mark_hidden();
-
-        // Slide the window off-screen first — while the old terminal is
-        // still visible — so the user sees a clean dismiss. Rebuilding
-        // the tab happens off-screen on the next frame.
-        #[cfg(target_os = "macos")]
-        crate::quick_terminal::force_hide();
-
-        let index = self.active_tab;
-        let closing_terminals: Vec<TerminalPane> = self.tabs[index]
-            .pane_tree
-            .all_surface_terminals()
-            .into_iter()
-            .cloned()
-            .collect();
-        let _summary_id = self.tabs[index].summary_id;
-        self.tab_summary_engine.forget(_summary_id);
-        self.tabs.remove(index);
-
         let terminal = self.create_terminal(
             crate::quick_terminal::default_quick_terminal_cwd()
                 .as_deref()
@@ -7747,6 +7730,31 @@ impl ConWorkspace {
                 terminal.shutdown_surface(cx);
             }
         });
+    }
+
+    /// Reinitialize the quick terminal with a fresh tab and hide the window.
+    /// Called when the last tab is closed via Cmd+W or when the shell in the
+    /// last pane exits (Ctrl+D). The quick terminal must never be fully
+    /// removed while the app is running.
+    fn reinitialize_quick_terminal_and_hide(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        Self::hide_quick_terminal_for_reinit();
+
+        let index = self.active_tab;
+        let closing_terminals: Vec<TerminalPane> = self.tabs[index]
+            .pane_tree
+            .all_surface_terminals()
+            .into_iter()
+            .cloned()
+            .collect();
+        let _summary_id = self.tabs[index].summary_id;
+        self.tab_summary_engine.forget(_summary_id);
+        self.tabs.remove(index);
+
+        self.rebuild_quick_terminal_single_tab(window, cx, closing_terminals);
     }
 
     fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
