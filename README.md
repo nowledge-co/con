@@ -104,6 +104,10 @@ This installs both `con` and `con-cli` into `~/.local/bin`. Or download
 `con-<version>-linux-x86_64.tar.gz` from the latest
 [Release](https://github.com/nowledge-co/con-terminal/releases).
 
+Arch Linux
+
+Arch Linux User can install con via `pacman -S con-bin` or `paru -S con-bin` or `yay -S con-bin`
+
 **Windows**
 
 ```powershell
