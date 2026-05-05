@@ -362,6 +362,8 @@ fn default_window_options(config: &con_core::Config, cx: &mut App) -> WindowOpti
         // titlebar area to restore the drag-to-move gesture.
         #[cfg(target_os = "macos")]
         is_movable: false,
+        #[cfg(target_os = "linux")]
+        app_id: Some("co.nowledge.con".to_owned()),
         ..Default::default()
     }
 }
