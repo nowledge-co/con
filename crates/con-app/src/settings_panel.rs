@@ -2132,7 +2132,9 @@ impl SettingsPanel {
     /// Record a keystroke for the binding currently being recorded.
 
     fn set_recording_key(&mut self, key: Option<String>) {
+        #[cfg(target_os = "macos")]
         let was_recording = self.recording_key.is_some();
+        #[cfg(target_os = "macos")]
         let will_record = key.is_some();
         self.recording_key = key;
 
@@ -4432,7 +4434,6 @@ impl SettingsPanel {
         let global_summon_recording = recording.as_deref() == Some("global_summon");
         let quick_terminal_enabled = self.config.keybindings.quick_terminal_enabled;
         let quick_terminal_value = self.config.keybindings.quick_terminal.clone();
-        let quick_terminal_always_on_top = self.config.keybindings.quick_terminal_always_on_top;
         let quick_terminal_recording = recording.as_deref() == Some("quick_terminal");
         let theme = cx.theme();
 
@@ -4747,46 +4748,6 @@ impl SettingsPanel {
                                 }
                             }))
                             .child(quick_terminal_badge),
-                    ),
-            )
-            .child(row_separator(theme))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(16.0))
-                    .px(px(16.0))
-                    .py(px(11.0))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.0))
-                            .child(
-                                div()
-                                    .text_size(px(11.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .child("Always on top"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(10.5))
-                                    .line_height(px(15.0))
-                                    .text_color(theme.muted_foreground.opacity(0.62))
-                                    .child("Keep the quick terminal above other apps while it is visible."),
-                            ),
-                    )
-                    .child(
-                        Switch::new("hotkey-window-always-on-top")
-                            .checked(quick_terminal_always_on_top)
-                            .disabled(!quick_terminal_enabled)
-                            .small()
-                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                this.config.keybindings.quick_terminal_always_on_top = *checked;
-                                crate::quick_terminal::set_always_on_top(*checked);
-                                cx.notify();
-                            })),
                     ),
             );
 

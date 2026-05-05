@@ -358,9 +358,6 @@ fn default_quick_terminal_enabled() -> bool {
 fn default_quick_terminal() -> String {
     "cmd-\\".into()
 }
-fn default_quick_terminal_always_on_top() -> bool {
-    false
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -394,7 +391,6 @@ pub struct KeybindingConfig {
     pub global_summon: String,
     pub quick_terminal_enabled: bool,
     pub quick_terminal: String,
-    pub quick_terminal_always_on_top: bool,
 }
 
 impl Default for KeybindingConfig {
@@ -429,7 +425,6 @@ impl Default for KeybindingConfig {
             global_summon: default_global_summon(),
             quick_terminal_enabled: default_quick_terminal_enabled(),
             quick_terminal: default_quick_terminal(),
-            quick_terminal_always_on_top: default_quick_terminal_always_on_top(),
         }
     }
 }
@@ -679,7 +674,13 @@ restore_terminal_text = false
         let config = Config::default();
         assert!(!config.keybindings.quick_terminal_enabled);
         assert_eq!(config.keybindings.quick_terminal, "cmd-\\");
-        assert!(!config.keybindings.quick_terminal_always_on_top);
+    }
+
+    #[test]
+    fn serialized_config_omits_removed_quick_terminal_always_on_top_field() {
+        let config = Config::default();
+        let serialized = toml::to_string(&config).unwrap();
+        assert!(!serialized.contains("quick_terminal_always_on_top"));
     }
 
     #[test]
@@ -693,7 +694,6 @@ global_summon = "alt-space"
 
         assert!(!config.keybindings.quick_terminal_enabled);
         assert_eq!(config.keybindings.quick_terminal, "cmd-\\");
-        assert!(!config.keybindings.quick_terminal_always_on_top);
     }
 
     #[test]
@@ -702,12 +702,10 @@ global_summon = "alt-space"
 [keybindings]
 quick_terminal_enabled = true
 quick_terminal = "cmd-\\"
-quick_terminal_always_on_top = true
 "#;
         let config: Config = toml::from_str(content).unwrap();
 
         assert!(config.keybindings.quick_terminal_enabled);
         assert_eq!(config.keybindings.quick_terminal, "cmd-\\");
-        assert!(config.keybindings.quick_terminal_always_on_top);
     }
 }

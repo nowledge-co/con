@@ -20,9 +20,9 @@ mod command_palette;
 #[cfg(target_os = "macos")]
 mod global_hotkey;
 #[cfg(target_os = "macos")]
-mod quick_terminal;
-#[cfg(target_os = "macos")]
 mod macos_windowing;
+#[cfg(target_os = "macos")]
+mod quick_terminal;
 
 // The terminal-view module is selected per platform:
 //   macOS   -> ghostty_view.rs (libghostty + child NSView)
@@ -501,7 +501,6 @@ pub(crate) fn open_con_window(
     exit_on_error: bool,
     cx: &mut App,
 ) {
-
     let window_options = default_window_options(&config, cx);
     cx.spawn(async move |cx| {
         if let Err(err) = cx.open_window(window_options, |window, cx| {
@@ -569,13 +568,12 @@ pub(crate) fn open_quick_terminal(config: con_core::Config, session: Session, cx
     cx.spawn(async move |cx| {
         if let Err(err) = cx.open_window(window_options, |window, cx| {
             let restored_session = session.clone();
-            let view = cx
-                .new(|cx| {
-                    let mut workspace =
-                        ConWorkspace::from_session(config.clone(), restored_session, window, cx);
-                    workspace.mark_as_quick_terminal();
-                    workspace
-                });
+            let view = cx.new(|cx| {
+                let mut workspace =
+                    ConWorkspace::from_session(config.clone(), restored_session, window, cx);
+                workspace.mark_as_quick_terminal();
+                workspace
+            });
 
             let raw_ptr = HasWindowHandle::window_handle(window)
                 .ok()
@@ -585,10 +583,7 @@ pub(crate) fn open_quick_terminal(config: con_core::Config, session: Session, cx
                 })
                 .and_then(crate::quick_terminal::window_from_view_ptr);
             if let Some(raw_ptr) = raw_ptr {
-                crate::quick_terminal::store_window_ptr(
-                    raw_ptr,
-                    config.keybindings.quick_terminal_always_on_top,
-                );
+                crate::quick_terminal::store_window_ptr(raw_ptr);
             }
 
             cx.new(|cx| gpui_component::Root::new(view, window, cx).bg(cx.theme().transparent))
@@ -603,7 +598,9 @@ pub(crate) fn fresh_window_session_with_history() -> Session {
     fresh_window_session_with_history_for_cwd(None)
 }
 
-pub(crate) fn fresh_window_session_with_history_for_cwd(cwd: Option<std::path::PathBuf>) -> Session {
+pub(crate) fn fresh_window_session_with_history_for_cwd(
+    cwd: Option<std::path::PathBuf>,
+) -> Session {
     let persisted = Session::load().unwrap_or_default();
     let persisted_history = GlobalHistoryState::load().unwrap_or_default();
     let mut session = Session::default();

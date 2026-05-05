@@ -15,11 +15,12 @@ fn prepare_force_hide(state: &mut QuickTerminalState) -> Option<i32> {
 }
 
 unsafe extern "C" {
-    fn con_quick_terminal_configure(window_ptr: *mut std::ffi::c_void, always_on_top: bool);
-    fn con_quick_terminal_set_level(window_ptr: *mut std::ffi::c_void, always_on_top: bool);
+    fn con_quick_terminal_configure(window_ptr: *mut std::ffi::c_void);
     fn con_quick_terminal_slide_in(window_ptr: *mut std::ffi::c_void);
     fn con_quick_terminal_slide_out(window_ptr: *mut std::ffi::c_void, return_pid: i32);
-    fn con_quick_terminal_window_from_view(view_ptr: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    fn con_quick_terminal_window_from_view(
+        view_ptr: *mut std::ffi::c_void,
+    ) -> *mut std::ffi::c_void;
     fn con_quick_terminal_frontmost_app_pid() -> i32;
 }
 
@@ -28,11 +29,9 @@ thread_local! {
         const { RefCell::new(QuickTerminalState { raw_ptr: None, visible: false, return_pid: None }) };
 }
 
-pub fn init(_cx: &App, keybindings: &KeybindingConfig) {
-    set_always_on_top(keybindings.quick_terminal_always_on_top);
-}
+pub fn init(_cx: &App, _keybindings: &KeybindingConfig) {}
 
-pub fn store_window_ptr(window_ptr: *mut std::ffi::c_void, always_on_top: bool) {
+pub fn store_window_ptr(window_ptr: *mut std::ffi::c_void) {
     QUICK_TERMINAL_STATE.with(|state| {
         let mut state = state.borrow_mut();
         state.raw_ptr = Some(window_ptr as usize);
@@ -41,7 +40,7 @@ pub fn store_window_ptr(window_ptr: *mut std::ffi::c_void, always_on_top: bool) 
         state.return_pid = remember_return_pid(current_pid, Some(frontmost_pid));
         state.visible = true;
     });
-    unsafe { con_quick_terminal_configure(window_ptr, always_on_top) };
+    unsafe { con_quick_terminal_configure(window_ptr) };
     unsafe { con_quick_terminal_slide_in(window_ptr) };
 }
 
@@ -141,16 +140,6 @@ extern "C" fn con_quick_terminal_handle_resign_key() {
     hide();
 }
 
-pub fn set_always_on_top(always_on_top: bool) {
-    QUICK_TERMINAL_STATE.with(|state| {
-        if let Some(window_ptr) = state.borrow().raw_ptr {
-            unsafe {
-                con_quick_terminal_set_level(window_ptr as *mut std::ffi::c_void, always_on_top)
-            };
-        }
-    });
-}
-
 fn remember_return_pid(current_pid: i32, frontmost_pid: Option<i32>) -> Option<i32> {
     frontmost_pid.filter(|pid| *pid != current_pid && *pid > 0)
 }
@@ -164,7 +153,7 @@ pub fn reset_destroyed_window() {
 #[cfg(test)]
 mod tests {
     use super::{
-        QuickTerminalState, default_quick_terminal_cwd, remember_return_pid, prepare_force_hide,
+        QuickTerminalState, default_quick_terminal_cwd, prepare_force_hide, remember_return_pid,
     };
 
     #[test]
@@ -177,10 +166,12 @@ mod tests {
 
     #[test]
     fn quick_terminal_binding_default_is_non_empty() {
-        assert!(!con_core::config::KeybindingConfig::default()
-            .quick_terminal
-            .trim()
-            .is_empty());
+        assert!(
+            !con_core::config::KeybindingConfig::default()
+                .quick_terminal
+                .trim()
+                .is_empty()
+        );
     }
 
     #[test]

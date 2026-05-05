@@ -29,7 +29,7 @@ static NSRect con_quick_terminal_frame(NSWindow *window, bool visible) {
     return frame;
 }
 
-static void con_quick_terminal_apply_configuration(NSWindow *window, bool always_on_top) {
+static void con_quick_terminal_apply_configuration(NSWindow *window) {
     window.styleMask = NSWindowStyleMaskBorderless | NSWindowStyleMaskResizable;
     window.collectionBehavior = NSWindowCollectionBehaviorMoveToActiveSpace |
                                 NSWindowCollectionBehaviorTransient;
@@ -38,7 +38,7 @@ static void con_quick_terminal_apply_configuration(NSWindow *window, bool always
     window.hidesOnDeactivate = NO;
     window.releasedWhenClosed = NO;
     window.movable = NO;
-    window.level = always_on_top ? NSFloatingWindowLevel : NSNormalWindowLevel;
+    window.level = NSNormalWindowLevel;
     window.contentMinSize = NSMakeSize(320.0, CON_QUICK_TERMINAL_MIN_HEIGHT);
     [window setFrame:con_quick_terminal_frame(window, false) display:NO];
     [window orderOut:nil];
@@ -59,25 +59,14 @@ static void con_quick_terminal_apply_configuration(NSWindow *window, bool always
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
-void con_quick_terminal_configure(void *window_ptr, bool always_on_top) {
+void con_quick_terminal_configure(void *window_ptr) {
     NSWindow *window = (__bridge NSWindow *)window_ptr;
     if (window == nil) {
         return;
     }
 
     dispatch_async(dispatch_get_main_queue(), ^{
-        con_quick_terminal_apply_configuration(window, always_on_top);
-    });
-}
-
-void con_quick_terminal_set_level(void *window_ptr, bool always_on_top) {
-    NSWindow *window = (__bridge NSWindow *)window_ptr;
-    if (window == nil) {
-        return;
-    }
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-        window.level = always_on_top ? NSFloatingWindowLevel : NSNormalWindowLevel;
+        con_quick_terminal_apply_configuration(window);
     });
 }
 

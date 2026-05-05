@@ -15,7 +15,6 @@ Current product behavior:
 - uses full visible screen width
 - defaults to half the visible screen height
 - can be resized vertically from the bottom edge
-- can be configured as always-on-top
 - restores the previously frontmost app when hidden via the toggle path
 - auto-hides when it loses key focus
 - keeps its tabs / panes / shell state while hidden
@@ -67,7 +66,6 @@ Responsibilities:
 
 - lazy creation on first toggle
 - show/hide dispatch for an existing Quick Terminal window
-- always-on-top reapplication
 - destruction-state reset when the Quick Terminal window is removed
 
 It does **not** mirror tabs, panes, session contents, or geometry history.
@@ -215,7 +213,6 @@ User-configurable settings are:
 
 - Quick Terminal enabled toggle
 - Quick Terminal keybinding
-- Quick Terminal always-on-top toggle
 
 These are reapplied at runtime when settings are saved.
 
@@ -327,7 +324,6 @@ Manual verification should cover:
 - default half-screen height
 - bottom-edge height resize works
 - Quick Terminal keeps its session state across hide/show while alive
-- always-on-top setting applies correctly
 - add tab / `Cmd+T` works normally inside Quick Terminal
 - tab UI renders without requiring a manual resize
 - changing tab layout does not trigger LLM summary requests
