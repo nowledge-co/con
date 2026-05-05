@@ -288,6 +288,7 @@ use con_core::{
 struct TabRenameEditor {
     tab_id: u64,
     tab_index: usize,
+    generation: u64,
     input: Entity<InputState>,
 }
 
@@ -296,6 +297,13 @@ struct TabRenameEditor {
 struct TabRenameStateSnapshot {
     tab_id: u64,
     tab_index: usize,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TabRenameLifecycleSnapshot {
+    active_generation: Option<u64>,
+    cancelled_generation: Option<u64>,
 }
 
 struct Tab {
@@ -488,7 +496,10 @@ pub struct ConWorkspace {
     tab_rename: Option<TabRenameEditor>,
     /// Escape-cancel marker so the subsequent input blur does not
     /// auto-save the value we meant to discard.
-    tab_rename_cancelled_id: Option<u64>,
+    tab_rename_cancelled_generation: Option<u64>,
+    /// Monotonic generation for horizontal tab rename editors so stale
+    /// blur events from an older input cannot commit after a reopen.
+    tab_rename_generation: u64,
     /// Drop slot (0..=N) tracked while a DraggedTab is in flight over
     /// the horizontal tab strip. Slot K = "insert before tab K".
     tab_strip_drop_slot: Option<usize>,
@@ -1570,7 +1581,8 @@ impl ConWorkspace {
             window_close_prepared: false,
             session_save_tx,
             tab_rename: None,
-            tab_rename_cancelled_id: None,
+            tab_rename_cancelled_generation: None,
+            tab_rename_generation: 0,
             tab_strip_drop_slot: None,
         }
     }
@@ -4878,6 +4890,8 @@ impl ConWorkspace {
             return;
         };
         let tab_id = tab.summary_id;
+        let generation = self.tab_rename_generation;
+        self.tab_rename_generation += 1;
         // Seed from the rendered tab label so focus→blur without edits
         // preserves AI/SSH/CWD-derived naming instead of materializing the
         // raw terminal title as a new explicit label.
@@ -4910,6 +4924,15 @@ impl ConWorkspace {
                     window.dispatch_action(Box::new(gpui_component::input::SelectAll), cx);
                 }
                 InputEvent::PressEnter { .. } | InputEvent::Blur => {
+                    if this.tab_rename_cancelled_generation == Some(generation)
+                        || this.tab_rename.as_ref().map(|rename| rename.generation)
+                            != Some(generation)
+                    {
+                        if this.tab_rename_cancelled_generation == Some(generation) {
+                            this.tab_rename_cancelled_generation = None;
+                        }
+                        return;
+                    }
                     let value = input_entity.read(cx).value().to_string();
                     this.commit_tab_rename(tab_id, value, window, cx);
                 }
@@ -4921,9 +4944,10 @@ impl ConWorkspace {
         self.tab_rename = Some(TabRenameEditor {
             tab_id,
             tab_index: index,
+            generation,
             input: input.clone(),
         });
-        self.tab_rename_cancelled_id = None;
+        self.tab_rename_cancelled_generation = None;
         input.update(cx, |state, cx| state.focus(window, cx));
         cx.notify();
     }
@@ -4935,23 +4959,16 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.tab_rename_cancelled_id == Some(tab_id) {
-            self.tab_rename_cancelled_id = None;
-            self.tab_rename = None;
-            cx.notify();
-            return;
-        }
-
         let Some(index) = self.tab_index_for_summary_id(tab_id) else {
             self.tab_rename = None;
-            self.tab_rename_cancelled_id = None;
+            self.tab_rename_cancelled_generation = None;
             cx.notify();
             return;
         };
 
         let Some(tab) = self.tabs.get_mut(index) else {
             self.tab_rename = None;
-            self.tab_rename_cancelled_id = None;
+            self.tab_rename_cancelled_generation = None;
             cx.notify();
             return;
         };
@@ -4960,7 +4977,7 @@ impl ConWorkspace {
         let changed = tab.user_label != label;
         tab.user_label = label;
         self.tab_rename = None;
-        self.tab_rename_cancelled_id = None;
+        self.tab_rename_cancelled_generation = None;
 
         if changed {
             self.sync_sidebar(cx);
@@ -4980,6 +4997,7 @@ impl ConWorkspace {
                     std::cmp::Ordering::Greater => Some(TabRenameEditor {
                         tab_id: state.tab_id,
                         tab_index: state.tab_index - 1,
+                        generation: state.generation,
                         input: state.input,
                     }),
                 });
@@ -10790,7 +10808,7 @@ impl Render for ConWorkspace {
                             .min_w_0()
                             .on_action(cx.listener(|this, _: &InputEscape, _, cx| {
                                 if let Some(editor) = this.tab_rename.as_ref() {
-                                    this.tab_rename_cancelled_id = Some(editor.tab_id);
+                                    this.tab_rename_cancelled_generation = Some(editor.generation);
                                 }
                                 this.tab_rename = None;
                                 cx.notify();
