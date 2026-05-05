@@ -7674,6 +7674,7 @@ impl ConWorkspace {
         });
     }
 
+    #[cfg(target_os = "macos")]
     pub fn mark_as_quick_terminal(&mut self) {
         self.is_quick_terminal = true;
     }
