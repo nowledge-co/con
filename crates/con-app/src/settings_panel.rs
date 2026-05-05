@@ -2700,7 +2700,7 @@ impl SettingsPanel {
                 .child(group_label("Continuity", &theme))
                 .child(card(theme, card_opacity).child(toggle_row(
                     "Restore Terminal Text",
-                    "Keep bounded private terminal text for restart continuity. Layout profiles never include it.",
+                    "Keep terminal text on restart continuity.",
                     Switch::new("restore-terminal-text-toggle")
                         .checked(self.config.appearance.restore_terminal_text)
                         .small()
