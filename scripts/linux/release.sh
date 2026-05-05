@@ -60,6 +60,7 @@ stage_name="con-${version}-linux-${art_arch}"
 stage_dir="dist/${stage_name}"
 tarball="dist/${stage_name}.tar.gz"
 sha_file="dist/SHA256SUMS-linux.txt"
+linux_app_id="co.nowledge.con"
 
 echo "==> con linux release"
 echo "    version : ${version}"
@@ -107,11 +108,13 @@ strip --strip-debug "${stage_dir}/con-cli" || true
 [[ -f LICENSE ]] && cp LICENSE "${stage_dir}/"
 [[ -f README.md ]] && cp README.md "${stage_dir}/"
 
-# Desktop entry. The install.sh script rewrites the Exec line to
+# Desktop entry. The filename, StartupWMClass, and runtime GPUI app_id must stay
+# in sync so Wayland and X11 desktops group the running window with the launcher.
+# The install.sh script rewrites the Exec line to
 # point at the per-user install path before dropping it into
 # ~/.local/share/applications, so the path here is just a default
 # for users who hand-extract the tarball into /usr/local.
-cat > "${stage_dir}/con.desktop" <<'EOF'
+cat > "${stage_dir}/${linux_app_id}.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=con
@@ -122,7 +125,7 @@ Icon=con
 Terminal=false
 Categories=System;TerminalEmulator;Utility;
 Keywords=terminal;shell;command;cli;ai;agent;
-StartupWMClass=con
+StartupWMClass=${linux_app_id}
 EOF
 
 # 256x256 icon — freedesktop hicolor's bread-and-butter size, and
