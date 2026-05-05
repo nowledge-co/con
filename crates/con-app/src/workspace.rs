@@ -11539,7 +11539,7 @@ impl Render for ConWorkspace {
                 })
                 .on_mouse_up(
                     MouseButton::Left,
-                    cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    cx.listener(|this, event: &MouseUpEvent, window, cx| {
                         if this.sidebar_drag.is_some() {
                             this.sidebar_drag = None;
                             this.save_session(cx);
@@ -11572,7 +11572,7 @@ impl Render for ConWorkspace {
                                 let in_top_bar = f32::from(event.position.y) < top_bar_h;
                                 if in_top_bar {
                                     let pane_id = drag.pane_id;
-                                    this.detach_pane_to_new_tab(pane_id, _window, cx);
+                                    this.detach_pane_to_new_tab(pane_id, window, cx);
                                     return;
                                 }
                             }
