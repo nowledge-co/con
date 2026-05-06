@@ -491,6 +491,93 @@ impl PaneTree {
         true
     }
 
+    /// Move an existing pane leaf to a split position relative to another pane.
+    pub fn move_pane(
+        &mut self,
+        source_pane_id: PaneId,
+        target_pane_id: PaneId,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+    ) -> bool {
+        if source_pane_id == target_pane_id
+            || self.pane_count() <= 1
+            || !Self::contains_leaf(&self.root, source_pane_id)
+            || !Self::contains_leaf(&self.root, target_pane_id)
+        {
+            return false;
+        }
+
+        let old_root = std::mem::replace(&mut self.root, Self::empty_placeholder_node());
+        let (remaining_root, Some(source_leaf)) = Self::extract_leaf(old_root, source_pane_id) else {
+            return false;
+        };
+        let Some(remaining_root) = remaining_root else {
+            self.root = source_leaf;
+            return false;
+        };
+
+        let (new_root, inserted) = Self::insert_leaf_at_target(
+            remaining_root,
+            target_pane_id,
+            source_leaf,
+            direction,
+            placement,
+            self.next_split_id,
+        );
+        if !inserted {
+            self.root = new_root;
+            return false;
+        }
+        self.root = new_root;
+        self.next_split_id = self.next_split_id.saturating_add(1);
+        self.focused_pane_id = source_pane_id;
+        self.zoomed_pane_id = None;
+        let mut next_split_id = 0;
+        Self::normalize_split_ids(&mut self.root, &mut next_split_id);
+        self.next_split_id = next_split_id;
+        true
+    }
+
+    /// Merge another pane tree into this tree as a new root split.
+    pub fn merge_tree(
+        &mut self,
+        mut incoming: PaneTree,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+    ) {
+        let mut next_pane_id = Self::max_pane_id(&self.root).saturating_add(1);
+        let incoming_focused_pane_id = Self::remap_leaf_ids(
+            &mut incoming.root,
+            &mut next_pane_id,
+            incoming.focused_pane_id,
+        );
+
+        let original_root = std::mem::replace(&mut self.root, Self::empty_placeholder_node());
+        let new_split_id = self.next_split_id;
+        let (first, second) = match placement {
+            SplitPlacement::Before => (incoming.root, original_root),
+            SplitPlacement::After => (original_root, incoming.root),
+        };
+        self.root = PaneNode::Split {
+            split_id: new_split_id,
+            direction,
+            first: Box::new(first),
+            second: Box::new(second),
+            ratio: 0.5,
+        };
+        self.focused_pane_id = incoming_focused_pane_id;
+        self.zoomed_pane_id = None;
+        self.next_id = Self::max_pane_id(&self.root).saturating_add(1);
+        self.next_surface_id = self
+            .next_surface_id
+            .max(incoming.next_surface_id)
+            .max(Self::max_surface_id(&self.root).saturating_add(1));
+        let mut next_split_id = 0;
+        Self::normalize_split_ids(&mut self.root, &mut next_split_id);
+        self.next_split_id = next_split_id;
+        self.dragging = None;
+    }
+
     /// Set focus to a pane by ID without changing the current zoom target.
     pub fn focus(&mut self, pane_id: PaneId) {
         if Self::find_terminal(&self.root, pane_id).is_some() {
@@ -572,6 +659,26 @@ impl PaneTree {
     /// Number of panes
     pub fn pane_count(&self) -> usize {
         Self::count_leaves(&self.root)
+    }
+
+    pub fn pane_title(&self, pane_id: PaneId, cx: &App) -> Option<String> {
+        Self::find_terminal(&self.root, pane_id).map(|terminal| {
+            terminal
+                .title(cx)
+                .unwrap_or_else(|| "Terminal".to_string())
+        })
+    }
+
+    pub fn pane_bounds(&self, bounds: Bounds<Pixels>) -> Vec<(PaneId, Bounds<Pixels>)> {
+        let mut result = Vec::new();
+        if let Some(zoomed_id) = self.zoomed_pane_id {
+            if Self::contains_leaf(&self.root, zoomed_id) {
+                result.push((zoomed_id, bounds));
+            }
+            return result;
+        }
+        Self::collect_pane_bounds(&self.root, bounds, &mut result);
+        result
     }
 
     pub fn zoomed_pane_id(&self) -> Option<PaneId> {
@@ -736,6 +843,49 @@ impl PaneTree {
         }
     }
 
+    fn collect_pane_bounds(
+        node: &PaneNode,
+        bounds: Bounds<Pixels>,
+        result: &mut Vec<(PaneId, Bounds<Pixels>)>,
+    ) {
+        match node {
+            PaneNode::Leaf { id, .. } => result.push((*id, bounds)),
+            PaneNode::Split {
+                direction,
+                first,
+                second,
+                ratio,
+                ..
+            } => {
+                let ratio = (*ratio).clamp(0.0, 1.0);
+                match direction {
+                    SplitDirection::Horizontal => {
+                        let first_width = bounds.size.width * ratio;
+                        let second_width = bounds.size.width - first_width;
+                        let first_bounds = Bounds::new(bounds.origin, size(first_width, bounds.size.height));
+                        let second_bounds = Bounds::new(
+                            point(bounds.origin.x + first_width, bounds.origin.y),
+                            size(second_width, bounds.size.height),
+                        );
+                        Self::collect_pane_bounds(first, first_bounds, result);
+                        Self::collect_pane_bounds(second, second_bounds, result);
+                    }
+                    SplitDirection::Vertical => {
+                        let first_height = bounds.size.height * ratio;
+                        let second_height = bounds.size.height - first_height;
+                        let first_bounds = Bounds::new(bounds.origin, size(bounds.size.width, first_height));
+                        let second_bounds = Bounds::new(
+                            point(bounds.origin.x, bounds.origin.y + first_height),
+                            size(bounds.size.width, second_height),
+                        );
+                        Self::collect_pane_bounds(first, first_bounds, result);
+                        Self::collect_pane_bounds(second, second_bounds, result);
+                    }
+                }
+            }
+        }
+    }
+
     fn collect_terminals<'a>(node: &'a PaneNode, result: &mut Vec<&'a TerminalPane>) {
         match node {
             PaneNode::Leaf {
@@ -791,6 +941,35 @@ impl PaneTree {
             }
             PaneNode::Split { first, second, .. } => {
                 Self::max_surface_id(first).max(Self::max_surface_id(second))
+            }
+        }
+    }
+
+    fn remap_leaf_ids(
+        node: &mut PaneNode,
+        next_pane_id: &mut PaneId,
+        old_focused_pane_id: PaneId,
+    ) -> PaneId {
+        match node {
+            PaneNode::Leaf { id, .. } => {
+                let old_id = *id;
+                let new_id = *next_pane_id;
+                *id = new_id;
+                *next_pane_id = next_pane_id.saturating_add(1);
+                if old_id == old_focused_pane_id {
+                    new_id
+                } else {
+                    PaneId::MAX
+                }
+            }
+            PaneNode::Split { first, second, .. } => {
+                let first_focus = Self::remap_leaf_ids(first, next_pane_id, old_focused_pane_id);
+                let second_focus = Self::remap_leaf_ids(second, next_pane_id, old_focused_pane_id);
+                if first_focus != PaneId::MAX {
+                    first_focus
+                } else {
+                    second_focus
+                }
             }
         }
     }
@@ -1068,6 +1247,165 @@ impl PaneTree {
                 }
             }
             leaf => leaf,
+        }
+    }
+
+    fn empty_placeholder_node() -> PaneNode {
+        PaneNode::Leaf {
+            id: PaneId::MAX,
+            surfaces: Vec::new(),
+            active_surface_id: 0,
+        }
+    }
+
+    fn contains_leaf(node: &PaneNode, pane_id: PaneId) -> bool {
+        match node {
+            PaneNode::Leaf { id, .. } => *id == pane_id,
+            PaneNode::Split { first, second, .. } => {
+                Self::contains_leaf(first, pane_id) || Self::contains_leaf(second, pane_id)
+            }
+        }
+    }
+
+    fn extract_leaf(node: PaneNode, pane_id: PaneId) -> (Option<PaneNode>, Option<PaneNode>) {
+        match node {
+            PaneNode::Leaf { id, .. } if id == pane_id => (None, Some(node)),
+            leaf @ PaneNode::Leaf { .. } => (Some(leaf), None),
+            PaneNode::Split {
+                split_id,
+                direction,
+                first,
+                second,
+                ratio,
+            } => {
+                let first_node = *first;
+                let second_node = *second;
+                let (new_first, extracted) = Self::extract_leaf(first_node, pane_id);
+                if extracted.is_some() {
+                    return match new_first {
+                        Some(first) => (
+                            Some(PaneNode::Split {
+                                split_id,
+                                direction,
+                                first: Box::new(first),
+                                second: Box::new(second_node),
+                                ratio,
+                            }),
+                            extracted,
+                        ),
+                        None => (Some(second_node), extracted),
+                    };
+                }
+
+                let first_node = new_first.expect("non-matching leaf extraction preserves node");
+                let (new_second, extracted) = Self::extract_leaf(second_node, pane_id);
+                if extracted.is_some() {
+                    return match new_second {
+                        Some(second) => (
+                            Some(PaneNode::Split {
+                                split_id,
+                                direction,
+                                first: Box::new(first_node),
+                                second: Box::new(second),
+                                ratio,
+                            }),
+                            extracted,
+                        ),
+                        None => (Some(first_node), extracted),
+                    };
+                }
+
+                (
+                    Some(PaneNode::Split {
+                        split_id,
+                        direction,
+                        first: Box::new(first_node),
+                        second: Box::new(
+                            new_second.expect("non-matching leaf extraction preserves node"),
+                        ),
+                        ratio,
+                    }),
+                    None,
+                )
+            }
+        }
+    }
+
+    fn insert_leaf_at_target(
+        node: PaneNode,
+        target_id: PaneId,
+        source_leaf: PaneNode,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+        split_id: SplitId,
+    ) -> (PaneNode, bool) {
+        match node {
+            target @ PaneNode::Leaf { id, .. } if id == target_id => {
+                let (first, second) = match placement {
+                    SplitPlacement::Before => (source_leaf, target),
+                    SplitPlacement::After => (target, source_leaf),
+                };
+                (
+                    PaneNode::Split {
+                        split_id,
+                        direction,
+                        first: Box::new(first),
+                        second: Box::new(second),
+                        ratio: 0.5,
+                    },
+                    true,
+                )
+            }
+            leaf @ PaneNode::Leaf { .. } => (leaf, false),
+            PaneNode::Split {
+                split_id: existing_split_id,
+                direction: existing_direction,
+                first,
+                second,
+                ratio,
+            } => {
+                let first_node = *first;
+                let second_node = *second;
+                if Self::contains_leaf(&first_node, target_id) {
+                    let (new_first, inserted) = Self::insert_leaf_at_target(
+                        first_node,
+                        target_id,
+                        source_leaf,
+                        direction,
+                        placement,
+                        split_id,
+                    );
+                    return (
+                        PaneNode::Split {
+                            split_id: existing_split_id,
+                            direction: existing_direction,
+                            first: Box::new(new_first),
+                            second: Box::new(second_node),
+                            ratio,
+                        },
+                        inserted,
+                    );
+                }
+
+                let (new_second, inserted) = Self::insert_leaf_at_target(
+                    second_node,
+                    target_id,
+                    source_leaf,
+                    direction,
+                    placement,
+                    split_id,
+                );
+                (
+                    PaneNode::Split {
+                        split_id: existing_split_id,
+                        direction: existing_direction,
+                        first: Box::new(first_node),
+                        second: Box::new(new_second),
+                        ratio,
+                    },
+                    inserted,
+                )
+            }
         }
     }
 
@@ -2177,5 +2515,198 @@ impl PaneTree {
                 return candidate;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_leaf(id: PaneId) -> PaneNode {
+        PaneNode::Leaf {
+            id,
+            surfaces: Vec::new(),
+            active_surface_id: 0,
+        }
+    }
+
+    fn leaf_id(node: &PaneNode) -> PaneId {
+        match node {
+            PaneNode::Leaf { id, .. } => *id,
+            PaneNode::Split { .. } => panic!("expected leaf"),
+        }
+    }
+
+    fn split_parts(node: &PaneNode) -> (SplitDirection, &PaneNode, &PaneNode) {
+        match node {
+            PaneNode::Split {
+                direction,
+                first,
+                second,
+                ..
+            } => (*direction, first, second),
+            PaneNode::Leaf { .. } => panic!("expected split"),
+        }
+    }
+
+    fn collect_leaf_ids(node: &PaneNode, result: &mut Vec<PaneId>) {
+        match node {
+            PaneNode::Leaf { id, .. } => result.push(*id),
+            PaneNode::Split { first, second, .. } => {
+                collect_leaf_ids(first, result);
+                collect_leaf_ids(second, result);
+            }
+        }
+    }
+
+    fn collect_split_ids(node: &PaneNode, result: &mut Vec<SplitId>) {
+        match node {
+            PaneNode::Leaf { .. } => {}
+            PaneNode::Split {
+                split_id,
+                first,
+                second,
+                ..
+            } => {
+                result.push(*split_id);
+                collect_split_ids(first, result);
+                collect_split_ids(second, result);
+            }
+        }
+    }
+
+    fn assert_unique(values: &[usize]) {
+        let mut sorted = values.to_vec();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), values.len());
+    }
+
+    fn simple_two_pane_tree() -> PaneTree {
+        PaneTree {
+            root: PaneNode::Split {
+                split_id: 0,
+                direction: SplitDirection::Horizontal,
+                first: Box::new(empty_leaf(0)),
+                second: Box::new(empty_leaf(1)),
+                ratio: 0.5,
+            },
+            focused_pane_id: 0,
+            zoomed_pane_id: None,
+            next_id: 2,
+            next_surface_id: 0,
+            next_split_id: 1,
+            dragging: None,
+        }
+    }
+
+    #[::core::prelude::v1::test]
+    fn merge_tree_horizontal_before_places_incoming_first() {
+        let mut target = PaneTree {
+            root: empty_leaf(0),
+            focused_pane_id: 0,
+            zoomed_pane_id: None,
+            next_id: 1,
+            next_surface_id: 0,
+            next_split_id: 0,
+            dragging: None,
+        };
+        let incoming = PaneTree {
+            root: empty_leaf(0),
+            focused_pane_id: 0,
+            zoomed_pane_id: None,
+            next_id: 1,
+            next_surface_id: 0,
+            next_split_id: 0,
+            dragging: None,
+        };
+
+        target.merge_tree(incoming, SplitDirection::Horizontal, SplitPlacement::Before);
+
+        let (root_direction, first, second) = split_parts(&target.root);
+        assert_eq!(root_direction, SplitDirection::Horizontal);
+        assert_eq!(leaf_id(first), target.focused_pane_id);
+        assert_eq!(leaf_id(second), 0);
+        let mut leaf_ids = Vec::new();
+        collect_leaf_ids(&target.root, &mut leaf_ids);
+        assert_unique(&leaf_ids);
+    }
+
+    #[::core::prelude::v1::test]
+    fn merge_tree_vertical_after_places_incoming_second() {
+        let mut target = PaneTree {
+            root: empty_leaf(0),
+            focused_pane_id: 0,
+            zoomed_pane_id: None,
+            next_id: 1,
+            next_surface_id: 0,
+            next_split_id: 0,
+            dragging: None,
+        };
+        let incoming = PaneTree {
+            root: empty_leaf(0),
+            focused_pane_id: 0,
+            zoomed_pane_id: None,
+            next_id: 1,
+            next_surface_id: 0,
+            next_split_id: 0,
+            dragging: None,
+        };
+
+        target.merge_tree(incoming, SplitDirection::Vertical, SplitPlacement::After);
+
+        let (root_direction, first, second) = split_parts(&target.root);
+        assert_eq!(root_direction, SplitDirection::Vertical);
+        assert_eq!(leaf_id(first), 0);
+        assert_eq!(leaf_id(second), target.focused_pane_id);
+        let mut leaf_ids = Vec::new();
+        collect_leaf_ids(&target.root, &mut leaf_ids);
+        assert_unique(&leaf_ids);
+    }
+
+    #[::core::prelude::v1::test]
+    fn merge_tree_clears_zoom_and_focuses_incoming() {
+        let mut target = simple_two_pane_tree();
+        target.zoomed_pane_id = Some(0);
+        let incoming = PaneTree {
+            root: empty_leaf(0),
+            focused_pane_id: 0,
+            zoomed_pane_id: None,
+            next_id: 1,
+            next_surface_id: 0,
+            next_split_id: 0,
+            dragging: None,
+        };
+
+        target.merge_tree(incoming, SplitDirection::Vertical, SplitPlacement::Before);
+
+        assert_eq!(target.zoomed_pane_id(), None);
+        assert!(target.focused_pane_id() >= 2);
+        assert!(PaneTree::contains_leaf(&target.root, target.focused_pane_id()));
+    }
+
+    #[::core::prelude::v1::test]
+    fn merge_tree_assigns_unique_split_ids() {
+        let mut target = simple_two_pane_tree();
+        let incoming = simple_two_pane_tree();
+
+        target.merge_tree(incoming, SplitDirection::Horizontal, SplitPlacement::After);
+
+        let mut split_ids = Vec::new();
+        collect_split_ids(&target.root, &mut split_ids);
+        assert_unique(&split_ids);
+    }
+
+    #[::core::prelude::v1::test]
+    fn move_pane_to_top_edge_places_source_before_target_vertically() {
+        let mut tree = simple_two_pane_tree();
+
+        assert!(tree.move_pane(1, 0, SplitDirection::Vertical, SplitPlacement::Before));
+
+        let (root_direction, first, second) = split_parts(&tree.root);
+        assert_eq!(root_direction, SplitDirection::Vertical);
+        assert_eq!(leaf_id(first), 1);
+        assert_eq!(leaf_id(second), 0);
+        assert_eq!(tree.focused_pane_id, 1);
     }
 }
