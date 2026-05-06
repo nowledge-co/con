@@ -155,6 +155,10 @@ impl GhosttyConfigPatch {
             s.push_str("cursor-color = cell-foreground\n");
             s.push_str("cursor-text = cell-background\n");
         }
+        // Disable ghostty shell-integration cursor override so con's
+        // cursor-style setting is respected. Ghostty's integration
+        // unconditionally forces a bar cursor at prompts otherwise.
+        s.push_str("shell-integration-features = no-cursor\n");
         if let Some(background_image) = &self.background_image {
             s.push_str(&format!("background-image = {:?}\n", background_image));
             if let Some(background_image_opacity) = self.background_image_opacity {
