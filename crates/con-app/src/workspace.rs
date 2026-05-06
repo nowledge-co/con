@@ -11,7 +11,7 @@ use gpui::{prelude::FluentBuilder as _, *};
 #[cfg(target_os = "macos")]
 use gpui_component::Theme;
 use gpui_component::{
-    ActiveTheme, Sizable,
+    ActiveTheme, ElementExt, Sizable,
     input::{Escape as InputEscape, Input, InputEvent, InputState},
     tooltip::Tooltip,
 };
@@ -33,6 +33,9 @@ const CHROME_RELEASE_COVER_MS: u64 = 48;
 const MAX_SHELL_HISTORY_PER_PANE: usize = 80;
 const MAX_GLOBAL_SHELL_HISTORY: usize = 240;
 const MAX_GLOBAL_INPUT_HISTORY: usize = 240;
+const SPLIT_PREVIEW_SEAM_THICKNESS: f32 = 6.0;
+const TAB_DRAG_PREVIEW_WIDTH: f32 = 180.0;
+const TAB_DRAG_PREVIEW_HEIGHT: f32 = 28.0;
 
 #[cfg(target_os = "macos")]
 fn terminal_separator_over_backdrop(backdrop: Hsla, theme: &Theme) -> Hsla {
@@ -244,7 +247,7 @@ use crate::settings_panel::{
     self, AppearancePreview, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
 };
 use crate::sidebar::{
-    DraggedTab, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry, SessionSidebar,
+    DraggedTab, DraggedTabOrigin, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry, SessionSidebar,
     SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate, SidebarRename, SidebarReorder,
     SidebarSelect,
 };
@@ -297,29 +300,113 @@ struct PaneTitleDragState {
     target: Option<PaneDropTarget>,
 }
 
+fn pane_title_drag_to_tab_active(drag: Option<&PaneTitleDragState>) -> bool {
+    drag.is_some_and(|drag| matches!(drag.target, Some(PaneDropTarget::NewTab { .. })))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum PaneDropTarget {
-    NewTab,
+    NewTab { slot: usize },
     Split(PaneSplitDropTarget),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum TabDragTarget {
     Reorder { slot: usize },
-    Split(TabSplitDropTarget),
+}
+
+fn centered_drag_preview_origin(
+    cursor: gpui::Point<gpui::Pixels>,
+    preview_size: gpui::Size<gpui::Pixels>,
+) -> gpui::Point<gpui::Pixels> {
+    point(
+        cursor.x - preview_size.width / 2.0,
+        cursor.y - preview_size.height / 2.0,
+    )
+}
+
+fn clamp_preview_origin_to_tab_bar(
+    origin: gpui::Point<gpui::Pixels>,
+    preview_size: gpui::Size<gpui::Pixels>,
+    tab_bar_top: gpui::Pixels,
+    tab_bar_height: gpui::Pixels,
+) -> gpui::Point<gpui::Pixels> {
+    let max_top = tab_bar_top + (tab_bar_height - preview_size.height).max(px(0.0));
+    point(origin.x, origin.y.clamp(tab_bar_top, max_top))
+}
+
+#[allow(dead_code)]
+fn tab_drag_preview_cursor_offset_for_tab_bar(
+    cursor_offset: gpui::Point<gpui::Pixels>,
+    preview_size: gpui::Size<gpui::Pixels>,
+    tab_bar_height: gpui::Pixels,
+) -> gpui::Point<gpui::Pixels> {
+    let max_y = (tab_bar_height - preview_size.height).max(px(0.0));
+    point(cursor_offset.x, cursor_offset.y.min(max_y))
+}
+
+fn tab_drag_preview_origin(
+    cursor: gpui::Point<gpui::Pixels>,
+    preview_size: gpui::Size<gpui::Pixels>,
+    tab_bar_top: gpui::Pixels,
+    tab_bar_height: gpui::Pixels,
+) -> gpui::Point<gpui::Pixels> {
+    clamp_preview_origin_to_tab_bar(
+        centered_drag_preview_origin(cursor, preview_size),
+        preview_size,
+        tab_bar_top,
+        tab_bar_height,
+    )
+}
+
+fn tab_like_drag_preview_size() -> gpui::Size<gpui::Pixels> {
+    Size {
+        width: px(TAB_DRAG_PREVIEW_WIDTH),
+        height: px(TAB_DRAG_PREVIEW_HEIGHT),
+    }
+}
+
+fn is_tab_strip_preview_active(
+    gpui_tab_drag_active: bool,
+    pane_title_drag_to_tab_active: bool,
+) -> bool {
+    gpui_tab_drag_active || pane_title_drag_to_tab_active
+}
+
+fn pane_title_drag_tab_slot(
+    cursor: gpui::Point<gpui::Pixels>,
+    tab_bounds: &[gpui::Bounds<gpui::Pixels>],
+    tab_count: usize,
+) -> usize {
+    if tab_bounds.is_empty() {
+        return 0;
+    }
+    for (i, bounds) in tab_bounds.iter().enumerate() {
+        let mid_x = bounds.origin.x + bounds.size.width / 2.0;
+        if cursor.x < mid_x {
+            return i;
+        }
+    }
+    tab_count
+}
+
+fn remap_drop_slot_for_current_order(source_index: usize, hovered_index: usize) -> usize {
+    if hovered_index > source_index {
+        hovered_index + 1
+    } else {
+        hovered_index
+    }
+}
+
+fn is_dragged_tab_source(
+    active_dragged_tab_session_id: Option<u64>,
+    tab_session_id: u64,
+) -> bool {
+    active_dragged_tab_session_id == Some(tab_session_id)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct TabSplitDropTarget {
-    dragged_tab_index: usize,
-    target_tab_index: usize,
-    direction: SplitDirection,
-    placement: SplitPlacement,
-    tab_bounds: Bounds<Pixels>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct TabSplitPreviewRegions {
+struct SplitPreviewRegions {
     incoming: Bounds<Pixels>,
     existing: Bounds<Pixels>,
     seam: Bounds<Pixels>,
@@ -568,6 +655,10 @@ pub struct ConWorkspace {
     /// Last painted bounds for the pane tree content, used to resolve
     /// pane-title drag drop targets in window coordinates.
     pane_content_bounds: std::sync::Arc<std::sync::Mutex<Option<Bounds<Pixels>>>>,
+    /// Last painted bounds for each tab in the horizontal strip, used to
+    /// resolve pane-title drag slot when cursor is in the tab bar.
+    /// Vec index == tab index; each entry is the tab's window-coordinate bounds.
+    tab_strip_tab_bounds: std::sync::Arc<std::sync::Mutex<Vec<Bounds<Pixels>>>>,
 }
 
 #[derive(Clone)]
@@ -1657,6 +1748,7 @@ impl ConWorkspace {
             pending_pane_title_drag_init: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pane_title_drag: None,
             pane_content_bounds: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            tab_strip_tab_bounds: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 
@@ -5099,46 +5191,6 @@ impl ConWorkspace {
             self.save_session(cx);
         }
         self.refocus_active_terminal(window, cx);
-        cx.notify();
-    }
-
-    fn merge_tab_into_tab(
-        &mut self,
-        from_index: usize,
-        to_index: usize,
-        direction: SplitDirection,
-        placement: SplitPlacement,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(target_index) =
-            tab_merge_indices_after_removal(self.tabs.len(), from_index, to_index)
-        else {
-            self.tab_drag_target = None;
-            self.tab_strip_drop_slot = None;
-            return;
-        };
-
-        self.reindex_pending_control_agent_requests_after_tab_close(from_index);
-        self.reindex_pending_surface_control_requests_after_tab_close(from_index);
-        self.remap_tab_rename_state_after_close(from_index);
-        let source_tab = self.tabs.remove(from_index);
-        self.tab_summary_engine.forget(source_tab.summary_id);
-        self.tabs[target_index].pane_tree.merge_tree(
-            source_tab.pane_tree,
-            direction,
-            placement,
-        );
-        self.active_tab = target_index;
-        self.tab_drag_target = None;
-        self.tab_strip_drop_slot = None;
-        if let Ok(mut guard) = self.active_dragged_tab_session_id.lock() {
-            *guard = None;
-        }
-        self.sync_sidebar(cx);
-        self.sync_active_terminal_focus_states(cx);
-        self.sync_active_tab_native_view_visibility_now_or_after_layout(false, window, cx);
-        self.save_session(cx);
         cx.notify();
     }
 
@@ -9580,9 +9632,10 @@ impl ConWorkspace {
     }
 
     /// Detach a pane from the active tab's split tree and promote it to a new tab.
-    fn detach_pane_to_new_tab(
+    fn detach_pane_to_new_tab_at_slot(
         &mut self,
         pane_id: usize,
+        requested_slot: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -9650,7 +9703,8 @@ impl ConWorkspace {
             );
         }
 
-        self.tabs.push(Tab {
+        let new_index = requested_slot.min(self.tabs.len());
+        self.tabs.insert(new_index, Tab {
             pane_tree: new_pane_tree,
             title: format!("Terminal {}", tab_number),
             user_label: None,
@@ -9676,7 +9730,6 @@ impl ConWorkspace {
             }
         }
 
-        let new_index = self.tabs.len() - 1;
         self.activate_tab(new_index, window, cx);
     }
 
@@ -10630,128 +10683,54 @@ impl Render for ConWorkspace {
                     .ok()
                     .and_then(|guard| *guard);
                 if let Some(content_bounds) = content_bounds {
-                    let local_left = (target.bounds.origin.x - content_bounds.origin.x).as_f32();
-                    let local_top = (target.bounds.origin.y - content_bounds.origin.y).as_f32();
-                    let indicator_thickness = 24.0;
-                    let (left, top, width, height) = match (target.direction, target.placement) {
-                        (SplitDirection::Vertical, SplitPlacement::Before) => (
-                            local_left,
-                            local_top,
-                            target.bounds.size.width.as_f32(),
-                            indicator_thickness,
-                        ),
-                        (SplitDirection::Vertical, SplitPlacement::After) => (
-                            local_left,
-                            local_top + target.bounds.size.height.as_f32() - indicator_thickness,
-                            target.bounds.size.width.as_f32(),
-                            indicator_thickness,
-                        ),
-                        (SplitDirection::Horizontal, SplitPlacement::Before) => (
-                            local_left,
-                            local_top,
-                            indicator_thickness,
-                            target.bounds.size.height.as_f32(),
-                        ),
-                        (SplitDirection::Horizontal, SplitPlacement::After) => (
-                            local_left + target.bounds.size.width.as_f32() - indicator_thickness,
-                            local_top,
-                            indicator_thickness,
-                            target.bounds.size.height.as_f32(),
-                        ),
-                    };
-                    pane_content = pane_content.child(
-                        div()
-                            .absolute()
-                            .left(px(left))
-                            .top(px(top))
-                            .w(px(width.max(0.0)))
-                            .h(px(height.max(0.0)))
-                            .bg(theme.primary.opacity(0.18)),
+                    let regions = split_preview_regions(
+                        target.bounds,
+                        target.direction,
+                        target.placement,
                     );
-                }
-            }
-        }
-
-        if let Some(TabDragTarget::Split(target)) = self.tab_drag_target {
-            let content_bounds = self
-                .pane_content_bounds
-                .lock()
-                .ok()
-                .and_then(|guard| *guard);
-            if let Some(content_bounds) = content_bounds {
-                let regions = split_preview_regions(
-                    content_bounds,
-                    target.direction,
-                    target.placement,
-                );
-                let label = self
-                    .tabs
-                    .get(target.dragged_tab_index)
-                    .map(|tab| {
-                        let terminal = tab.pane_tree.focused_terminal();
-                        let presentation = smart_tab_presentation(
-                            tab.user_label.as_deref(),
-                            tab.ai_label.as_deref(),
-                            tab.ai_icon.map(|kind| kind.svg_path()),
-                            self.effective_remote_host_for_tab(
-                                target.dragged_tab_index,
-                                terminal,
-                                cx,
-                            )
-                            .as_deref(),
-                            terminal.title(cx).as_deref(),
-                            terminal.current_dir(cx).as_deref(),
-                            target.dragged_tab_index,
+                    let (existing_left, existing_top, existing_width, existing_height) =
+                        split_preview_local_rect(regions.existing, content_bounds);
+                    let (incoming_left, incoming_top, incoming_width, incoming_height) =
+                        split_preview_local_rect(regions.incoming, content_bounds);
+                    let (seam_left, seam_top, seam_width, seam_height) =
+                        split_preview_local_rect(regions.seam, content_bounds);
+                    pane_content = pane_content
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(existing_left))
+                                .top(px(existing_top))
+                                .w(px(existing_width.max(0.0)))
+                                .h(px(existing_height.max(0.0)))
+                                .bg(theme.background.opacity(0.18)),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(incoming_left))
+                                .top(px(incoming_top))
+                                .w(px(incoming_width.max(0.0)))
+                                .h(px(incoming_height.max(0.0)))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .px(px(12.0))
+                                .bg(theme.primary.opacity(0.22))
+                                .font_family(theme.font_family.clone())
+                                .text_size(px(12.0))
+                                .text_color(theme.foreground.opacity(0.78))
+                                .child(div().truncate().child(drag.title.clone())),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .left(px(seam_left))
+                                .top(px(seam_top))
+                                .w(px(seam_width.max(0.0)))
+                                .h(px(seam_height.max(0.0)))
+                                .bg(theme.primary.opacity(0.62)),
                         );
-                        presentation.name
-                    })
-                    .unwrap_or_else(|| "Tab".to_string());
-                let to_local = |bounds: Bounds<Pixels>| {
-                    let left = (bounds.origin.x - content_bounds.origin.x).as_f32();
-                    let top = (bounds.origin.y - content_bounds.origin.y).as_f32();
-                    (left, top, bounds.size.width.as_f32(), bounds.size.height.as_f32())
-                };
-                let (existing_left, existing_top, existing_width, existing_height) =
-                    to_local(regions.existing);
-                let (incoming_left, incoming_top, incoming_width, incoming_height) =
-                    to_local(regions.incoming);
-                let (seam_left, seam_top, seam_width, seam_height) = to_local(regions.seam);
-                pane_content = pane_content
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(existing_left))
-                            .top(px(existing_top))
-                            .w(px(existing_width.max(0.0)))
-                            .h(px(existing_height.max(0.0)))
-                            .bg(theme.background.opacity(0.08)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(incoming_left))
-                            .top(px(incoming_top))
-                            .w(px(incoming_width.max(0.0)))
-                            .h(px(incoming_height.max(0.0)))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .px(px(12.0))
-                            .bg(theme.primary.opacity(0.16))
-                            .font_family(theme.font_family.clone())
-                            .text_size(px(12.0))
-                            .text_color(theme.foreground.opacity(0.76))
-                            .child(div().truncate().child(label)),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(seam_left))
-                            .top(px(seam_top))
-                            .w(px(seam_width.max(0.0)))
-                            .h(px(seam_height.max(0.0)))
-                            .bg(theme.primary.opacity(0.55)),
-                    );
+                }
             }
         }
 
@@ -11038,8 +11017,15 @@ impl Render for ConWorkspace {
         // Tabs container — appears only when there is real tab selection to do.
         // In vertical-tabs mode the side panel owns the tab list so we keep
         // this strip empty even with multiple tabs.
-        // Clear stale drop indicator when no drag is in flight.
-        if (self.tab_strip_drop_slot.is_some() || self.tab_drag_target.is_some()) && !cx.has_active_drag() {
+        // Clear stale tab reorder indicators only when neither GPUI tab drag nor
+        // pane-title-to-tab drag is active. Pane title dragging is implemented
+        // as manual mouse tracking, so `cx.has_active_drag()` is false for it.
+        let pane_title_drag_to_tab_active = pane_title_drag_to_tab_active(self.pane_title_drag.as_ref());
+        let tab_strip_preview_active =
+            is_tab_strip_preview_active(cx.has_active_drag(), pane_title_drag_to_tab_active);
+        if (self.tab_strip_drop_slot.is_some() || self.tab_drag_target.is_some())
+            && !tab_strip_preview_active
+        {
             self.tab_strip_drop_slot = None;
             self.tab_drag_target = None;
             if let Ok(mut guard) = self.active_dragged_tab_session_id.lock() {
@@ -11073,39 +11059,68 @@ impl Render for ConWorkspace {
                     }
                 },
             ))
-            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _window, cx| {
                 let to = this.tab_strip_drop_slot.unwrap_or(tab_count);
-                let split_target = if let Some(TabDragTarget::Split(target)) = this.tab_drag_target {
-                    Some(target)
-                } else {
-                    None
-                };
                 this.tab_strip_drop_slot = None;
                 this.tab_drag_target = None;
                 if let Ok(mut guard) = this.active_dragged_tab_session_id.lock() {
                     *guard = None;
-                }
-                if let Some(target) = split_target {
-                    this.merge_tab_into_tab(
-                        target.dragged_tab_index,
-                        target.target_tab_index,
-                        target.direction,
-                        target.placement,
-                        window,
-                        cx,
-                    );
-                    return;
                 }
                 this.reorder_tab_by_id(dragged.session_id, to, cx);
                 cx.notify();
             }));
 
         if show_horizontal_tabs {
-            for (index, tab) in self.tabs.iter().enumerate() {
+            // Compute the visual render order for live drag preview.
+            // When a tab is being dragged, we render tabs in the order they
+            // would appear if the drag were dropped at the current slot.
+            // This gives Chrome-like live reordering during drag.
+            let dragged_source_id = self
+                .active_dragged_tab_session_id
+                .lock()
+                .ok()
+                .and_then(|guard| *guard);
+            // For pane-title-to-tab drag: treat the dragged pane as a new
+            // "ghost" tab being inserted at the drop slot. We use a sentinel
+            // source_idx of `tab_count` (one past the end) so the reorder
+            // logic inserts a gap at the right position without removing any
+            // existing tab. The ghost tab is rendered as the drop indicator.
+            let pane_title_drag_drop_slot = if pane_title_drag_to_tab_active {
+                self.tab_strip_drop_slot
+            } else {
+                None
+            };
+
+            let render_indices: Vec<usize> = if let Some(dragged_id) = dragged_source_id
+                && let Some(source_idx) = self.tabs.iter().position(|t| t.summary_id == dragged_id)
+                && let Some(drop_slot) = self.tab_strip_drop_slot
+            {
+                // Build a reordered index list: remove source, insert at drop slot.
+                // This gives Chrome-like live reordering during GPUI tab drag.
+                let insert_at = if source_idx < drop_slot {
+                    (drop_slot - 1).min(self.tabs.len().saturating_sub(1))
+                } else {
+                    drop_slot.min(self.tabs.len().saturating_sub(1))
+                };
+                let mut indices: Vec<usize> = (0..self.tabs.len()).collect();
+                indices.remove(source_idx);
+                indices.insert(insert_at, source_idx);
+                indices
+            } else {
+                (0..self.tabs.len()).collect()
+            };
+
+            for render_pos in 0..render_indices.len() {
+                let index = render_indices[render_pos];
+                let tab = &self.tabs[index];
                 let is_active = index == self.active_tab;
                 let needs_attention = tab.needs_attention && !is_active;
                 let terminal = tab.pane_tree.focused_terminal();
                 let session_id = tab.summary_id;
+                let is_dragged_source = is_dragged_tab_source(
+                    dragged_source_id,
+                    session_id,
+                );
                 let hostname_for_tab = self.effective_remote_host_for_tab(index, terminal, cx);
                 let title_for_tab = terminal.title(cx);
                 let dir_for_tab = terminal.current_dir(cx);
@@ -11163,22 +11178,33 @@ impl Render for ConWorkspace {
                     );
 
                 // Drop indicator: 2px vertical line on the left edge of
-                // this tab when drop_slot == index, or on the right edge
+                // this tab when drop_slot == render_pos, or on the right edge
                 // of the last tab when drop_slot == tab_count.
                 let show_indicator_left =
-                    tab_strip_drop_slot == Some(index) && cx.has_active_drag() && !matches!(self.tab_drag_target, Some(TabDragTarget::Split(_)));
-                let show_indicator_right = index + 1 == tab_count
+                    tab_strip_drop_slot == Some(render_pos) && tab_strip_preview_active;
+                let show_indicator_right = render_pos + 1 == tab_count
                     && tab_strip_drop_slot == Some(tab_count)
-                    && cx.has_active_drag()
-                    && !matches!(self.tab_drag_target, Some(TabDragTarget::Split(_)));
+                    && tab_strip_preview_active;
                 let indicator_color = theme.primary;
 
                 let dragged = DraggedTab {
                     session_id,
                     label: display_title.clone().into(),
                     icon: tab_icon,
+                    origin: DraggedTabOrigin::HorizontalTabStrip,
+                    preview_constraint: Some(crate::sidebar::DraggedTabPreviewConstraint {
+                        cursor_offset_y: window.mouse_position().y - px(TOP_BAR_COMPACT_HEIGHT),
+                        top: px(TOP_BAR_COMPACT_HEIGHT),
+                        height: px(TOP_BAR_TABS_HEIGHT - TOP_BAR_COMPACT_HEIGHT),
+                        preview_height: tab_like_drag_preview_size().height,
+                    }),
                 };
                 let active_dragged_tab_session_id = self.active_dragged_tab_session_id.clone();
+                let dragged_tab_source_index = dragged_source_id.and_then(|dragged_id| {
+                    self.tabs
+                        .iter()
+                        .position(|tab| tab.summary_id == dragged_id)
+                });
 
                 let mut tab_el = div()
                     .id(ElementId::Name(format!("tab-{}", index).into()))
@@ -11239,40 +11265,29 @@ impl Render for ConWorkspace {
                     )
                     .on_drag_move::<DraggedTab>(cx.listener(
                         move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
-                            let dragged_session_id = this
-                                .active_dragged_tab_session_id
-                                .lock()
-                                .ok()
-                                .and_then(|guard| *guard);
-                            let dragged_tab_index = dragged_session_id.and_then(|session_id| {
-                                this.tabs
-                                    .iter()
-                                    .position(|tab| tab.summary_id == session_id)
-                            });
-                            if let Some(dragged_tab_index) = dragged_tab_index {
-                                if let Some(target) = tab_split_drop_target_from_position(
-                                    dragged_tab_index,
-                                    index,
-                                    event.event.position,
-                                    event.bounds,
-                                ) {
-                                    if this.tab_drag_target != Some(TabDragTarget::Split(target))
-                                        || this.tab_strip_drop_slot.is_some()
+                            let slot = match horizontal_tab_slot_from_drag(
+                                event.event.position,
+                                event.bounds,
+                                index,
+                                dragged_tab_source_index,
+                            ) {
+                                Some(s) => s,
+                                None => {
+                                    // Cursor is in the "no-swap" zone of this tab.
+                                    // Keep the dragged tab visually at its own
+                                    // position (source index) so it doesn't jump.
+                                    // Only clear if we're not already at source.
+                                    let source_slot = dragged_tab_source_index.unwrap_or(index);
+                                    let keep = Some(TabDragTarget::Reorder { slot: source_slot });
+                                    if this.tab_strip_drop_slot != Some(source_slot)
+                                        || this.tab_drag_target != keep
                                     {
-                                        this.tab_drag_target = Some(TabDragTarget::Split(target));
-                                        this.tab_strip_drop_slot = None;
+                                        this.tab_drag_target = keep;
+                                        this.tab_strip_drop_slot = Some(source_slot);
                                         cx.notify();
                                     }
                                     return;
                                 }
-                            }
-
-                            let Some(slot) = horizontal_tab_slot_from_position(
-                                event.event.position,
-                                event.bounds,
-                                index,
-                            ) else {
-                                return;
                             };
                             let new_target = Some(TabDragTarget::Reorder { slot });
                             if this.tab_strip_drop_slot != Some(slot)
@@ -11284,9 +11299,13 @@ impl Render for ConWorkspace {
                             }
                         },
                     ))
-                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, _window, cx| {
                         let to = this.tab_strip_drop_slot.unwrap_or(index);
                         this.tab_strip_drop_slot = None;
+                        this.tab_drag_target = None;
+                        if let Ok(mut guard) = this.active_dragged_tab_session_id.lock() {
+                            *guard = None;
+                        }
                         this.reorder_tab_by_id(dragged.session_id, to, cx);
                         cx.notify();
                     }));
@@ -11393,6 +11412,68 @@ impl Render for ConWorkspace {
                     }
                 }
 
+                if is_dragged_source {
+                    tab_el = tab_el.opacity(0.0);
+                }
+
+                let tab_strip_tab_bounds_for_prepaint = self.tab_strip_tab_bounds.clone();
+                tab_el = tab_el.on_prepaint(move |bounds, _, _| {
+                    if let Ok(mut guard) = tab_strip_tab_bounds_for_prepaint.lock() {
+                        if guard.len() <= index {
+                            guard.resize(index + 1, Bounds::default());
+                        }
+                        guard[index] = bounds;
+                    }
+                });
+
+                // Ghost tab gap: when a pane is being dragged to become a new
+                // tab, show a placeholder tab at the target slot so the other
+                // tabs visually shift to make room — same feel as Chrome tab drag.
+                if pane_title_drag_drop_slot == Some(render_pos) {
+                    let ghost_title = self
+                        .pane_title_drag
+                        .as_ref()
+                        .map(|d| d.title.clone())
+                        .unwrap_or_default();
+                    tabs_container = tabs_container.child(
+                        div()
+                            .flex()
+                            .flex_1()
+                            .min_w_0()
+                            .max_w(px(200.0))
+                            .items_center()
+                            .px(px(10.0))
+                            .h(px(30.0))
+                            .text_size(px(11.5))
+                            .rounded_t(px(6.0))
+                            .bg(theme.primary.opacity(0.18))
+                            .text_color(theme.foreground.opacity(0.6))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(5.0))
+                                    .w_full()
+                                    .min_w_0()
+                                    .child(
+                                        svg()
+                                            .path("phosphor/terminal.svg")
+                                            .size(px(12.0))
+                                            .flex_shrink_0()
+                                            .text_color(theme.primary.opacity(0.7)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .overflow_x_hidden()
+                                            .whitespace_nowrap()
+                                            .child(ghost_title),
+                                    ),
+                            ),
+                    );
+                }
+
                 tabs_container = tabs_container.child(tab_el.child(tab_content));
 
                 if index + 1 == tab_count {
@@ -11421,13 +11502,63 @@ impl Render for ConWorkspace {
                                     }
                                 },
                             ))
-                            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _window, cx| {
                                 let to = this.tab_strip_drop_slot.unwrap_or(tab_count);
                                 this.tab_strip_drop_slot = None;
+                                this.tab_drag_target = None;
+                                if let Ok(mut guard) = this.active_dragged_tab_session_id.lock() {
+                                    *guard = None;
+                                }
                                 this.reorder_tab_by_id(dragged.session_id, to, cx);
                                 cx.notify();
                             })),
                     );
+
+                    // Ghost tab at the end when pane drag targets slot == tab_count
+                    if pane_title_drag_drop_slot == Some(tab_count) {
+                        let ghost_title = self
+                            .pane_title_drag
+                            .as_ref()
+                            .map(|d| d.title.clone())
+                            .unwrap_or_default();
+                        tabs_container = tabs_container.child(
+                            div()
+                                .flex()
+                                .flex_1()
+                                .min_w_0()
+                                .max_w(px(200.0))
+                                .items_center()
+                                .px(px(10.0))
+                                .h(px(30.0))
+                                .text_size(px(11.5))
+                                .rounded_t(px(6.0))
+                                .bg(theme.primary.opacity(0.18))
+                                .text_color(theme.foreground.opacity(0.6))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(5.0))
+                                        .w_full()
+                                        .min_w_0()
+                                        .child(
+                                            svg()
+                                                .path("phosphor/terminal.svg")
+                                                .size(px(12.0))
+                                                .flex_shrink_0()
+                                                .text_color(theme.primary.opacity(0.7)),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .overflow_x_hidden()
+                                                .whitespace_nowrap()
+                                                .child(ghost_title),
+                                        ),
+                                ),
+                        );
+                    }
                 }
             }
         }
@@ -11799,8 +11930,19 @@ impl Render for ConWorkspace {
                                 let top_bar_h = this.current_top_bar_height();
                                 let in_top_bar = f32::from(event.position.y) < top_bar_h;
                                 let tab_count = this.tabs.len();
+                                let tab_bounds = this
+                                    .tab_strip_tab_bounds
+                                    .lock()
+                                    .ok()
+                                    .map(|g| g.clone())
+                                    .unwrap_or_default();
                                 drag.target = if in_top_bar {
-                                    Some(PaneDropTarget::NewTab)
+                                    let slot = pane_title_drag_tab_slot(
+                                        event.position,
+                                        &tab_bounds,
+                                        tab_count,
+                                    );
+                                    Some(PaneDropTarget::NewTab { slot })
                                 } else {
                                     let content_bounds = this
                                         .pane_content_bounds
@@ -11811,18 +11953,27 @@ impl Render for ConWorkspace {
                                         let panes = this.tabs[this.active_tab]
                                             .pane_tree
                                             .pane_bounds(bounds);
-                                        pane_split_drop_target_from_position(
+                                        let candidate = pane_split_drop_target_from_position(
                                             drag.pane_id,
                                             event.position,
                                             &panes,
-                                        )
-                                        .map(PaneDropTarget::Split)
+                                        );
+                                        let pane_tree = &this.tabs[this.active_tab].pane_tree;
+                                        candidate
+                                            .filter(|target| {
+                                                !pane_tree.is_noop_pane_move(
+                                                    drag.pane_id,
+                                                    target.target_pane_id,
+                                                    target.direction,
+                                                    target.placement,
+                                                )
+                                            })
+                                            .map(PaneDropTarget::Split)
                                     })
                                 };
-                                let new_slot = if matches!(drag.target, Some(PaneDropTarget::NewTab)) {
-                                    Some(tab_count)
-                                } else {
-                                    None
+                                let new_slot = match drag.target {
+                                    Some(PaneDropTarget::NewTab { slot }) => Some(slot),
+                                    _ => None,
                                 };
                                 if this.tab_strip_drop_slot != new_slot {
                                     this.tab_strip_drop_slot = new_slot;
@@ -11886,7 +12037,7 @@ impl Render for ConWorkspace {
                 })
                 .on_mouse_up(
                     MouseButton::Left,
-                    cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    cx.listener(|this, _event: &MouseUpEvent, window, cx| {
                         if this.sidebar_drag.is_some() {
                             this.sidebar_drag = None;
                             this.save_session(cx);
@@ -11922,9 +12073,9 @@ impl Render for ConWorkspace {
                             this.tab_strip_drop_slot = None;
                             if drag.active {
                                 match drag.target {
-                                    Some(PaneDropTarget::NewTab) => {
+                                    Some(PaneDropTarget::NewTab { slot }) => {
                                         let pane_id = drag.pane_id;
-                                        this.detach_pane_to_new_tab(pane_id, window, cx);
+                                        this.detach_pane_to_new_tab_at_slot(pane_id, slot, window, cx);
                                         return;
                                     }
                                     Some(PaneDropTarget::Split(target)) => {
@@ -12080,18 +12231,29 @@ impl Render for ConWorkspace {
                 .child(main_area);
 
         if let Some(drag) = self.pane_title_drag.as_ref().filter(|drag| drag.active) {
-            let preview_width = (drag.title.len() as f32 * 7.0 + 28.0).clamp(180.0, 240.0);
+            let preview_size = tab_like_drag_preview_size();
+            let preview_origin = if let Some(PaneDropTarget::NewTab { .. }) = drag.target {
+                tab_drag_preview_origin(
+                    drag.current_pos,
+                    preview_size,
+                    px(TOP_BAR_COMPACT_HEIGHT),
+                    px(TOP_BAR_TABS_HEIGHT - TOP_BAR_COMPACT_HEIGHT),
+                )
+            } else {
+                centered_drag_preview_origin(drag.current_pos, preview_size)
+            };
             root = root.child(
                 div()
                     .absolute()
-                    .left(drag.current_pos.x + px(12.0))
-                    .top(drag.current_pos.y + px(12.0))
-                    .w(px(preview_width))
-                    .h(px(28.0))
+                    .left(preview_origin.x)
+                    .top(preview_origin.y)
+                    .w(preview_size.width)
+                    .h(preview_size.height)
                     .px(px(10.0))
                     .rounded(px(4.0))
                     .flex()
                     .items_center()
+                    .cursor_grab()
                     .bg(theme.title_bar.opacity(0.92))
                     .font_family(theme.font_family.clone())
                     .text_size(px(12.0))
@@ -13078,11 +13240,11 @@ fn pane_split_drop_target_from_position(
             (left, SplitDirection::Horizontal, SplitPlacement::Before),
             (right, SplitDirection::Horizontal, SplitPlacement::After),
         ];
-        let (distance, direction, placement) = candidates
+        let (_, direction, placement) = candidates
             .into_iter()
             .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))?;
 
-        (distance <= 0.25).then_some(PaneSplitDropTarget {
+        Some(PaneSplitDropTarget {
             target_pane_id: *target_pane_id,
             direction,
             placement,
@@ -13091,17 +13253,26 @@ fn pane_split_drop_target_from_position(
     })
 }
 
+fn split_preview_local_rect(
+    bounds: Bounds<Pixels>,
+    content_bounds: Bounds<Pixels>,
+) -> (f32, f32, f32, f32) {
+    let left = (bounds.origin.x - content_bounds.origin.x).as_f32();
+    let top = (bounds.origin.y - content_bounds.origin.y).as_f32();
+    (left, top, bounds.size.width.as_f32(), bounds.size.height.as_f32())
+}
+
 fn split_preview_regions(
     bounds: Bounds<Pixels>,
     direction: SplitDirection,
     placement: SplitPlacement,
-) -> TabSplitPreviewRegions {
-    let seam_thickness = px(2.0);
+) -> SplitPreviewRegions {
+    let seam_thickness = px(SPLIT_PREVIEW_SEAM_THICKNESS);
     match (direction, placement) {
         (SplitDirection::Vertical, SplitPlacement::Before) => {
             let incoming_height = bounds.size.height * 0.5;
             let seam_top = bounds.origin.y + incoming_height - seam_thickness * 0.5;
-            TabSplitPreviewRegions {
+            SplitPreviewRegions {
                 incoming: Bounds::new(bounds.origin, size(bounds.size.width, incoming_height)),
                 existing: Bounds::new(
                     point(bounds.origin.x, bounds.origin.y + incoming_height),
@@ -13116,7 +13287,7 @@ fn split_preview_regions(
         (SplitDirection::Vertical, SplitPlacement::After) => {
             let existing_height = bounds.size.height * 0.5;
             let seam_top = bounds.origin.y + existing_height - seam_thickness * 0.5;
-            TabSplitPreviewRegions {
+            SplitPreviewRegions {
                 existing: Bounds::new(bounds.origin, size(bounds.size.width, existing_height)),
                 incoming: Bounds::new(
                     point(bounds.origin.x, bounds.origin.y + existing_height),
@@ -13131,7 +13302,7 @@ fn split_preview_regions(
         (SplitDirection::Horizontal, SplitPlacement::Before) => {
             let incoming_width = bounds.size.width * 0.5;
             let seam_left = bounds.origin.x + incoming_width - seam_thickness * 0.5;
-            TabSplitPreviewRegions {
+            SplitPreviewRegions {
                 incoming: Bounds::new(bounds.origin, size(incoming_width, bounds.size.height)),
                 existing: Bounds::new(
                     point(bounds.origin.x + incoming_width, bounds.origin.y),
@@ -13146,7 +13317,7 @@ fn split_preview_regions(
         (SplitDirection::Horizontal, SplitPlacement::After) => {
             let existing_width = bounds.size.width * 0.5;
             let seam_left = bounds.origin.x + existing_width - seam_thickness * 0.5;
-            TabSplitPreviewRegions {
+            SplitPreviewRegions {
                 existing: Bounds::new(bounds.origin, size(existing_width, bounds.size.height)),
                 incoming: Bounds::new(
                     point(bounds.origin.x + existing_width, bounds.origin.y),
@@ -13161,58 +13332,6 @@ fn split_preview_regions(
     }
 }
 
-fn remap_target_index_after_source_removal(from: usize, to: usize) -> Option<usize> {
-    match from.cmp(&to) {
-        std::cmp::Ordering::Equal => None,
-        std::cmp::Ordering::Less => Some(to.saturating_sub(1)),
-        std::cmp::Ordering::Greater => Some(to),
-    }
-}
-
-fn tab_merge_indices_after_removal(len: usize, from: usize, to: usize) -> Option<usize> {
-    if from >= len || to >= len {
-        return None;
-    }
-    remap_target_index_after_source_removal(from, to)
-}
-
-fn tab_split_drop_target_from_position(
-    dragged_tab_index: usize,
-    target_tab_index: usize,
-    cursor: gpui::Point<gpui::Pixels>,
-    bounds: gpui::Bounds<gpui::Pixels>,
-) -> Option<TabSplitDropTarget> {
-    if dragged_tab_index == target_tab_index || !point_in_bounds(&cursor, &bounds) {
-        return None;
-    }
-
-    let width = bounds.size.width.as_f32().max(1.0);
-    let height = bounds.size.height.as_f32().max(1.0);
-    let local_x = (cursor.x - bounds.origin.x).as_f32();
-    let local_y = (cursor.y - bounds.origin.y).as_f32();
-    let left = local_x / width;
-    let right = 1.0 - left;
-    let top = local_y / height;
-    let bottom = 1.0 - top;
-    let candidates = [
-        (top, SplitDirection::Vertical, SplitPlacement::Before),
-        (bottom, SplitDirection::Vertical, SplitPlacement::After),
-        (left, SplitDirection::Horizontal, SplitPlacement::Before),
-        (right, SplitDirection::Horizontal, SplitPlacement::After),
-    ];
-    let (distance, direction, placement) = candidates
-        .into_iter()
-        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))?;
-
-    (distance <= 0.25).then_some(TabSplitDropTarget {
-        dragged_tab_index,
-        target_tab_index,
-        direction,
-        placement,
-        tab_bounds: bounds,
-    })
-}
-
 fn horizontal_tab_slot_from_position(
     cursor: gpui::Point<gpui::Pixels>,
     bounds: gpui::Bounds<gpui::Pixels>,
@@ -13224,6 +13343,31 @@ fn horizontal_tab_slot_from_position(
     let local_x = cursor.x - bounds.origin.x;
     let half = bounds.size.width / 2.0;
     Some(if local_x < half { index } else { index + 1 })
+}
+
+fn horizontal_tab_slot_from_drag(
+    cursor: gpui::Point<gpui::Pixels>,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    hovered_index: usize,
+    source_index: Option<usize>,
+) -> Option<usize> {
+    if !point_in_bounds(&cursor, &bounds) {
+        return None;
+    }
+
+    let Some(source_index) = source_index else {
+        return horizontal_tab_slot_from_position(cursor, bounds, hovered_index);
+    };
+
+    let local_x = cursor.x - bounds.origin.x;
+    let half = bounds.size.width / 2.0;
+    if hovered_index > source_index && local_x >= half {
+        Some(remap_drop_slot_for_current_order(source_index, hovered_index))
+    } else if hovered_index < source_index && local_x < half {
+        Some(remap_drop_slot_for_current_order(source_index, hovered_index))
+    } else {
+        None
+    }
 }
 
 fn trailing_drop_slot_from_position(
@@ -13294,14 +13438,109 @@ struct NewTabSyncPolicy {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConWorkspace, SplitDirection, SplitPlacement, TabRenameStateSnapshot,
-        horizontal_tab_slot_from_position, normalize_tab_user_label,
-        pane_split_drop_target_from_position, remap_tab_rename_state_after_close,
-        remap_tab_rename_state_after_reorder, remap_target_index_after_source_removal,
-        split_preview_regions, tab_merge_indices_after_removal, tab_rename_commit_label,
-        tab_rename_initial_label, tab_split_drop_target_from_position, trailing_drop_slot_from_position,
+        ConWorkspace, SPLIT_PREVIEW_SEAM_THICKNESS, SplitDirection, SplitPlacement, TabRenameStateSnapshot,
+        centered_drag_preview_origin, clamp_preview_origin_to_tab_bar, horizontal_tab_slot_from_drag, horizontal_tab_slot_from_position, is_dragged_tab_source, is_tab_strip_preview_active, normalize_tab_user_label,
+        pane_split_drop_target_from_position, pane_title_drag_tab_slot, pane_title_drag_to_tab_active, remap_drop_slot_for_current_order, remap_tab_rename_state_after_close,
+        remap_tab_rename_state_after_reorder, split_preview_local_rect, split_preview_regions,
+        tab_drag_preview_cursor_offset_for_tab_bar, tab_drag_preview_origin, tab_like_drag_preview_size, tab_rename_commit_label, tab_rename_initial_label, trailing_drop_slot_from_position,
     };
+    use crate::sidebar::{DraggedTabPreviewConstraint, constrained_drag_preview_y_shift};
     use gpui::{Bounds, Point, Size, px};
+
+    #[test]
+    fn tab_drag_preview_origin_is_clamped_to_tab_bar_height() {
+        let preview_size = Size { width: px(180.0), height: px(28.0) };
+        let origin_below = Point { x: px(120.0), y: px(100.0) };
+
+        assert_eq!(
+            clamp_preview_origin_to_tab_bar(origin_below, preview_size, px(28.0), px(36.0)),
+            Point { x: px(120.0), y: px(36.0) }
+        );
+    }
+
+    #[test]
+    fn tab_drag_preview_origin_keeps_preview_inside_tab_bar_while_cursor_leaves() {
+        assert_eq!(
+            tab_drag_preview_origin(
+                Point { x: px(300.0), y: px(120.0) },
+                Size { width: px(180.0), height: px(28.0) },
+                px(28.0),
+                px(36.0),
+            ),
+            Point { x: px(210.0), y: px(36.0) }
+        );
+    }
+
+    #[test]
+    fn tab_drag_preview_cursor_offset_is_limited_to_tab_bar_height() {
+        assert_eq!(
+            tab_drag_preview_cursor_offset_for_tab_bar(
+                Point { x: px(40.0), y: px(50.0) },
+                Size { width: px(180.0), height: px(28.0) },
+                px(36.0),
+            ),
+            Point { x: px(40.0), y: px(8.0) }
+        );
+    }
+
+    #[test]
+    fn dragged_tab_preview_y_shift_updates_with_current_mouse_position() {
+        let constraint = DraggedTabPreviewConstraint {
+            cursor_offset_y: px(12.0),
+            top: px(28.0),
+            height: px(36.0),
+            preview_height: px(28.0),
+        };
+
+        assert_eq!(constrained_drag_preview_y_shift(px(120.0), constraint), px(-72.0));
+    }
+
+    #[test]
+    fn pane_to_tab_drag_preview_uses_tab_like_size() {
+        assert_eq!(
+            tab_like_drag_preview_size(),
+            Size { width: px(180.0), height: px(28.0) }
+        );
+    }
+
+    #[test]
+    fn centered_drag_preview_origin_places_cursor_at_preview_center() {
+        assert_eq!(
+            centered_drag_preview_origin(
+                Point { x: px(300.0), y: px(200.0) },
+                Size { width: px(180.0), height: px(28.0) },
+            ),
+            Point { x: px(210.0), y: px(186.0) }
+        );
+    }
+
+    #[test]
+    fn pane_title_drag_to_tab_preview_activates_tab_strip_without_gpui_drag() {
+        let drag = super::PaneTitleDragState {
+            pane_id: 1,
+            title: "pane".into(),
+            start_pos: Point { x: px(0.0), y: px(0.0) },
+            current_pos: Point { x: px(20.0), y: px(32.0) },
+            active: true,
+            target: Some(super::PaneDropTarget::NewTab { slot: 1 }),
+        };
+
+        assert!(pane_title_drag_to_tab_active(Some(&drag)));
+    }
+
+    #[test]
+    fn pane_title_drag_to_tab_keeps_tab_strip_preview_active_without_gpui_tab_drag() {
+        assert!(is_tab_strip_preview_active(false, true));
+        assert!(is_tab_strip_preview_active(true, false));
+        assert!(!is_tab_strip_preview_active(false, false));
+    }
+
+    #[test]
+    fn tab_drag_source_is_hidden_only_for_active_dragged_session() {
+        assert!(is_dragged_tab_source(Some(42), 42));
+        assert!(!is_dragged_tab_source(Some(42), 7));
+        assert!(!is_dragged_tab_source(None, 42));
+    }
 
     #[test]
     fn normalize_tab_user_label_trims_and_clears_blank_values() {
@@ -13409,15 +13648,6 @@ mod tests {
     }
 
     #[test]
-    fn tab_merge_indices_after_removal_validates_and_remaps() {
-        assert_eq!(tab_merge_indices_after_removal(3, 0, 0), None);
-        assert_eq!(tab_merge_indices_after_removal(3, 3, 0), None);
-        assert_eq!(tab_merge_indices_after_removal(3, 0, 3), None);
-        assert_eq!(tab_merge_indices_after_removal(3, 0, 2), Some(1));
-        assert_eq!(tab_merge_indices_after_removal(3, 2, 0), Some(0));
-    }
-
-    #[test]
     fn split_preview_regions_vertical_before_splits_top_and_bottom() {
         let bounds = Bounds {
             origin: Point { x: px(10.0), y: px(20.0) },
@@ -13435,7 +13665,7 @@ mod tests {
         assert_eq!(regions.existing.origin, Point { x: px(10.0), y: px(120.0) });
         assert_eq!(regions.existing.size, Size { width: px(300.0), height: px(100.0) });
         assert_eq!(regions.seam.size.width, px(300.0));
-        assert_eq!(regions.seam.size.height, px(2.0));
+        assert_eq!(regions.seam.size.height, px(SPLIT_PREVIEW_SEAM_THICKNESS));
     }
 
     #[test]
@@ -13455,99 +13685,29 @@ mod tests {
         assert_eq!(regions.existing.size, Size { width: px(150.0), height: px(200.0) });
         assert_eq!(regions.incoming.origin, Point { x: px(160.0), y: px(20.0) });
         assert_eq!(regions.incoming.size, Size { width: px(150.0), height: px(200.0) });
-        assert_eq!(regions.seam.size.width, px(2.0));
+        assert_eq!(regions.seam.size.width, px(SPLIT_PREVIEW_SEAM_THICKNESS));
         assert_eq!(regions.seam.size.height, px(200.0));
     }
 
     #[test]
-    fn remap_target_index_after_source_removal_handles_ordering() {
-        assert_eq!(remap_target_index_after_source_removal(0, 0), None);
-        assert_eq!(remap_target_index_after_source_removal(0, 2), Some(1));
-        assert_eq!(remap_target_index_after_source_removal(2, 0), Some(0));
-    }
-
-    #[test]
-    fn tab_split_drop_target_uses_four_edge_model() {
-        let bounds = Bounds {
+    fn split_preview_local_rect_maps_absolute_bounds_to_content_space() {
+        let content_bounds = Bounds {
             origin: Point { x: px(100.0), y: px(50.0) },
-            size: Size { width: px(200.0), height: px(40.0) },
+            size: Size { width: px(600.0), height: px(400.0) },
+        };
+        let absolute = Bounds {
+            origin: Point { x: px(250.0), y: px(140.0) },
+            size: Size { width: px(300.0), height: px(120.0) },
         };
 
-        let top = tab_split_drop_target_from_position(
-            0,
-            1,
-            Point { x: px(200.0), y: px(55.0) },
-            bounds,
-        )
-        .expect("top edge target");
-        assert_eq!(top.dragged_tab_index, 0);
-        assert_eq!(top.target_tab_index, 1);
-        assert_eq!(top.direction, SplitDirection::Vertical);
-        assert_eq!(top.placement, SplitPlacement::Before);
-
-        let bottom = tab_split_drop_target_from_position(
-            0,
-            1,
-            Point { x: px(200.0), y: px(87.0) },
-            bounds,
-        )
-        .expect("bottom edge target");
-        assert_eq!(bottom.direction, SplitDirection::Vertical);
-        assert_eq!(bottom.placement, SplitPlacement::After);
-
-        let left = tab_split_drop_target_from_position(
-            0,
-            1,
-            Point { x: px(110.0), y: px(70.0) },
-            bounds,
-        )
-        .expect("left edge target");
-        assert_eq!(left.direction, SplitDirection::Horizontal);
-        assert_eq!(left.placement, SplitPlacement::Before);
-
-        let right = tab_split_drop_target_from_position(
-            0,
-            1,
-            Point { x: px(290.0), y: px(70.0) },
-            bounds,
-        )
-        .expect("right edge target");
-        assert_eq!(right.direction, SplitDirection::Horizontal);
-        assert_eq!(right.placement, SplitPlacement::After);
+        assert_eq!(
+            split_preview_local_rect(absolute, content_bounds),
+            (150.0, 90.0, 300.0, 120.0)
+        );
     }
 
     #[test]
-    fn tab_split_drop_target_ignores_center_source_and_outside() {
-        let bounds = Bounds {
-            origin: Point { x: px(100.0), y: px(50.0) },
-            size: Size { width: px(200.0), height: px(40.0) },
-        };
-
-        assert!(tab_split_drop_target_from_position(
-            0,
-            1,
-            Point { x: px(200.0), y: px(70.0) },
-            bounds,
-        )
-        .is_none());
-        assert!(tab_split_drop_target_from_position(
-            1,
-            1,
-            Point { x: px(110.0), y: px(70.0) },
-            bounds,
-        )
-        .is_none());
-        assert!(tab_split_drop_target_from_position(
-            0,
-            1,
-            Point { x: px(90.0), y: px(70.0) },
-            bounds,
-        )
-        .is_none());
-    }
-
-    #[test]
-    fn pane_split_drop_target_uses_four_edge_model() {
+    fn pane_split_drop_target_uses_whole_pane_quadrants() {
         let panes = [(1, Bounds {
             origin: Point { x: px(100.0), y: px(200.0) },
             size: Size { width: px(400.0), height: px(300.0) },
@@ -13555,55 +13715,49 @@ mod tests {
 
         let top = pane_split_drop_target_from_position(
             0,
-            Point { x: px(300.0), y: px(220.0) },
+            Point { x: px(300.0), y: px(320.0) },
             &panes,
         )
-        .expect("top edge target");
+        .expect("top interior target");
         assert_eq!(top.target_pane_id, 1);
         assert_eq!(top.direction, SplitDirection::Vertical);
         assert_eq!(top.placement, SplitPlacement::Before);
 
         let bottom = pane_split_drop_target_from_position(
             0,
-            Point { x: px(300.0), y: px(485.0) },
+            Point { x: px(300.0), y: px(380.0) },
             &panes,
         )
-        .expect("bottom edge target");
+        .expect("bottom interior target");
         assert_eq!(bottom.direction, SplitDirection::Vertical);
         assert_eq!(bottom.placement, SplitPlacement::After);
 
         let left = pane_split_drop_target_from_position(
             0,
-            Point { x: px(120.0), y: px(350.0) },
+            Point { x: px(260.0), y: px(350.0) },
             &panes,
         )
-        .expect("left edge target");
+        .expect("left interior target");
         assert_eq!(left.direction, SplitDirection::Horizontal);
         assert_eq!(left.placement, SplitPlacement::Before);
 
         let right = pane_split_drop_target_from_position(
             0,
-            Point { x: px(485.0), y: px(350.0) },
+            Point { x: px(340.0), y: px(350.0) },
             &panes,
         )
-        .expect("right edge target");
+        .expect("right interior target");
         assert_eq!(right.direction, SplitDirection::Horizontal);
         assert_eq!(right.placement, SplitPlacement::After);
     }
 
     #[test]
-    fn pane_split_drop_target_ignores_center_and_source_pane() {
+    fn pane_split_drop_target_ignores_source_pane() {
         let panes = [(1, Bounds {
             origin: Point { x: px(100.0), y: px(200.0) },
             size: Size { width: px(400.0), height: px(300.0) },
         })];
 
-        assert!(pane_split_drop_target_from_position(
-            0,
-            Point { x: px(300.0), y: px(350.0) },
-            &panes,
-        )
-        .is_none());
         assert!(pane_split_drop_target_from_position(
             1,
             Point { x: px(120.0), y: px(350.0) },
@@ -13741,6 +13895,77 @@ mod tests {
             ),
             Some(4)
         );
+    }
+
+    #[test]
+    fn horizontal_tab_drag_waits_until_crossing_neighbor_midpoint() {
+        let bounds = Bounds {
+            origin: Point { x: px(200.0), y: px(20.0) },
+            size: Size { width: px(100.0), height: px(30.0) },
+        };
+
+        assert_eq!(
+            horizontal_tab_slot_from_drag(Point { x: px(220.0), y: px(25.0) }, bounds, 2, Some(1)),
+            None,
+            "dragging tab 1 right over tab 2 left half should not move tab 2 yet"
+        );
+        assert_eq!(
+            horizontal_tab_slot_from_drag(Point { x: px(280.0), y: px(25.0) }, bounds, 2, Some(1)),
+            Some(3),
+            "dragging tab 1 right over tab 2 right half should move tab 2 left"
+        );
+
+        let left_neighbor = Bounds {
+            origin: Point { x: px(100.0), y: px(20.0) },
+            size: Size { width: px(100.0), height: px(30.0) },
+        };
+        assert_eq!(
+            horizontal_tab_slot_from_drag(Point { x: px(180.0), y: px(25.0) }, left_neighbor, 1, Some(2)),
+            None,
+            "dragging tab 2 left over tab 1 right half should not move tab 1 yet"
+        );
+        assert_eq!(
+            horizontal_tab_slot_from_drag(Point { x: px(120.0), y: px(25.0) }, left_neighbor, 1, Some(2)),
+            Some(1),
+            "dragging tab 2 left over tab 1 left half should move tab 1 right"
+        );
+    }
+
+    #[test]
+    fn horizontal_tab_drag_without_source_still_uses_half_slots() {
+        let bounds = Bounds {
+            origin: Point { x: px(100.0), y: px(20.0) },
+            size: Size { width: px(80.0), height: px(30.0) },
+        };
+
+        assert_eq!(
+            horizontal_tab_slot_from_drag(Point { x: px(110.0), y: px(25.0) }, bounds, 3, None),
+            Some(3)
+        );
+        assert_eq!(
+            horizontal_tab_slot_from_drag(Point { x: px(150.0), y: px(25.0) }, bounds, 3, None),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn pane_title_drag_tab_slot_uses_midpoint_of_each_tab() {
+        let tab_bounds = vec![
+            gpui::Bounds { origin: gpui::Point { x: px(0.0), y: px(0.0) }, size: gpui::Size { width: px(100.0), height: px(30.0) } },
+            gpui::Bounds { origin: gpui::Point { x: px(100.0), y: px(0.0) }, size: gpui::Size { width: px(100.0), height: px(30.0) } },
+            gpui::Bounds { origin: gpui::Point { x: px(200.0), y: px(0.0) }, size: gpui::Size { width: px(100.0), height: px(30.0) } },
+        ];
+
+        assert_eq!(pane_title_drag_tab_slot(Point { x: px(30.0), y: px(15.0) }, &tab_bounds, 3), 0);
+        assert_eq!(pane_title_drag_tab_slot(Point { x: px(80.0), y: px(15.0) }, &tab_bounds, 3), 1);
+        assert_eq!(pane_title_drag_tab_slot(Point { x: px(160.0), y: px(15.0) }, &tab_bounds, 3), 2);
+        assert_eq!(pane_title_drag_tab_slot(Point { x: px(260.0), y: px(15.0) }, &tab_bounds, 3), 3);
+    }
+
+    #[test]
+    fn remap_drop_slot_preserves_current_order_for_live_drag_preview() {
+        assert_eq!(remap_drop_slot_for_current_order(1, 2), 3);
+        assert_eq!(remap_drop_slot_for_current_order(2, 1), 1);
     }
 
     #[test]
