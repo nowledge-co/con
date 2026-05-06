@@ -3,7 +3,7 @@
 //! that owns the renderer, VT parser, and ConPTY for one pane).
 //!
 //! Same public type names as the macOS `ghostty_view` so the rest of
-//! `con-app` (terminal_pane.rs, workspace.rs) compiles unchanged. The
+//! `con-app` (terminal_pane.rs, workspace/) compiles unchanged. The
 //! `#[path]` selector in `main.rs` picks this file on Windows.
 //!
 //! Paint model:

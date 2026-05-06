@@ -1,0 +1,258 @@
+use super::*;
+
+pub(super) fn point_in_bounds(
+    p: &gpui::Point<gpui::Pixels>,
+    b: &gpui::Bounds<gpui::Pixels>,
+) -> bool {
+    p.x >= b.origin.x
+        && p.x < b.origin.x + b.size.width
+        && p.y >= b.origin.y
+        && p.y < b.origin.y + b.size.height
+}
+
+pub(super) fn pane_split_drop_target_from_position(
+    source_pane_id: usize,
+    cursor: gpui::Point<gpui::Pixels>,
+    panes: &[(usize, gpui::Bounds<gpui::Pixels>)],
+) -> Option<PaneSplitDropTarget> {
+    panes.iter().find_map(|(target_pane_id, bounds)| {
+        if *target_pane_id == source_pane_id || !point_in_bounds(&cursor, bounds) {
+            return None;
+        }
+
+        let width = bounds.size.width.as_f32().max(1.0);
+        let height = bounds.size.height.as_f32().max(1.0);
+        let local_x = (cursor.x - bounds.origin.x).as_f32();
+        let local_y = (cursor.y - bounds.origin.y).as_f32();
+        let left = local_x / width;
+        let right = 1.0 - left;
+        let top = local_y / height;
+        let bottom = 1.0 - top;
+        let candidates = [
+            (top, SplitDirection::Vertical, SplitPlacement::Before),
+            (bottom, SplitDirection::Vertical, SplitPlacement::After),
+            (left, SplitDirection::Horizontal, SplitPlacement::Before),
+            (right, SplitDirection::Horizontal, SplitPlacement::After),
+        ];
+        let (_, direction, placement) = candidates
+            .into_iter()
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))?;
+
+        Some(PaneSplitDropTarget {
+            target_pane_id: *target_pane_id,
+            direction,
+            placement,
+            bounds: *bounds,
+        })
+    })
+}
+
+pub(super) fn split_preview_local_rect(
+    bounds: Bounds<Pixels>,
+    content_bounds: Bounds<Pixels>,
+) -> (f32, f32, f32, f32) {
+    let left = (bounds.origin.x - content_bounds.origin.x).as_f32();
+    let top = (bounds.origin.y - content_bounds.origin.y).as_f32();
+    (
+        left,
+        top,
+        bounds.size.width.as_f32(),
+        bounds.size.height.as_f32(),
+    )
+}
+
+pub(super) fn split_preview_regions(
+    bounds: Bounds<Pixels>,
+    direction: SplitDirection,
+    placement: SplitPlacement,
+) -> SplitPreviewRegions {
+    let seam_thickness = px(SPLIT_PREVIEW_SEAM_THICKNESS);
+    match (direction, placement) {
+        (SplitDirection::Vertical, SplitPlacement::Before) => {
+            let incoming_height = bounds.size.height * 0.5;
+            let seam_top = bounds.origin.y + incoming_height - seam_thickness * 0.5;
+            SplitPreviewRegions {
+                incoming: Bounds::new(bounds.origin, size(bounds.size.width, incoming_height)),
+                existing: Bounds::new(
+                    point(bounds.origin.x, bounds.origin.y + incoming_height),
+                    size(bounds.size.width, bounds.size.height - incoming_height),
+                ),
+                seam: Bounds::new(
+                    point(bounds.origin.x, seam_top),
+                    size(bounds.size.width, seam_thickness),
+                ),
+            }
+        }
+        (SplitDirection::Vertical, SplitPlacement::After) => {
+            let existing_height = bounds.size.height * 0.5;
+            let seam_top = bounds.origin.y + existing_height - seam_thickness * 0.5;
+            SplitPreviewRegions {
+                existing: Bounds::new(bounds.origin, size(bounds.size.width, existing_height)),
+                incoming: Bounds::new(
+                    point(bounds.origin.x, bounds.origin.y + existing_height),
+                    size(bounds.size.width, bounds.size.height - existing_height),
+                ),
+                seam: Bounds::new(
+                    point(bounds.origin.x, seam_top),
+                    size(bounds.size.width, seam_thickness),
+                ),
+            }
+        }
+        (SplitDirection::Horizontal, SplitPlacement::Before) => {
+            let incoming_width = bounds.size.width * 0.5;
+            let seam_left = bounds.origin.x + incoming_width - seam_thickness * 0.5;
+            SplitPreviewRegions {
+                incoming: Bounds::new(bounds.origin, size(incoming_width, bounds.size.height)),
+                existing: Bounds::new(
+                    point(bounds.origin.x + incoming_width, bounds.origin.y),
+                    size(bounds.size.width - incoming_width, bounds.size.height),
+                ),
+                seam: Bounds::new(
+                    point(seam_left, bounds.origin.y),
+                    size(seam_thickness, bounds.size.height),
+                ),
+            }
+        }
+        (SplitDirection::Horizontal, SplitPlacement::After) => {
+            let existing_width = bounds.size.width * 0.5;
+            let seam_left = bounds.origin.x + existing_width - seam_thickness * 0.5;
+            SplitPreviewRegions {
+                existing: Bounds::new(bounds.origin, size(existing_width, bounds.size.height)),
+                incoming: Bounds::new(
+                    point(bounds.origin.x + existing_width, bounds.origin.y),
+                    size(bounds.size.width - existing_width, bounds.size.height),
+                ),
+                seam: Bounds::new(
+                    point(seam_left, bounds.origin.y),
+                    size(seam_thickness, bounds.size.height),
+                ),
+            }
+        }
+    }
+}
+
+pub(super) fn horizontal_tab_slot_from_position(
+    cursor: gpui::Point<gpui::Pixels>,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    index: usize,
+) -> Option<usize> {
+    if !point_in_bounds(&cursor, &bounds) {
+        return None;
+    }
+    let local_x = cursor.x - bounds.origin.x;
+    let half = bounds.size.width / 2.0;
+    Some(if local_x < half { index } else { index + 1 })
+}
+
+pub(super) fn horizontal_tab_slot_from_drag(
+    cursor: gpui::Point<gpui::Pixels>,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    hovered_index: usize,
+    source_index: Option<usize>,
+) -> Option<usize> {
+    if !point_in_bounds(&cursor, &bounds) {
+        return None;
+    }
+
+    let Some(source_index) = source_index else {
+        return horizontal_tab_slot_from_position(cursor, bounds, hovered_index);
+    };
+
+    // Chrome-style: trigger swap as soon as cursor enters a neighbouring tab.
+    // After the swap the dragged tab occupies hovered_index, so cursor is
+    // inside the dragged tab and no further swap fires until cursor moves on.
+    if hovered_index != source_index {
+        Some(remap_drop_slot_for_current_order(
+            source_index,
+            hovered_index,
+        ))
+    } else {
+        None
+    }
+}
+
+pub(super) fn trailing_drop_slot_from_position(
+    cursor: gpui::Point<gpui::Pixels>,
+    bounds: gpui::Bounds<gpui::Pixels>,
+    slot: usize,
+) -> Option<usize> {
+    point_in_bounds(&cursor, &bounds).then_some(slot)
+}
+
+pub(super) fn tab_rename_commit_label(
+    value: &str,
+    changed_by_user: bool,
+) -> Option<Option<String>> {
+    changed_by_user.then(|| normalize_tab_user_label(value))
+}
+
+pub(super) fn normalize_tab_user_label(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+#[cfg(test)]
+pub(super) fn remap_tab_rename_state_after_close(
+    rename: Option<TabRenameStateSnapshot>,
+    cancelled_id: Option<u64>,
+    closed_index: usize,
+) -> (Option<TabRenameStateSnapshot>, Option<u64>) {
+    let rename = rename.and_then(|state| match state.tab_index.cmp(&closed_index) {
+        std::cmp::Ordering::Less => Some(state),
+        std::cmp::Ordering::Equal => None,
+        std::cmp::Ordering::Greater => Some(TabRenameStateSnapshot {
+            tab_id: state.tab_id,
+            tab_index: state.tab_index - 1,
+        }),
+    });
+    (rename, cancelled_id)
+}
+
+#[cfg(test)]
+pub(super) fn remap_tab_rename_state_after_reorder(
+    rename: Option<TabRenameStateSnapshot>,
+    cancelled_id: Option<u64>,
+    old_order: &[u64],
+    new_order: &[u64],
+) -> (Option<TabRenameStateSnapshot>, Option<u64>) {
+    let rename = rename.and_then(|state| {
+        let summary_id = *old_order.get(state.tab_index)?;
+        let tab_index = new_order.iter().position(|id| *id == summary_id)?;
+        Some(TabRenameStateSnapshot {
+            tab_id: state.tab_id,
+            tab_index,
+        })
+    });
+    (rename, cancelled_id)
+}
+
+pub(super) fn clear_pane_tab_promotion_drag_state(
+    pane_title_drag: &mut Option<PaneTitleDragState>,
+    tab_strip_drop_slot: &mut Option<usize>,
+    tab_drag_target: &mut Option<TabDragTarget>,
+) {
+    *pane_title_drag = None;
+    *tab_strip_drop_slot = None;
+    *tab_drag_target = None;
+}
+
+pub(super) fn rebase_active_tab_for_insert(active_tab: usize, insert_index: usize) -> usize {
+    if insert_index <= active_tab {
+        active_tab.saturating_add(1)
+    } else {
+        active_tab
+    }
+}
+
+#[cfg(test)]
+pub(super) struct NewTabSyncPolicy {
+    pub(super) activates_new_tab: bool,
+    pub(super) syncs_sidebar: bool,
+    pub(super) notifies_ui: bool,
+    pub(super) syncs_native_visibility: bool,
+    pub(super) reuses_shared_tab_activation_flow: bool,
+}

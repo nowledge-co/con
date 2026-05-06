@@ -309,7 +309,7 @@ Primary files:
   - global hotkey registration and callback dispatch
 - `crates/con-app/src/objc/quick_terminal_trampoline.m`
   - AppKit configure / animation / auto-hide behavior
-- `crates/con-app/src/workspace.rs`
+- `crates/con-app/src/workspace/`
   - shared workspace behavior
   - destroy-on-last-tab / destroy-on-last-shell-exit logic
 

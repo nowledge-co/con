@@ -143,7 +143,7 @@ against a Linux desktop screenshot (not the cloud-VM capture):
    `WindowDecorations::Client` in `default_window_decorations`,
    added a `TitlebarOptions` (matching what Windows already
    passes), and extended the existing `caption_buttons` cluster
-   in `workspace.rs` to also build on Linux. The X11 backend's
+   in `crates/con-app/src/workspace/` to also build on Linux. The X11 backend's
    `on_hit_test_window_control` is a no-op, so each Linux button
    gets an explicit `on_mouse_down` handler that calls
    `window.minimize_window()` / `zoom_window()` / `remove_window()`
@@ -278,7 +278,7 @@ testing:
      `prev.generation == snapshot.generation` check; libghostty-vt
      bumps the screen generation on every parser feed that changed
      grid state.
-   - The shared workspace poll loop in `workspace.rs` slept 16 ms
+   - The shared workspace poll loop in `crates/con-app/src/workspace/` slept 16 ms
      between iterations whenever no event fired in the previous
      pass. PTY data arriving 1 ms after the loop entered the sleep
      had to wait the full 15 ms before any render was even

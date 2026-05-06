@@ -2,7 +2,7 @@
 //!
 //! Mirrors the public surface of `crate::ghostty_view` exactly — same
 //! types, same event names, same method signatures — so callers in
-//! `terminal_pane.rs` and `workspace.rs` compile unchanged. The view
+//! `terminal_pane.rs` and `workspace/` compile unchanged. The view
 //! paints a centered "Terminal backend under construction" card that
 //! links to the porting plan, and all terminal operations are no-ops.
 //!
@@ -47,7 +47,7 @@ pub struct GhosttyView {
 /// Register stub key bindings. On macOS the real view binds Tab/Shift-Tab
 /// so the terminal captures focus-cycling keys; on the stub there is no
 /// terminal to forward them to, but we keep the action names so
-/// `workspace.rs` can reference them without cfg branches.
+/// `workspace/` can reference them without cfg branches.
 pub fn init(_cx: &mut App) {}
 
 impl GhosttyView {

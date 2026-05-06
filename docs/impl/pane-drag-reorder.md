@@ -86,7 +86,7 @@ Rules:
 
 ### `PaneTitleDragState`
 
-Defined in `crates/con-app/src/workspace.rs`.
+Defined in `crates/con-app/src/workspace/types.rs`.
 
 Tracks the visible workspace overlay and pane drop target:
 
@@ -164,7 +164,7 @@ This prevents the built-in GPUI preview from appearing at a position tied to the
 
 ### Workspace floating title overlay
 
-Implemented near the root render path in `crates/con-app/src/workspace.rs`.
+Implemented near the root render path in `crates/con-app/src/workspace/render.rs`.
 
 When `pane_title_drag.active` is true, workspace renders a small title-like overlay:
 
@@ -324,7 +324,7 @@ When promoting a pane to a new tab, the created tab should preserve a useful lab
 
 ### Unit tests
 
-Relevant tests in `workspace.rs` cover:
+Relevant tests in `crates/con-app/src/workspace/tests.rs` cover:
 
 - floating pane preview origin centers under cursor
 - tab-like preview size
