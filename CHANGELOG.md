@@ -11,11 +11,11 @@ con is still pre-release, so entries may group related beta work while the produ
 **Panes**
 
 - Added pane title bars for split layouts, with direct close and fullscreen
-  controls on each pane.
+  controls on each pane. _(PR [#149](https://github.com/nowledge-co/con-terminal/pull/149) by [@sundy-li](https://github.com/sundy-li))_
 - Added pane title-bar dragging. Drag a pane title to rearrange split panes, or
-  drop it into the tab strip to promote that pane into its own tab.
+  drop it into the tab strip to promote that pane into its own tab. _(PR [#149](https://github.com/nowledge-co/con-terminal/pull/149) by [@sundy-li](https://github.com/sundy-li))_
 - Added an Appearance setting to hide pane title bars when you want the
-  sparsest terminal-only layout.
+  sparsest terminal-only layout. _(PR [#149](https://github.com/nowledge-co/con-terminal/pull/149) by [@sundy-li](https://github.com/sundy-li))_
 
 ### Fixed
 
@@ -23,19 +23,19 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Fixed embedded Ghostty surface scale sync when moving a window between Retina
   and non-Retina displays. Existing panes now update display id, backing scale,
-  layer scale, and pixel size together instead of keeping stale cell metrics.
+  layer scale, and pixel size together instead of keeping stale cell metrics. _(PR [#150](https://github.com/nowledge-co/con-terminal/pull/150) by [@chenghuzi](https://github.com/chenghuzi))_
 
 **Panes**
 
 - Fixed pane-drag preview cleanup so canceled or completed drags do not leave a
-  stale tab-promotion preview behind.
+  stale tab-promotion preview behind. _(PR [#149](https://github.com/nowledge-co/con-terminal/pull/149) by [@sundy-li](https://github.com/sundy-li))_
 - Fixed pane reordering so only true direct-sibling no-op moves are ignored;
-  cross-subtree moves now land in the requested split position.
+  cross-subtree moves now land in the requested split position. _(PR [#149](https://github.com/nowledge-co/con-terminal/pull/149) by [@sundy-li](https://github.com/sundy-li))_
 
 **Developer Experience**
 
 - Made the portable CI Zig installer retry against Con's mirror if the primary
-  Zig download fails.
+  Zig download fails. _(PR [#149](https://github.com/nowledge-co/con-terminal/pull/149) by [@sundy-li](https://github.com/sundy-li))_
 
 ## `v0.1.0-beta.63`
 
@@ -45,7 +45,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Added **Quick Terminal** to the command palette on macOS, matching the View
   menu entry so it can be opened while Con is frontmost even when the global
-  hotkey is disabled.
+  hotkey is disabled. _(PR [#146](https://github.com/nowledge-co/con-terminal/pull/146) by [@nowledge-co](https://github.com/nowledge-co))_
 
 ### Fixed
 
@@ -54,13 +54,13 @@ con is still pre-release, so entries may group related beta work while the produ
 - Fixed pane-local surface geometry drift that could make TUI output appear
   clipped after switching between surfaces or changing pane layouts. Activating
   a surface now revalidates Ghostty's embedded terminal size against the
-  current pane before exposing it.
+  current pane before exposing it. _(PR [#146](https://github.com/nowledge-co/con-terminal/pull/146) by [@nowledge-co](https://github.com/nowledge-co))_
 
 **Linux**
 
 - Fixed Linux preview terminal rows wrapping like prose in split panes. Rows now
   stay on one fixed terminal line and clip at the pane edge, which prevents TUI
-  layouts from reflowing into later rows.
+  layouts from reflowing into later rows. _(PR [#146](https://github.com/nowledge-co/con-terminal/pull/146) by [@nowledge-co](https://github.com/nowledge-co))_
 
 ### Changed
 
@@ -69,7 +69,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Added low-noise macOS surface geometry diagnostics behind
   `CON_GHOSTTY_PROFILE`, so reproduced pane/surface clipping reports can include
   a log file and `con-cli surfaces list` snapshot without requiring a special
-  debug build.
+  debug build. _(PR [#146](https://github.com/nowledge-co/con-terminal/pull/146) by [@nowledge-co](https://github.com/nowledge-co))_
 
 ## `v0.1.0-beta.62` - 2026-05-05
 
