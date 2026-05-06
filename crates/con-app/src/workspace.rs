@@ -289,9 +289,41 @@ use con_core::{
 #[derive(Clone)]
 struct PaneTitleDragState {
     pane_id: usize,
+    title: SharedString,
     start_pos: Point<Pixels>,
+    current_pos: Point<Pixels>,
     /// True once the cursor has moved more than 8px from start_pos.
     active: bool,
+    target: Option<PaneDropTarget>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PaneDropTarget {
+    NewTab,
+    Split(PaneSplitDropTarget),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TabDragTarget {
+    Reorder { slot: usize },
+    Split(TabSplitDropTarget),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TabSplitDropTarget {
+    dragged_tab_index: usize,
+    target_tab_index: usize,
+    direction: SplitDirection,
+    placement: SplitPlacement,
+    tab_bounds: Bounds<Pixels>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PaneSplitDropTarget {
+    target_pane_id: usize,
+    direction: SplitDirection,
+    placement: SplitPlacement,
+    bounds: Bounds<Pixels>,
 }
 
 /// Inline rename editor for the horizontal tab strip.
@@ -520,6 +552,9 @@ pub struct ConWorkspace {
     pending_pane_title_drag_init: std::sync::Arc<std::sync::Mutex<Option<(usize, Point<Pixels>)>>>,
     /// Active pane title drag state (set once threshold is crossed).
     pane_title_drag: Option<PaneTitleDragState>,
+    /// Last painted bounds for the pane tree content, used to resolve
+    /// pane-title drag drop targets in window coordinates.
+    pane_content_bounds: std::sync::Arc<std::sync::Mutex<Option<Bounds<Pixels>>>>,
 }
 
 #[derive(Clone)]
@@ -1606,6 +1641,7 @@ impl ConWorkspace {
             top_bar_should_move: false,
             pending_pane_title_drag_init: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pane_title_drag: None,
+            pane_content_bounds: std::sync::Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -10513,6 +10549,74 @@ impl Render for ConWorkspace {
             )
         };
 
+        let pane_content_bounds = self.pane_content_bounds.clone();
+        let mut pane_content = div()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .w_full()
+            .overflow_hidden()
+            .child(pane_tree_rendered)
+            .on_children_prepainted(move |bounds_list, _, _| {
+                let Some(bounds) = bounds_list.first().copied() else {
+                    return;
+                };
+                if let Ok(mut guard) = pane_content_bounds.lock() {
+                    *guard = Some(bounds);
+                }
+            });
+
+        if let Some(drag) = self.pane_title_drag.as_ref().filter(|drag| drag.active) {
+            if let Some(PaneDropTarget::Split(target)) = drag.target {
+                let content_bounds = self
+                    .pane_content_bounds
+                    .lock()
+                    .ok()
+                    .and_then(|guard| *guard);
+                if let Some(content_bounds) = content_bounds {
+                    let local_left = (target.bounds.origin.x - content_bounds.origin.x).as_f32();
+                    let local_top = (target.bounds.origin.y - content_bounds.origin.y).as_f32();
+                    let indicator_thickness = 24.0;
+                    let (left, top, width, height) = match (target.direction, target.placement) {
+                        (SplitDirection::Vertical, SplitPlacement::Before) => (
+                            local_left,
+                            local_top,
+                            target.bounds.size.width.as_f32(),
+                            indicator_thickness,
+                        ),
+                        (SplitDirection::Vertical, SplitPlacement::After) => (
+                            local_left,
+                            local_top + target.bounds.size.height.as_f32() - indicator_thickness,
+                            target.bounds.size.width.as_f32(),
+                            indicator_thickness,
+                        ),
+                        (SplitDirection::Horizontal, SplitPlacement::Before) => (
+                            local_left,
+                            local_top,
+                            indicator_thickness,
+                            target.bounds.size.height.as_f32(),
+                        ),
+                        (SplitDirection::Horizontal, SplitPlacement::After) => (
+                            local_left + target.bounds.size.width.as_f32() - indicator_thickness,
+                            local_top,
+                            indicator_thickness,
+                            target.bounds.size.height.as_f32(),
+                        ),
+                    };
+                    pane_content = pane_content.child(
+                        div()
+                            .absolute()
+                            .left(px(left))
+                            .top(px(top))
+                            .w(px(width.max(0.0)))
+                            .h(px(height.max(0.0)))
+                            .bg(theme.primary.opacity(0.18)),
+                    );
+                }
+            }
+        }
+
         let mut terminal_area = div()
             .flex()
             .flex_col()
@@ -10520,16 +10624,7 @@ impl Render for ConWorkspace {
             .min_w_0()
             .min_h_0()
             .bg(theme.transparent)
-            .child(
-                div()
-                    .relative()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .w_full()
-                    .overflow_hidden()
-                    .child(pane_tree_rendered),
-            );
+            .child(pane_content);
 
         #[cfg(not(target_os = "macos"))]
         if input_bar_transitioning && input_bar_progress > 0.01 {
@@ -11471,16 +11566,25 @@ impl Render for ConWorkspace {
                         // Consume a pending pane title drag initiation.
                         if let Ok(mut guard) = this.pending_pane_title_drag_init.clone().lock() {
                             if let Some((pane_id, start_pos)) = guard.take() {
+                                let title = this.tabs[this.active_tab]
+                                    .pane_tree
+                                    .pane_title(pane_id, cx)
+                                    .unwrap_or_else(|| "Terminal".to_string())
+                                    .into();
                                 this.pane_title_drag = Some(PaneTitleDragState {
                                     pane_id,
+                                    title,
                                     start_pos,
+                                    current_pos: start_pos,
                                     active: false,
+                                    target: None,
                                 });
                             }
                         }
 
                         // Update active pane title drag.
-                        if let Some(ref mut drag) = this.pane_title_drag {
+                        if let Some(mut drag) = this.pane_title_drag.take() {
+                            drag.current_pos = event.position;
                             let dx = f32::from(event.position.x) - f32::from(drag.start_pos.x);
                             let dy = f32::from(event.position.y) - f32::from(drag.start_pos.y);
                             let dist = (dx * dx + dy * dy).sqrt();
@@ -11491,12 +11595,37 @@ impl Render for ConWorkspace {
                                 let top_bar_h = this.current_top_bar_height();
                                 let in_top_bar = f32::from(event.position.y) < top_bar_h;
                                 let tab_count = this.tabs.len();
-                                let new_slot = if in_top_bar { Some(tab_count) } else { None };
+                                drag.target = if in_top_bar {
+                                    Some(PaneDropTarget::NewTab)
+                                } else {
+                                    let content_bounds = this
+                                        .pane_content_bounds
+                                        .lock()
+                                        .ok()
+                                        .and_then(|guard| *guard);
+                                    content_bounds.and_then(|bounds| {
+                                        let panes = this.tabs[this.active_tab]
+                                            .pane_tree
+                                            .pane_bounds(bounds);
+                                        pane_split_drop_target_from_position(
+                                            drag.pane_id,
+                                            event.position,
+                                            &panes,
+                                        )
+                                        .map(PaneDropTarget::Split)
+                                    })
+                                };
+                                let new_slot = if matches!(drag.target, Some(PaneDropTarget::NewTab)) {
+                                    Some(tab_count)
+                                } else {
+                                    None
+                                };
                                 if this.tab_strip_drop_slot != new_slot {
                                     this.tab_strip_drop_slot = new_slot;
-                                    cx.notify();
                                 }
+                                cx.notify();
                             }
+                            this.pane_title_drag = Some(drag);
                         }
 
                         // Compute layout-dependent inputs *before* re-borrowing
@@ -11588,12 +11717,32 @@ impl Render for ConWorkspace {
                         if let Some(drag) = this.pane_title_drag.take() {
                             this.tab_strip_drop_slot = None;
                             if drag.active {
-                                let top_bar_h = this.current_top_bar_height();
-                                let in_top_bar = f32::from(event.position.y) < top_bar_h;
-                                if in_top_bar {
-                                    let pane_id = drag.pane_id;
-                                    this.detach_pane_to_new_tab(pane_id, window, cx);
-                                    return;
+                                match drag.target {
+                                    Some(PaneDropTarget::NewTab) => {
+                                        let pane_id = drag.pane_id;
+                                        this.detach_pane_to_new_tab(pane_id, window, cx);
+                                        return;
+                                    }
+                                    Some(PaneDropTarget::Split(target)) => {
+                                        let moved = this.tabs[this.active_tab].pane_tree.move_pane(
+                                            drag.pane_id,
+                                            target.target_pane_id,
+                                            target.direction,
+                                            target.placement,
+                                        );
+                                        if moved {
+                                            this.sync_active_terminal_focus_states(cx);
+                                            this.sync_active_tab_native_view_visibility(cx);
+                                            this.save_session(cx);
+                                            for terminal in this.tabs[this.active_tab]
+                                                .pane_tree
+                                                .all_terminals()
+                                            {
+                                                terminal.notify(cx);
+                                            }
+                                        }
+                                    }
+                                    None => {}
                                 }
                             }
                             cx.notify();
@@ -11725,6 +11874,27 @@ impl Render for ConWorkspace {
                 }))
                 .child(top_bar)
                 .child(main_area);
+
+        if let Some(drag) = self.pane_title_drag.as_ref().filter(|drag| drag.active) {
+            let preview_width = (drag.title.len() as f32 * 7.0 + 28.0).clamp(180.0, 240.0);
+            root = root.child(
+                div()
+                    .absolute()
+                    .left(drag.current_pos.x + px(12.0))
+                    .top(drag.current_pos.y + px(12.0))
+                    .w(px(preview_width))
+                    .h(px(28.0))
+                    .px(px(10.0))
+                    .rounded(px(4.0))
+                    .flex()
+                    .items_center()
+                    .bg(theme.title_bar.opacity(0.92))
+                    .font_family(theme.font_family.clone())
+                    .text_size(px(12.0))
+                    .text_color(theme.foreground.opacity(0.82))
+                    .child(div().truncate().child(drag.title.clone())),
+            );
+        }
 
         if tab_strip_transitioning {
             root = root.child(
@@ -12680,6 +12850,80 @@ fn point_in_bounds(p: &gpui::Point<gpui::Pixels>, b: &gpui::Bounds<gpui::Pixels>
         && p.y < b.origin.y + b.size.height
 }
 
+fn pane_split_drop_target_from_position(
+    source_pane_id: usize,
+    cursor: gpui::Point<gpui::Pixels>,
+    panes: &[(usize, gpui::Bounds<gpui::Pixels>)],
+) -> Option<PaneSplitDropTarget> {
+    panes.iter().find_map(|(target_pane_id, bounds)| {
+        if *target_pane_id == source_pane_id || !point_in_bounds(&cursor, bounds) {
+            return None;
+        }
+
+        let width = bounds.size.width.as_f32().max(1.0);
+        let height = bounds.size.height.as_f32().max(1.0);
+        let local_x = (cursor.x - bounds.origin.x).as_f32();
+        let local_y = (cursor.y - bounds.origin.y).as_f32();
+        let left = local_x / width;
+        let right = 1.0 - left;
+        let top = local_y / height;
+        let bottom = 1.0 - top;
+        let candidates = [
+            (top, SplitDirection::Vertical, SplitPlacement::Before),
+            (bottom, SplitDirection::Vertical, SplitPlacement::After),
+            (left, SplitDirection::Horizontal, SplitPlacement::Before),
+            (right, SplitDirection::Horizontal, SplitPlacement::After),
+        ];
+        let (distance, direction, placement) = candidates
+            .into_iter()
+            .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))?;
+
+        (distance <= 0.25).then_some(PaneSplitDropTarget {
+            target_pane_id: *target_pane_id,
+            direction,
+            placement,
+            bounds: *bounds,
+        })
+    })
+}
+
+fn tab_split_drop_target_from_position(
+    dragged_tab_index: usize,
+    target_tab_index: usize,
+    cursor: gpui::Point<gpui::Pixels>,
+    bounds: gpui::Bounds<gpui::Pixels>,
+) -> Option<TabSplitDropTarget> {
+    if dragged_tab_index == target_tab_index || !point_in_bounds(&cursor, &bounds) {
+        return None;
+    }
+
+    let width = bounds.size.width.as_f32().max(1.0);
+    let height = bounds.size.height.as_f32().max(1.0);
+    let local_x = (cursor.x - bounds.origin.x).as_f32();
+    let local_y = (cursor.y - bounds.origin.y).as_f32();
+    let left = local_x / width;
+    let right = 1.0 - left;
+    let top = local_y / height;
+    let bottom = 1.0 - top;
+    let candidates = [
+        (top, SplitDirection::Vertical, SplitPlacement::Before),
+        (bottom, SplitDirection::Vertical, SplitPlacement::After),
+        (left, SplitDirection::Horizontal, SplitPlacement::Before),
+        (right, SplitDirection::Horizontal, SplitPlacement::After),
+    ];
+    let (distance, direction, placement) = candidates
+        .into_iter()
+        .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))?;
+
+    (distance <= 0.25).then_some(TabSplitDropTarget {
+        dragged_tab_index,
+        target_tab_index,
+        direction,
+        placement,
+        tab_bounds: bounds,
+    })
+}
+
 fn horizontal_tab_slot_from_position(
     cursor: gpui::Point<gpui::Pixels>,
     bounds: gpui::Bounds<gpui::Pixels>,
@@ -12761,10 +13005,11 @@ struct NewTabSyncPolicy {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConWorkspace, TabRenameStateSnapshot, horizontal_tab_slot_from_position,
-        normalize_tab_user_label, remap_tab_rename_state_after_close,
+        ConWorkspace, SplitDirection, SplitPlacement, TabRenameStateSnapshot,
+        horizontal_tab_slot_from_position, normalize_tab_user_label,
+        pane_split_drop_target_from_position, remap_tab_rename_state_after_close,
         remap_tab_rename_state_after_reorder, tab_rename_commit_label, tab_rename_initial_label,
-        trailing_drop_slot_from_position,
+        tab_split_drop_target_from_position, trailing_drop_slot_from_position,
     };
     use gpui::{Bounds, Point, Size, px};
 
@@ -12871,6 +13116,152 @@ mod tests {
             ),
             "Deploy"
         );
+    }
+
+    #[test]
+    fn tab_split_drop_target_uses_four_edge_model() {
+        let bounds = Bounds {
+            origin: Point { x: px(100.0), y: px(50.0) },
+            size: Size { width: px(200.0), height: px(40.0) },
+        };
+
+        let top = tab_split_drop_target_from_position(
+            0,
+            1,
+            Point { x: px(200.0), y: px(55.0) },
+            bounds,
+        )
+        .expect("top edge target");
+        assert_eq!(top.dragged_tab_index, 0);
+        assert_eq!(top.target_tab_index, 1);
+        assert_eq!(top.direction, SplitDirection::Vertical);
+        assert_eq!(top.placement, SplitPlacement::Before);
+
+        let bottom = tab_split_drop_target_from_position(
+            0,
+            1,
+            Point { x: px(200.0), y: px(87.0) },
+            bounds,
+        )
+        .expect("bottom edge target");
+        assert_eq!(bottom.direction, SplitDirection::Vertical);
+        assert_eq!(bottom.placement, SplitPlacement::After);
+
+        let left = tab_split_drop_target_from_position(
+            0,
+            1,
+            Point { x: px(110.0), y: px(70.0) },
+            bounds,
+        )
+        .expect("left edge target");
+        assert_eq!(left.direction, SplitDirection::Horizontal);
+        assert_eq!(left.placement, SplitPlacement::Before);
+
+        let right = tab_split_drop_target_from_position(
+            0,
+            1,
+            Point { x: px(290.0), y: px(70.0) },
+            bounds,
+        )
+        .expect("right edge target");
+        assert_eq!(right.direction, SplitDirection::Horizontal);
+        assert_eq!(right.placement, SplitPlacement::After);
+    }
+
+    #[test]
+    fn tab_split_drop_target_ignores_center_source_and_outside() {
+        let bounds = Bounds {
+            origin: Point { x: px(100.0), y: px(50.0) },
+            size: Size { width: px(200.0), height: px(40.0) },
+        };
+
+        assert!(tab_split_drop_target_from_position(
+            0,
+            1,
+            Point { x: px(200.0), y: px(70.0) },
+            bounds,
+        )
+        .is_none());
+        assert!(tab_split_drop_target_from_position(
+            1,
+            1,
+            Point { x: px(110.0), y: px(70.0) },
+            bounds,
+        )
+        .is_none());
+        assert!(tab_split_drop_target_from_position(
+            0,
+            1,
+            Point { x: px(90.0), y: px(70.0) },
+            bounds,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn pane_split_drop_target_uses_four_edge_model() {
+        let panes = [(1, Bounds {
+            origin: Point { x: px(100.0), y: px(200.0) },
+            size: Size { width: px(400.0), height: px(300.0) },
+        })];
+
+        let top = pane_split_drop_target_from_position(
+            0,
+            Point { x: px(300.0), y: px(220.0) },
+            &panes,
+        )
+        .expect("top edge target");
+        assert_eq!(top.target_pane_id, 1);
+        assert_eq!(top.direction, SplitDirection::Vertical);
+        assert_eq!(top.placement, SplitPlacement::Before);
+
+        let bottom = pane_split_drop_target_from_position(
+            0,
+            Point { x: px(300.0), y: px(485.0) },
+            &panes,
+        )
+        .expect("bottom edge target");
+        assert_eq!(bottom.direction, SplitDirection::Vertical);
+        assert_eq!(bottom.placement, SplitPlacement::After);
+
+        let left = pane_split_drop_target_from_position(
+            0,
+            Point { x: px(120.0), y: px(350.0) },
+            &panes,
+        )
+        .expect("left edge target");
+        assert_eq!(left.direction, SplitDirection::Horizontal);
+        assert_eq!(left.placement, SplitPlacement::Before);
+
+        let right = pane_split_drop_target_from_position(
+            0,
+            Point { x: px(485.0), y: px(350.0) },
+            &panes,
+        )
+        .expect("right edge target");
+        assert_eq!(right.direction, SplitDirection::Horizontal);
+        assert_eq!(right.placement, SplitPlacement::After);
+    }
+
+    #[test]
+    fn pane_split_drop_target_ignores_center_and_source_pane() {
+        let panes = [(1, Bounds {
+            origin: Point { x: px(100.0), y: px(200.0) },
+            size: Size { width: px(400.0), height: px(300.0) },
+        })];
+
+        assert!(pane_split_drop_target_from_position(
+            0,
+            Point { x: px(300.0), y: px(350.0) },
+            &panes,
+        )
+        .is_none());
+        assert!(pane_split_drop_target_from_position(
+            1,
+            Point { x: px(120.0), y: px(350.0) },
+            &panes,
+        )
+        .is_none());
     }
 
     #[test]
