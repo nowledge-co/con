@@ -3298,9 +3298,12 @@ impl SettingsPanel {
                                 .checked(self.hide_pane_title_bar)
                                 .small()
                                 .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    let previous = this.config.appearance.hide_pane_title_bar;
                                     this.hide_pane_title_bar = *checked;
                                     this.config.appearance.hide_pane_title_bar = *checked;
                                     if let Err(err) = this.config.save() {
+                                        this.hide_pane_title_bar = previous;
+                                        this.config.appearance.hide_pane_title_bar = previous;
                                         log::warn!(
                                             "settings: persist hide_pane_title_bar failed: {err}"
                                         );

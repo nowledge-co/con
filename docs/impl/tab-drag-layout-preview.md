@@ -113,9 +113,11 @@ The preview should render above terminal content and below modal overlays.
 
 ## Architecture
 
+The remainder of this document is a forward-looking design for tab-to-tab split merge. It is not part of the pane-title drag-to-tab implementation that currently ships on this branch. The current production `TabDragTarget` is reorder-only, and the merge APIs below are proposed interfaces for a follow-up PR.
+
 ### Drag target state
 
-Replace tab-strip-only state with a broader drag target:
+Proposed broader drag target shape:
 
 ```rust
 enum TabDragTarget {
@@ -151,7 +153,7 @@ This mirrors the pane title drag four-edge helper.
 
 ### PaneTree merge API
 
-Add a layout-level API to merge a whole incoming tree:
+Proposed layout-level API to merge a whole incoming tree:
 
 ```rust
 pub fn merge_tree(
@@ -172,7 +174,7 @@ Rules:
 
 ### Workspace tab merge API
 
-Add a workspace-level operation:
+Proposed workspace-level operation:
 
 ```rust
 fn merge_tab_into_tab(

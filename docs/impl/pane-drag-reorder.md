@@ -63,7 +63,6 @@ pub struct DraggedTab {
     pub origin: DraggedTabOrigin,
     pub preview_constraint: Option<DraggedTabPreviewConstraint>,
     pub pane_id: Option<usize>,
-    pub cursor_offset: Option<Point<Pixels>>,
 }
 ```
 
@@ -126,11 +125,9 @@ Implemented in `crates/con-app/src/pane_tree.rs`.
 The entire pane title bar is the drag source:
 
 ```rust
-bar.on_drag(dragged, move |dragged: &DraggedTab, offset, _window, cx| {
+bar.on_drag(dragged, move |dragged: &DraggedTab, _offset, _window, cx| {
     cx.stop_propagation();
-    let mut dragged = dragged.clone();
-    dragged.cursor_offset = Some(offset);
-    cx.new(|_| dragged)
+    cx.new(|_| dragged.clone())
 })
 ```
 
@@ -144,11 +141,10 @@ DraggedTab {
     origin: DraggedTabOrigin::Pane,
     preview_constraint: None,
     pane_id: Some(pane_id),
-    cursor_offset: None,
 }
 ```
 
-`cursor_offset` is retained for diagnostic/compatibility purposes, but the visible pane-origin preview is currently rendered by workspace overlay rather than GPUI's drag preview.
+The visible pane-origin preview is rendered by the workspace overlay rather than GPUI's drag preview. The `_offset` argument from `on_drag` is intentionally ignored for pane drags because the overlay is positioned from live cursor coordinates.
 
 ---
 

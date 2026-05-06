@@ -9733,6 +9733,7 @@ impl ConWorkspace {
         }
 
         let new_index = requested_slot.min(self.tabs.len());
+        self.active_tab = rebase_active_tab_for_insert(self.active_tab, new_index);
         self.tabs.insert(
             new_index,
             Tab {
@@ -11119,9 +11120,7 @@ impl Render for ConWorkspace {
         let tab_strip_preview_active =
             is_tab_strip_preview_active(cx.has_active_drag(), pane_title_drag_to_tab_active)
                 || pane_origin_drag_active;
-        if (self.tab_strip_drop_slot.is_some() || self.tab_drag_target.is_some())
-            && !tab_strip_preview_active
-        {
+        if !tab_strip_preview_active {
             self.tab_strip_drop_slot = None;
             self.tab_drag_target = None;
             if let Ok(mut guard) = self.active_dragged_tab_session_id.lock() {
@@ -13593,6 +13592,14 @@ fn clear_pane_tab_promotion_drag_state(
     *tab_drag_target = None;
 }
 
+fn rebase_active_tab_for_insert(active_tab: usize, insert_index: usize) -> usize {
+    if insert_index <= active_tab {
+        active_tab.saturating_add(1)
+    } else {
+        active_tab
+    }
+}
+
 #[cfg(test)]
 struct NewTabSyncPolicy {
     activates_new_tab: bool,
@@ -13611,11 +13618,11 @@ mod tests {
         horizontal_tab_slot_from_position, is_dragged_tab_source, is_tab_strip_preview_active,
         normalize_tab_user_label, pane_drag_floating_preview_origin,
         pane_split_drop_target_from_position, pane_title_drag_tab_slot,
-        pane_title_drag_to_tab_active, remap_drop_slot_for_current_order,
-        remap_tab_rename_state_after_close, remap_tab_rename_state_after_reorder,
-        split_preview_local_rect, split_preview_regions, tab_drag_preview_origin,
-        tab_like_drag_preview_size, tab_rename_commit_label, tab_rename_initial_label,
-        trailing_drop_slot_from_position,
+        pane_title_drag_to_tab_active, rebase_active_tab_for_insert,
+        remap_drop_slot_for_current_order, remap_tab_rename_state_after_close,
+        remap_tab_rename_state_after_reorder, split_preview_local_rect, split_preview_regions,
+        tab_drag_preview_origin, tab_like_drag_preview_size, tab_rename_commit_label,
+        tab_rename_initial_label, trailing_drop_slot_from_position,
     };
     use crate::sidebar::{DraggedTabPreviewConstraint, constrained_drag_preview_y_shift};
     use gpui::{Bounds, Point, Size, px};
@@ -13812,6 +13819,13 @@ mod tests {
         assert!(pane_title_drag.is_none());
         assert_eq!(tab_strip_drop_slot, None);
         assert_eq!(tab_drag_target, None);
+    }
+
+    #[test]
+    fn pane_tab_promotion_rebases_active_tab_before_insert() {
+        assert_eq!(rebase_active_tab_for_insert(2, 0), 3);
+        assert_eq!(rebase_active_tab_for_insert(2, 2), 3);
+        assert_eq!(rebase_active_tab_for_insert(2, 3), 2);
     }
 
     #[test]

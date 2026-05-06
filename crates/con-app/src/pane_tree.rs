@@ -510,7 +510,7 @@ impl PaneTree {
         let old_root = std::mem::replace(&mut self.root, Self::empty_placeholder_node());
         let (remaining_root, Some(source_leaf)) = Self::extract_leaf(old_root, source_pane_id)
         else {
-            return false;
+            unreachable!("source pane was checked before extraction");
         };
         let Some(remaining_root) = remaining_root else {
             self.root = source_leaf;
