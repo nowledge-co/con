@@ -319,6 +319,13 @@ struct TabSplitDropTarget {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+struct TabSplitPreviewRegions {
+    incoming: Bounds<Pixels>,
+    existing: Bounds<Pixels>,
+    seam: Bounds<Pixels>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct PaneSplitDropTarget {
     target_pane_id: usize,
     direction: SplitDirection,
@@ -10625,6 +10632,89 @@ impl Render for ConWorkspace {
             }
         }
 
+        if let Some(TabDragTarget::Split(target)) = self.tab_drag_target {
+            let content_bounds = self
+                .pane_content_bounds
+                .lock()
+                .ok()
+                .and_then(|guard| *guard);
+            if let Some(content_bounds) = content_bounds {
+                let regions = split_preview_regions(
+                    content_bounds,
+                    target.direction,
+                    target.placement,
+                );
+                let label = self
+                    .tabs
+                    .get(target.dragged_tab_index)
+                    .map(|tab| {
+                        let terminal = tab.pane_tree.focused_terminal();
+                        let presentation = smart_tab_presentation(
+                            tab.user_label.as_deref(),
+                            tab.ai_label.as_deref(),
+                            tab.ai_icon.map(|kind| kind.svg_path()),
+                            self.effective_remote_host_for_tab(
+                                target.dragged_tab_index,
+                                terminal,
+                                cx,
+                            )
+                            .as_deref(),
+                            terminal.title(cx).as_deref(),
+                            terminal.current_dir(cx).as_deref(),
+                            target.dragged_tab_index,
+                        );
+                        presentation.name
+                    })
+                    .unwrap_or_else(|| "Tab".to_string());
+                let to_local = |bounds: Bounds<Pixels>| {
+                    let left = (bounds.origin.x - content_bounds.origin.x).as_f32();
+                    let top = (bounds.origin.y - content_bounds.origin.y).as_f32();
+                    (left, top, bounds.size.width.as_f32(), bounds.size.height.as_f32())
+                };
+                let (existing_left, existing_top, existing_width, existing_height) =
+                    to_local(regions.existing);
+                let (incoming_left, incoming_top, incoming_width, incoming_height) =
+                    to_local(regions.incoming);
+                let (seam_left, seam_top, seam_width, seam_height) = to_local(regions.seam);
+                pane_content = pane_content
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(existing_left))
+                            .top(px(existing_top))
+                            .w(px(existing_width.max(0.0)))
+                            .h(px(existing_height.max(0.0)))
+                            .bg(theme.background.opacity(0.08)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(incoming_left))
+                            .top(px(incoming_top))
+                            .w(px(incoming_width.max(0.0)))
+                            .h(px(incoming_height.max(0.0)))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .px(px(12.0))
+                            .bg(theme.primary.opacity(0.16))
+                            .font_family(theme.font_family.clone())
+                            .text_size(px(12.0))
+                            .text_color(theme.foreground.opacity(0.76))
+                            .child(div().truncate().child(label)),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(seam_left))
+                            .top(px(seam_top))
+                            .w(px(seam_width.max(0.0)))
+                            .h(px(seam_height.max(0.0)))
+                            .bg(theme.primary.opacity(0.55)),
+                    );
+            }
+        }
+
         let mut terminal_area = div()
             .flex()
             .flex_col()
@@ -12945,6 +13035,76 @@ fn pane_split_drop_target_from_position(
     })
 }
 
+fn split_preview_regions(
+    bounds: Bounds<Pixels>,
+    direction: SplitDirection,
+    placement: SplitPlacement,
+) -> TabSplitPreviewRegions {
+    let seam_thickness = px(2.0);
+    match (direction, placement) {
+        (SplitDirection::Vertical, SplitPlacement::Before) => {
+            let incoming_height = bounds.size.height * 0.5;
+            let seam_top = bounds.origin.y + incoming_height - seam_thickness * 0.5;
+            TabSplitPreviewRegions {
+                incoming: Bounds::new(bounds.origin, size(bounds.size.width, incoming_height)),
+                existing: Bounds::new(
+                    point(bounds.origin.x, bounds.origin.y + incoming_height),
+                    size(bounds.size.width, bounds.size.height - incoming_height),
+                ),
+                seam: Bounds::new(
+                    point(bounds.origin.x, seam_top),
+                    size(bounds.size.width, seam_thickness),
+                ),
+            }
+        }
+        (SplitDirection::Vertical, SplitPlacement::After) => {
+            let existing_height = bounds.size.height * 0.5;
+            let seam_top = bounds.origin.y + existing_height - seam_thickness * 0.5;
+            TabSplitPreviewRegions {
+                existing: Bounds::new(bounds.origin, size(bounds.size.width, existing_height)),
+                incoming: Bounds::new(
+                    point(bounds.origin.x, bounds.origin.y + existing_height),
+                    size(bounds.size.width, bounds.size.height - existing_height),
+                ),
+                seam: Bounds::new(
+                    point(bounds.origin.x, seam_top),
+                    size(bounds.size.width, seam_thickness),
+                ),
+            }
+        }
+        (SplitDirection::Horizontal, SplitPlacement::Before) => {
+            let incoming_width = bounds.size.width * 0.5;
+            let seam_left = bounds.origin.x + incoming_width - seam_thickness * 0.5;
+            TabSplitPreviewRegions {
+                incoming: Bounds::new(bounds.origin, size(incoming_width, bounds.size.height)),
+                existing: Bounds::new(
+                    point(bounds.origin.x + incoming_width, bounds.origin.y),
+                    size(bounds.size.width - incoming_width, bounds.size.height),
+                ),
+                seam: Bounds::new(
+                    point(seam_left, bounds.origin.y),
+                    size(seam_thickness, bounds.size.height),
+                ),
+            }
+        }
+        (SplitDirection::Horizontal, SplitPlacement::After) => {
+            let existing_width = bounds.size.width * 0.5;
+            let seam_left = bounds.origin.x + existing_width - seam_thickness * 0.5;
+            TabSplitPreviewRegions {
+                existing: Bounds::new(bounds.origin, size(existing_width, bounds.size.height)),
+                incoming: Bounds::new(
+                    point(bounds.origin.x + existing_width, bounds.origin.y),
+                    size(bounds.size.width - existing_width, bounds.size.height),
+                ),
+                seam: Bounds::new(
+                    point(seam_left, bounds.origin.y),
+                    size(seam_thickness, bounds.size.height),
+                ),
+            }
+        }
+    }
+}
+
 fn remap_target_index_after_source_removal(from: usize, to: usize) -> Option<usize> {
     match from.cmp(&to) {
         std::cmp::Ordering::Equal => None,
@@ -13075,7 +13235,8 @@ mod tests {
         horizontal_tab_slot_from_position, normalize_tab_user_label,
         pane_split_drop_target_from_position, remap_tab_rename_state_after_close,
         remap_tab_rename_state_after_reorder, remap_target_index_after_source_removal,
-        tab_rename_commit_label, tab_rename_initial_label, tab_split_drop_target_from_position, trailing_drop_slot_from_position,
+        split_preview_regions, tab_rename_commit_label, tab_rename_initial_label,
+        tab_split_drop_target_from_position, trailing_drop_slot_from_position,
     };
     use gpui::{Bounds, Point, Size, px};
 
@@ -13182,6 +13343,48 @@ mod tests {
             ),
             "Deploy"
         );
+    }
+
+    #[test]
+    fn split_preview_regions_vertical_before_splits_top_and_bottom() {
+        let bounds = Bounds {
+            origin: Point { x: px(10.0), y: px(20.0) },
+            size: Size { width: px(300.0), height: px(200.0) },
+        };
+
+        let regions = split_preview_regions(
+            bounds,
+            SplitDirection::Vertical,
+            SplitPlacement::Before,
+        );
+
+        assert_eq!(regions.incoming.origin, Point { x: px(10.0), y: px(20.0) });
+        assert_eq!(regions.incoming.size, Size { width: px(300.0), height: px(100.0) });
+        assert_eq!(regions.existing.origin, Point { x: px(10.0), y: px(120.0) });
+        assert_eq!(regions.existing.size, Size { width: px(300.0), height: px(100.0) });
+        assert_eq!(regions.seam.size.width, px(300.0));
+        assert_eq!(regions.seam.size.height, px(2.0));
+    }
+
+    #[test]
+    fn split_preview_regions_horizontal_after_splits_left_and_right() {
+        let bounds = Bounds {
+            origin: Point { x: px(10.0), y: px(20.0) },
+            size: Size { width: px(300.0), height: px(200.0) },
+        };
+
+        let regions = split_preview_regions(
+            bounds,
+            SplitDirection::Horizontal,
+            SplitPlacement::After,
+        );
+
+        assert_eq!(regions.existing.origin, Point { x: px(10.0), y: px(20.0) });
+        assert_eq!(regions.existing.size, Size { width: px(150.0), height: px(200.0) });
+        assert_eq!(regions.incoming.origin, Point { x: px(160.0), y: px(20.0) });
+        assert_eq!(regions.incoming.size, Size { width: px(150.0), height: px(200.0) });
+        assert_eq!(regions.seam.size.width, px(2.0));
+        assert_eq!(regions.seam.size.height, px(200.0));
     }
 
     #[test]
