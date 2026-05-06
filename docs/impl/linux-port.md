@@ -55,6 +55,9 @@ What that gives you:
 - terminal-local Tab / Shift+Tab capture, so shell completion and TUI
   focus/navigation keys reach the Linux pane instead of being swallowed
   by GPUI focus traversal
+- terminal C0 control chords for both letters and defined ASCII punctuation,
+  including `Ctrl+]` -> GS (`0x1d`) for tmux prefix configs such as
+  `set -g prefix C-]`
 - IoskeleyMono shaping (the user-facing display name `"Ioskeley
   Mono"` is normalized to the registered TTF family `"IoskeleyMono"`
   before lookup so GPUI's CosmicTextSystem resolves the embedded

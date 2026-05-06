@@ -4,6 +4,16 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.65`
+
+### Fixed
+
+**Windows, Linux**
+
+- Fixed terminal `Ctrl+<punctuation>` chords such as `Ctrl+]`, so tmux prefixes
+  like `set -g prefix C-]` now send the expected C0 control byte instead of
+  being dropped or typed literally.
+
 ## `v0.1.0-beta.64`
 
 ### Added

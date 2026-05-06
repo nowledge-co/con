@@ -62,6 +62,7 @@ mod sidebar;
 mod terminal_context_menu;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod terminal_ime;
+mod terminal_keys;
 mod terminal_links;
 mod terminal_pane;
 mod terminal_paste;

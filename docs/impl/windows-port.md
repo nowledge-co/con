@@ -346,6 +346,9 @@ phase keeps the macOS build green.
 Phase 3c details now covered by the beta baseline:
 
 - `host_view` translates `VK_*` input into terminal-local xterm sequences, including Tab / Shift+Tab capture, while preserving mouse selection behavior.
+- ASCII C0 control chords include the punctuation controls terminals expect,
+  not only letters. `Ctrl+]` now reaches tmux as GS (`0x1d`), so configs such
+  as `set -g prefix C-]` work on the Windows backend.
 - Wheel and touchpad input scroll libghostty-vt viewport state when mouse tracking is inactive. Alternate-screen mode-1007 wheel gestures translate into cursor keys with the same fractional row accumulator used by primary scrollback.
 - The Windows pane has a visible GPUI scrollback scrollbar backed by cached libghostty-vt scrollbar state, so render no longer polls the expensive scrollbar query on every paint.
 - OSC 52 and ordinary clipboard operations are wired through the Win32 clipboard.

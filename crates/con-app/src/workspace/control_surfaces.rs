@@ -801,11 +801,10 @@ impl ConWorkspace {
             "enter" | "return" => Ok(b"\n".to_vec()),
             "tab" => Ok(b"\t".to_vec()),
             "backspace" => Ok(vec![0x7f]),
-            "ctrl-c" | "control-c" | "c-c" => Ok(vec![0x03]),
-            "ctrl-d" | "control-d" | "c-d" => Ok(vec![0x04]),
+            _ if let Some(code) = crate::terminal_keys::ctrl_chord_to_c0(key) => Ok(vec![code]),
             _ if key.chars().count() == 1 => Ok(key.as_bytes().to_vec()),
             _ => Err(ControlError::invalid_params(format!(
-                "Unsupported surface key `{key}`. Supported keys: escape, enter, tab, backspace, ctrl-c, ctrl-d."
+                "Unsupported surface key `{key}`. Supported keys: escape, enter, tab, backspace, ctrl-<letter>, ctrl-], ctrl-\\, ctrl-[, ctrl-^, ctrl-_, ctrl-?."
             ))),
         }
     }
