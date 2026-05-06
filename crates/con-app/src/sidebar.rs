@@ -170,7 +170,11 @@ impl Render for DraggedTab {
         // Pane-origin drags render their visible floating title from Workspace
         // using the live cursor position. GPUI's built-in drag preview is hidden
         // for panes because its root is tied to the wide pane title-bar hitbox.
-        let preview_el = div()
+        if self.origin == DraggedTabOrigin::Pane {
+            return div().size(px(0.0));
+        }
+
+        div()
             .flex()
             .items_center()
             .gap(px(6.0))
@@ -188,16 +192,9 @@ impl Render for DraggedTab {
                     .size(px(12.0))
                     .text_color(theme.foreground),
             )
-            .child(div().truncate().child(self.label.clone()));
-
-        if self.origin == DraggedTabOrigin::Pane {
-            // Pane drags render their visible floating title from Workspace using
-            // the live cursor position. Keep GPUI's built-in drag preview empty
-            // because its root is tied to the wide pane title-bar hitbox.
-            div().size(px(0.0))
-        } else {
-            preview_el.relative().top(preview_y_shift)
-        }
+            .child(div().truncate().child(self.label.clone()))
+            .relative()
+            .top(preview_y_shift)
     }
 }
 

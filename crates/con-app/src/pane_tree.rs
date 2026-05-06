@@ -680,9 +680,13 @@ impl PaneTree {
         Self::count_leaves(&self.root)
     }
 
+    fn terminal_title_or_default(terminal: &TerminalPane, cx: &App) -> String {
+        terminal.title(cx).unwrap_or_else(|| "Terminal".to_string())
+    }
+
     pub fn pane_title(&self, pane_id: PaneId, cx: &App) -> Option<String> {
         Self::find_terminal(&self.root, pane_id)
-            .map(|terminal| terminal.title(cx).unwrap_or_else(|| "Terminal".to_string()))
+            .map(|terminal| Self::terminal_title_or_default(terminal, cx))
     }
 
     pub fn pane_bounds(&self, bounds: Bounds<Pixels>) -> Vec<(PaneId, Bounds<Pixels>)> {
@@ -1985,10 +1989,7 @@ impl PaneTree {
         let terminal = active.terminal.render_child();
 
         // Derive pane title from the active terminal title, falling back to "Terminal"
-        let pane_title = active
-            .terminal
-            .title(&*cx)
-            .unwrap_or_else(|| "Terminal".to_string());
+        let pane_title = Self::terminal_title_or_default(&active.terminal, cx);
 
         let show_surface_strip =
             surfaces.len() > 1 || active.owner.is_some() || active.title.is_some();

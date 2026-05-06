@@ -101,15 +101,18 @@ Clicking `⋮` opens a `context_menu` (gpui-component `ContextMenuExt`) with two
 
 ### State
 
-A new `PaneDragState` stored in `PaneTree`:
+Pane title drags use `PaneTitleDragState` in `crates/con-app/src/workspace.rs` as the authoritative workspace-level state:
 
 ```rust
-pub struct PaneTitleDragState {
-    pub pane_id: PaneId,
-    pub start_pos: Point<Pixels>,   // where drag began
-    pub active: bool,               // threshold crossed (>8px movement)
+struct PaneTitleDragState {
+    title: SharedString,
+    current_pos: Point<Pixels>,
+    active: bool,
+    target: Option<PaneDropTarget>,
 }
 ```
+
+`title` drives the workspace-owned floating title overlay, `current_pos` keeps that overlay centered under the live cursor, and `target` records whether the pane is currently targeting a split drop or a new tab slot.
 
 ### Threshold
 
