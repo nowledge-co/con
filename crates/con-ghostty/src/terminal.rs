@@ -718,11 +718,6 @@ impl GhosttyTerminal {
         unsafe { ffi::ghostty_surface_set_content_scale(self.surface, scale, scale) }
     }
 
-    /// Set the display that owns this surface.
-    pub fn set_display_id(&self, display_id: u32) {
-        unsafe { ffi::ghostty_surface_set_display_id(self.surface, display_id) }
-    }
-
     /// Set focus state.
     pub fn set_focus(&self, focused: bool) {
         unsafe { ffi::ghostty_surface_set_focus(self.surface, focused) }

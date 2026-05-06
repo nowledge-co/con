@@ -37,8 +37,7 @@ bool con_ghostty_surface_sync_backing(
     double *out_scale_x,
     double *out_scale_y,
     uint32_t *out_width,
-    uint32_t *out_height,
-    uint32_t *out_display_id
+    uint32_t *out_height
 ) {
     NSView *view = (__bridge NSView *)view_ptr;
     if (view == nil || surface_ptr == NULL) {
@@ -96,9 +95,6 @@ bool con_ghostty_surface_sync_backing(
     }
     if (out_height != NULL) {
         *out_height = height;
-    }
-    if (out_display_id != NULL) {
-        *out_display_id = display_id;
     }
 
     return true;
@@ -187,7 +183,6 @@ bool con_ghostty_surface_sync_backing(
         size.width,
         size.height,
         fallback_scale,
-        NULL,
         NULL,
         NULL,
         NULL,

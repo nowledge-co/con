@@ -66,8 +66,6 @@ static NEXT_NATIVE_TRANSITION_OWNER_ID: AtomicU64 = AtomicU64::new(1);
 #[cfg(target_os = "macos")]
 #[derive(Debug, Clone, Copy)]
 struct NativeBackingSync {
-    scale_x: f64,
-    scale_y: f64,
     width_px: u32,
     height_px: u32,
 }
@@ -88,7 +86,6 @@ unsafe extern "C" {
         out_scale_y: *mut f64,
         out_width: *mut u32,
         out_height: *mut u32,
-        out_display_id: *mut u32,
     ) -> bool;
 }
 
@@ -145,8 +142,6 @@ pub struct GhosttyView {
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
-    #[cfg(target_os = "macos")]
-    display_id: Option<u32>,
     last_title: Option<String>,
     last_cwd: Option<String>,
     /// Data queued for the PTY before the surface was created.
@@ -221,8 +216,6 @@ impl GhosttyView {
             initialized: false,
             last_bounds: None,
             scale_factor: 1.0,
-            #[cfg(target_os = "macos")]
-            display_id: None,
             last_title: None,
             last_cwd: cwd,
             pending_write: None,
@@ -968,12 +961,10 @@ impl GhosttyView {
 
         let before_size = terminal.size();
         let previous_scale = self.scale_factor;
-        let previous_display_id = self.display_id;
         let mut scale_x = 0.0;
         let mut scale_y = 0.0;
         let mut width_px = 0;
         let mut height_px = 0;
-        let mut display_id = 0;
         let fallback_scale =
             Self::view_backing_scale(nsview, f64::from(window.scale_factor().max(f32::EPSILON)));
 
@@ -992,43 +983,33 @@ impl GhosttyView {
                 &mut scale_y,
                 &mut width_px,
                 &mut height_px,
-                &mut display_id,
             )
         };
         if !ok {
             return None;
         }
 
-        let display_id = (display_id != 0).then_some(display_id);
         self.scale_factor = scale_y.max(f64::EPSILON) as f32;
-        if display_id.is_some() {
-            self.display_id = display_id;
-        }
 
         let result = NativeBackingSync {
-            scale_x,
-            scale_y,
             width_px,
             height_px,
         };
         let scale_changed = (previous_scale - self.scale_factor).abs() > 0.001;
-        let display_changed = previous_display_id != self.display_id;
         let size_changed = before_size.width_px != width_px || before_size.height_px != height_px;
-        if scale_changed || display_changed || size_changed {
+        if scale_changed || size_changed {
             terminal.draw();
         }
 
-        if perf_trace_enabled() && (scale_changed || display_changed || size_changed) {
+        if perf_trace_enabled() && (scale_changed || size_changed) {
             let after_size = terminal.size();
             log::info!(
                 target: "con::perf",
-                "native backing sync scale={:.3}x{:.3}->{:.3}x{:.3} display={:?}->{:?} old_px={}x{} old_grid={}x{} new_px={}x{} new_grid={}x{} logical_pt={:.1}x{:.1}",
+                "native backing sync scale={:.3}x{:.3}->{:.3}x{:.3} old_px={}x{} old_grid={}x{} new_px={}x{} new_grid={}x{} logical_pt={:.1}x{:.1}",
                 f64::from(previous_scale),
                 f64::from(previous_scale),
-                result.scale_x,
-                result.scale_y,
-                previous_display_id,
-                self.display_id,
+                scale_x,
+                scale_y,
                 before_size.width_px,
                 before_size.height_px,
                 before_size.columns,
