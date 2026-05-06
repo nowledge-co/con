@@ -41,9 +41,15 @@ Appearance controls the parts of con you look at all day:
 - terminal opacity and blur
 - background image
 - tab position
+- pane title bars in split layouts
 
 Start with readability. Pick a theme with clear contrast, then adjust opacity or
 blur only if the terminal remains easy to scan.
+
+Pane title bars appear only when a tab has multiple panes. Keep them on if you
+want direct close/fullscreen controls and drag-to-rearrange. Turn them off if
+you prefer a sparse terminal surface and use shortcuts or the terminal context
+menu for pane actions.
 
 con can import Ghostty themes. Copy a theme, choose **Load from Clipboard**,
 preview it, then save it when it feels right.

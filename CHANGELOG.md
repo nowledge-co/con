@@ -4,6 +4,33 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.64`
+
+### Added
+
+**Panes**
+
+- Added pane title bars for split layouts, with direct close and fullscreen
+  controls on each pane.
+- Added pane title-bar dragging. Drag a pane title to rearrange split panes, or
+  drop it into the tab strip to promote that pane into its own tab.
+- Added an Appearance setting to hide pane title bars when you want the
+  sparsest terminal-only layout.
+
+### Fixed
+
+**Panes**
+
+- Fixed pane-drag preview cleanup so canceled or completed drags do not leave a
+  stale tab-promotion preview behind.
+- Fixed pane reordering so only true direct-sibling no-op moves are ignored;
+  cross-subtree moves now land in the requested split position.
+
+**Developer Experience**
+
+- Made the portable CI Zig installer retry against Con's mirror if the primary
+  Zig download fails.
+
 ## `v0.1.0-beta.63`
 
 ### Added

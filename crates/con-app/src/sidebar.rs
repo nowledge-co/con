@@ -43,8 +43,8 @@
 use crate::motion::MotionValue;
 use gpui::{
     AnyElement, App, Context, Div, Entity, EventEmitter, FontWeight, Hsla, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, ParentElement, Render, SharedString, Stateful,
-    StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::*, px, svg,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Render, SharedString,
+    Stateful, StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::*, px, svg,
 };
 use gpui_component::{
     ActiveTheme, InteractiveElementExt, Sizable,
@@ -125,29 +125,76 @@ pub struct DraggedTab {
     pub session_id: u64,
     pub label: SharedString,
     pub icon: &'static str,
+    pub origin: DraggedTabOrigin,
+    pub preview_constraint: Option<DraggedTabPreviewConstraint>,
+    /// Set when origin is `Pane` — the pane to promote to a new tab on drop.
+    pub pane_id: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DraggedTabPreviewConstraint {
+    pub cursor_offset_y: Pixels,
+    pub top: Pixels,
+    pub height: Pixels,
+    pub preview_height: Pixels,
+}
+
+pub fn constrained_drag_preview_y_shift(
+    mouse_y: Pixels,
+    constraint: DraggedTabPreviewConstraint,
+) -> Pixels {
+    let root_top = mouse_y - constraint.cursor_offset_y;
+    let max_top = constraint.top + (constraint.height - constraint.preview_height).max(px(0.0));
+    let desired_top = root_top.clamp(constraint.top, max_top);
+    desired_top - root_top
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DraggedTabOrigin {
+    HorizontalTabStrip,
+    Sidebar,
+    /// Dragged from a pane title bar — pane_id is in DraggedTab.pane_id.
+    Pane,
 }
 
 impl Render for DraggedTab {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        let preview_y_shift = self
+            .preview_constraint
+            .map(|constraint| {
+                constrained_drag_preview_y_shift(window.mouse_position().y, constraint)
+            })
+            .unwrap_or(px(0.0));
+
+        // Pane-origin drags render their visible floating title from Workspace
+        // using the live cursor position. GPUI's built-in drag preview is hidden
+        // for panes because its root is tied to the wide pane title-bar hitbox.
+        if self.origin == DraggedTabOrigin::Pane {
+            return div().size(px(0.0));
+        }
+
         div()
             .flex()
             .items_center()
-            .gap(px(8.0))
-            .px(px(10.0))
-            .py(px(6.0))
-            .rounded(px(8.0))
-            .bg(surface_tone(theme, 0.22))
-            .text_color(theme.foreground)
+            .gap(px(6.0))
+            .w(px(120.0))
+            .h(px(28.0))
+            .px(px(8.0))
+            .rounded(px(4.0))
+            .bg(theme.title_bar.opacity(0.92))
+            .text_color(theme.foreground.opacity(0.82))
             .text_size(px(12.0))
             .font_family(theme.font_family.clone())
             .child(
                 svg()
                     .path(self.icon)
-                    .size(px(14.0))
+                    .size(px(12.0))
                     .text_color(theme.foreground),
             )
-            .child(self.label.clone())
+            .child(div().truncate().child(self.label.clone()))
+            .relative()
+            .top(preview_y_shift)
     }
 }
 
@@ -463,6 +510,9 @@ impl SessionSidebar {
             // is squarely on a pill; this fallback covers the gaps.
             .on_drag_move::<DraggedTab>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                    if event.drag(cx).origin != DraggedTabOrigin::Sidebar {
+                        return;
+                    }
                     this.rail_drag_origin_y = Some(f32::from(event.bounds.origin.y));
                     if let Some(slot) =
                         rail_slot_for_cursor(event, session_count, this.leading_top_pad)
@@ -481,6 +531,9 @@ impl SessionSidebar {
             // user has to land the cursor precisely on a 32×32 pill
             // to reorder, which is unforgiving on a 44-px rail.
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                if dragged.origin != DraggedTabOrigin::Sidebar {
+                    return;
+                }
                 let to = this.drop_slot.or_else(|| {
                     rail_slot_for_cursor_position(
                         window.mouse_position(),
@@ -539,6 +592,9 @@ impl SessionSidebar {
                 session_id,
                 label: session.name.clone().into(),
                 icon: session.icon,
+                origin: DraggedTabOrigin::Sidebar,
+                preview_constraint: None,
+                pane_id: None,
             };
 
             let mut pill = div()
@@ -826,6 +882,9 @@ impl SessionSidebar {
             // last row lights up.
             .on_drag_move::<DraggedTab>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                    if event.drag(cx).origin != DraggedTabOrigin::Sidebar {
+                        return;
+                    }
                     if total == 0 {
                         return;
                     }
@@ -848,6 +907,9 @@ impl SessionSidebar {
                 },
             ))
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                if dragged.origin != DraggedTabOrigin::Sidebar {
+                    return;
+                }
                 // Body-level drop fallback. The per-row on_drop only
                 // fires when mouseup is squarely inside a row's
                 // bounds. If the user released just below the last
@@ -1047,6 +1109,9 @@ impl SessionSidebar {
             session_id,
             label: session.name.clone().into(),
             icon: session.icon,
+            origin: DraggedTabOrigin::Sidebar,
+            preview_constraint: None,
+            pane_id: None,
         };
 
         let mut icon_stack = div().relative().flex_shrink_0().child(
@@ -1108,6 +1173,9 @@ impl SessionSidebar {
             })
             .on_drag_move::<DraggedTab>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                    if event.drag(cx).origin != DraggedTabOrigin::Sidebar {
+                        return;
+                    }
                     if !point_in_bounds(&event.event.position, &event.bounds) {
                         return;
                     }
@@ -1127,6 +1195,9 @@ impl SessionSidebar {
                 },
             ))
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                if dragged.origin != DraggedTabOrigin::Sidebar {
+                    return;
+                }
                 let to = this.drop_slot.unwrap_or(i);
                 this.drop_slot = None;
                 cx.emit(SidebarReorder {

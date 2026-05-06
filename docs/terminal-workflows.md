@@ -66,6 +66,15 @@ one terminal at once.
 Pane zoom is for short bursts of focus. It does not stop sibling panes; it only
 gives the active pane the full terminal area.
 
+When a tab has more than one pane, each pane shows a compact title bar. Use it
+to see which pane is focused, close a pane, or fullscreen that pane without
+leaving the split layout. Drag the title bar to rearrange panes, or drag it into
+the tab strip to move that pane into its own tab.
+
+If you want the cleanest possible terminal surface, hide pane title bars from
+Settings -> Appearance. The shortcuts and terminal context menu still expose the
+same pane actions.
+
 ## The input bar
 
 The input bar is one surface with three modes:

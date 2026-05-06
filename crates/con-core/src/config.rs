@@ -118,6 +118,10 @@ pub struct AppearanceConfig {
     /// Layout of the workspace tab strip. Defaults to `Horizontal` for
     /// backward compatibility with every shipped beta.
     pub tabs_orientation: TabsOrientation,
+    /// Hide the per-pane title bar when there are multiple panes. Defaults to
+    /// `false` (title bar visible). When `true` the title bar is suppressed
+    /// even in split layouts; the fullscreen/close buttons are also hidden.
+    pub hide_pane_title_bar: bool,
 }
 
 impl Default for AppearanceConfig {
@@ -135,6 +139,7 @@ impl Default for AppearanceConfig {
             background_image_repeat: false,
             restore_terminal_text: default_restore_terminal_text(),
             tabs_orientation: TabsOrientation::default(),
+            hide_pane_title_bar: false,
         }
     }
 }

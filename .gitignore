@@ -22,6 +22,7 @@ target
 
 3pp
 .context
+.superpowers/
 .DS_Store
 __pycache__/
 *.pyc

@@ -138,6 +138,7 @@ pub struct SettingsPanel {
     background_image_position_select: Entity<SelectState<Vec<String>>>,
     background_image_fit_select: Entity<SelectState<Vec<String>>>,
     background_image_repeat: bool,
+    hide_pane_title_bar: bool,
     save_error: Option<String>,
     last_saved_at: Option<std::time::SystemTime>,
 
@@ -1360,6 +1361,7 @@ impl SettingsPanel {
             background_image_position_select,
             background_image_fit_select,
             background_image_repeat: config.appearance.background_image_repeat,
+            hide_pane_title_bar: config.appearance.hide_pane_title_bar,
             save_error: None,
             last_saved_at: std::fs::metadata(Config::config_path())
                 .and_then(|m| m.modified())
@@ -1540,6 +1542,7 @@ impl SettingsPanel {
             select.set_selected_value(&self.config.appearance.background_image_fit, window, cx);
         });
         self.background_image_repeat = self.config.appearance.background_image_repeat;
+        self.hide_pane_title_bar = self.config.appearance.hide_pane_title_bar;
         self.provider_model_fetching = false;
         self.provider_model_status = None;
         self.provider_model_status_error = false;
@@ -3245,43 +3248,78 @@ impl SettingsPanel {
                 .gap(px(8.0))
                 .child(group_label("Tabs", &theme))
                 .child(
-                    card(theme, card_opacity).child(toggle_row(
-                        "Vertical Tabs",
-                        "Show tabs as a collapsible left-side panel.",
-                        Switch::new("vertical-tabs-toggle")
-                            .checked(vertical_tabs_enabled)
-                            .small()
-                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                // Live toggle: write the new value
-                                // into self.config, persist to disk
-                                // immediately so closing the panel
-                                // (or quitting + relaunching)
-                                // doesn't lose the change, and emit
-                                // a narrow event so the workspace
-                                // applies only the orientation switch.
-                                let previous_orientation = this.config.appearance.tabs_orientation;
-                                this.config.appearance.tabs_orientation = if *checked {
-                                    con_core::config::TabsOrientation::Vertical
-                                } else {
-                                    con_core::config::TabsOrientation::Horizontal
-                                };
-                                if let Err(err) = this.config.save() {
-                                    this.config.appearance.tabs_orientation = previous_orientation;
-                                    log::warn!("settings: persist tabs_orientation failed: {err}");
-                                    this.save_error = Some(err.to_string());
-                                    cx.notify();
-                                    return;
-                                }
-                                if let Some(snapshot) = &mut this.preview_snapshot {
-                                    snapshot.appearance.tabs_orientation =
+                    card(theme, card_opacity)
+                        .child(toggle_row(
+                            "Vertical Tabs",
+                            "Show tabs as a collapsible left-side panel.",
+                            Switch::new("vertical-tabs-toggle")
+                                .checked(vertical_tabs_enabled)
+                                .small()
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    // Live toggle: write the new value
+                                    // into self.config, persist to disk
+                                    // immediately so closing the panel
+                                    // (or quitting + relaunching)
+                                    // doesn't lose the change, and emit
+                                    // a narrow event so the workspace
+                                    // applies only the orientation switch.
+                                    let previous_orientation =
                                         this.config.appearance.tabs_orientation;
-                                }
-                                this.save_error = None;
-                                cx.emit(TabsOrientationChanged);
-                                cx.notify();
-                            })),
-                        theme,
-                    )),
+                                    this.config.appearance.tabs_orientation = if *checked {
+                                        con_core::config::TabsOrientation::Vertical
+                                    } else {
+                                        con_core::config::TabsOrientation::Horizontal
+                                    };
+                                    if let Err(err) = this.config.save() {
+                                        this.config.appearance.tabs_orientation =
+                                            previous_orientation;
+                                        log::warn!(
+                                            "settings: persist tabs_orientation failed: {err}"
+                                        );
+                                        this.save_error = Some(err.to_string());
+                                        cx.notify();
+                                        return;
+                                    }
+                                    if let Some(snapshot) = &mut this.preview_snapshot {
+                                        snapshot.appearance.tabs_orientation =
+                                            this.config.appearance.tabs_orientation;
+                                    }
+                                    this.save_error = None;
+                                    cx.emit(TabsOrientationChanged);
+                                    cx.notify();
+                                })),
+                            theme,
+                        ))
+                        .child(row_separator(theme))
+                        .child(toggle_row(
+                            "Hide Pane Title Bar",
+                            "Hide the title bar on split panes.",
+                            Switch::new("hide-pane-title-bar-toggle")
+                                .checked(self.hide_pane_title_bar)
+                                .small()
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    let previous = this.config.appearance.hide_pane_title_bar;
+                                    this.hide_pane_title_bar = *checked;
+                                    this.config.appearance.hide_pane_title_bar = *checked;
+                                    if let Err(err) = this.config.save() {
+                                        this.hide_pane_title_bar = previous;
+                                        this.config.appearance.hide_pane_title_bar = previous;
+                                        log::warn!(
+                                            "settings: persist hide_pane_title_bar failed: {err}"
+                                        );
+                                        this.save_error = Some(err.to_string());
+                                        cx.notify();
+                                        return;
+                                    }
+                                    if let Some(snapshot) = &mut this.preview_snapshot {
+                                        snapshot.appearance.hide_pane_title_bar = *checked;
+                                    }
+                                    this.save_error = None;
+                                    cx.emit(AppearancePreview);
+                                    cx.notify();
+                                })),
+                            theme,
+                        )),
                 ),
         );
 
