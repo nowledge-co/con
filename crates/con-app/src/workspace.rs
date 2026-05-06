@@ -11033,7 +11033,10 @@ impl Render for ConWorkspace {
             }
         }
 
-        let show_horizontal_tabs = self.horizontal_tabs_visible();
+        // Also show the tab strip during pane-to-tab drag so the ghost tab
+        // preview is visible even when there is currently only one tab.
+        let show_horizontal_tabs =
+            self.horizontal_tabs_visible() || pane_title_drag_to_tab_active;
         let tab_count = self.tabs.len();
         let tab_strip_drop_slot = self.tab_strip_drop_slot;
         // Snapshot rename state for this render frame.
@@ -11564,14 +11567,22 @@ impl Render for ConWorkspace {
         }
 
         let mut leading_chrome = div().flex().flex_1().min_w_0().items_end();
-        if tab_strip_progress > 0.01 {
+        // Show the tab strip when animating/visible OR when a pane is being
+        // dragged to become a new tab (so the ghost tab preview is visible
+        // even when there is currently only one tab).
+        if tab_strip_progress > 0.01 || pane_title_drag_to_tab_active {
+            let opacity = if pane_title_drag_to_tab_active && tab_strip_progress < 0.01 {
+                1.0
+            } else {
+                tab_strip_progress
+            };
             leading_chrome = leading_chrome.child(
                 div()
                     .flex()
                     .flex_1()
                     .min_w_0()
                     .overflow_hidden()
-                    .opacity(tab_strip_progress)
+                    .opacity(opacity)
                     .child(tabs_container),
             );
         }
@@ -11927,7 +11938,11 @@ impl Render for ConWorkspace {
                                 drag.active = true;
                             }
                             if drag.active {
-                                let top_bar_h = this.current_top_bar_height();
+                                // During pane-title drag we always use the
+                                // full tab-strip height as the detection zone
+                                // so the user can drag into the tab bar even
+                                // when only one tab exists (strip not yet shown).
+                                let top_bar_h = TOP_BAR_TABS_HEIGHT;
                                 let in_top_bar = f32::from(event.position.y) < top_bar_h;
                                 let tab_count = this.tabs.len();
                                 let tab_bounds = this
