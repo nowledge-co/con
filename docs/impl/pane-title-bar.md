@@ -1,13 +1,13 @@
 # Pane Title Bar — Design Spec
 
-**Date**: 2026-05-06  
+**Date**: 2026-05-06
 **Branch**: `wey-gu/pane-title-bar`
 
 ---
 
 ## Overview
 
-Add a persistent title bar to every pane when there are 2+ panes in the split tree. The bar shows the pane title, an options menu (maximize / minimize), a close button, and supports drag-to-tab promotion.
+Add a persistent title bar to every pane when there are 2+ panes in the split tree. The bar shows the pane title, direct fullscreen/restore and close controls, and supports drag-to-tab promotion.
 
 ---
 
@@ -23,7 +23,7 @@ Add a persistent title bar to every pane when there are 2+ panes in the split tr
 
 ```
 ┌─────────────────────────────────────────────┐
-│ [⋮]      sundy@m1max: ~/work/con       [✕] │  ← title bar, h=28px
+│      sundy@m1max: ~/work/con      [⛶][✕] │  ← title bar, h=28px
 ├─────────────────────────────────────────────┤
 │  [surface strip — only when surfaces > 1]   │  ← existing, h=28px
 ├─────────────────────────────────────────────┤
@@ -51,15 +51,14 @@ Add a persistent title bar to every pane when there are 2+ panes in the split tr
 
 ### Icons (Phosphor)
 
-- Options menu: `phosphor/dots-three-vertical.svg`
+- Fullscreen: `phosphor/corners-out.svg`
+- Restore: `phosphor/frame-corners.svg`
 - Close: `phosphor/x.svg`
-- Maximize: `phosphor/arrows-out-simple.svg`
-- Minimize (restore): `phosphor/arrows-in-simple.svg`
 
 ### Layout
 
 ```
-[px(6) pad] [⋮ btn 20px] [flex-1 centered title] [✕ btn 20px] [px(6) pad]
+[px(6) pad] [flex-1 centered title] [fullscreen/restore 20px] [✕ 20px] [px(6) pad]
 ```
 
 - Title is centered in the remaining space using `flex-1` + `text_align(center)` (or `justify_center` on a flex row).
@@ -67,16 +66,16 @@ Add a persistent title bar to every pane when there are 2+ panes in the split tr
 
 ---
 
-## Options Menu
+## Controls
 
-Clicking `⋮` opens a `context_menu` (gpui-component `ContextMenuExt`) with two items:
+Pane title controls are direct buttons rather than an overflow menu. This keeps the title bar usable during drag workflows and avoids a second menu layer for two high-frequency actions.
 
 | Item | Condition | Action |
 |---|---|---|
-| **Maximize** | always shown; label changes to **Restore** when already zoomed | `toggle_zoom_cb(pane_id)` |
+| **Fullscreen / Restore** | always shown; icon changes when already zoomed | `toggle_zoom_cb(pane_id)` |
 | **Close Pane** | only when `pane_count > 1` | `close_pane_cb(pane_id)` |
 
-"Maximize" maps to the existing `toggle_zoom_focused` / `TogglePaneZoom` path.  
+"Fullscreen / Restore" maps to the existing `toggle_zoom_focused` / `TogglePaneZoom` path.
 "Close Pane" maps to the existing `close_pane_in_tab` path.
 
 ---
@@ -93,11 +92,11 @@ Clicking `⋮` opens a `context_menu` (gpui-component `ContextMenuExt`) with two
 
 ### Interaction
 
-1. User presses mouse-down on the title bar area.
-2. User drags upward toward the window's top bar (tab strip / title bar area).
-3. When the cursor enters the top-bar zone (y < `TOP_BAR_HEIGHT` from window top), a **drop indicator** appears in the tab strip — a highlighted insertion slot showing "drop here to create tab".
-4. On mouse-up inside the top-bar zone: the pane is detached and promoted to a new tab.
-5. On mouse-up outside the top-bar zone (or Escape): drag is cancelled, pane stays.
+1. User drags from the pane title bar.
+2. Over pane content, Con previews the nearest split edge and moves the pane there on drop.
+3. Over the horizontal tab strip, Con renders a ghost tab at the live insertion slot.
+4. On drop in the tab strip, the pane is detached and promoted to a new tab at that slot.
+5. On drop outside an actionable target, the drag state is cleared and the pane stays put.
 
 ### State
 
@@ -114,23 +113,19 @@ struct PaneTitleDragState {
 
 `title` drives the workspace-owned floating title overlay, `current_pos` keeps that overlay centered under the live cursor, and `target` records whether the pane is currently targeting a split drop or a new tab slot.
 
-### Threshold
+### Drop Indicator
 
-Drag becomes "active" (shows indicator) after cursor moves more than `8px` from start position in any direction. This prevents accidental drags on click.
+Rendered in the horizontal tab strip as a primary-tinted ghost tab. Existing tabs shift around it so the final tab order is visible before the user releases.
 
-### Drop indicator
+### Promotion Logic
 
-Rendered in the workspace top bar (tab strip area) as a semi-transparent insertion marker — a vertical bar or highlighted tab slot at the right end of the tab strip. Uses `theme.accent_color` or `theme.foreground.opacity(0.20)` fill.
-
-### Promotion logic — `detach_pane_to_new_tab(pane_id, window, cx)`
-
-New method on `ConWorkspace`:
+`ConWorkspace::detach_pane_to_new_tab_at_slot(pane_id, slot, window, cx)`:
 
 1. Collect all surface terminals for `pane_id` from the active tab's `pane_tree`.
-2. Call `close_pane_in_tab(active_tab, pane_id, window, cx)` — removes the pane from the split tree.
-3. Create a new tab using the first terminal from step 1 as the root pane.
+2. Remove the pane from the split tree without shutting down its terminals.
+3. Create a new tab using the active surface terminal from step 1 as the root pane.
 4. If the pane had multiple surfaces, restore them into the new tab's pane tree via `create_surface_in_pane`.
-5. Switch to the new tab.
+5. Insert the new tab at the requested slot and switch to it through the normal tab activation path.
 
 ---
 
@@ -141,22 +136,21 @@ Two new callbacks added alongside the existing ones:
 ```rust
 pub fn render(
     &self,
+    session_id: u64,
     begin_drag_cb: impl Fn(SplitId, f32) + 'static,
     focus_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
     rename_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
     close_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
-    // NEW:
     close_pane_cb: impl Fn(PaneId, &mut Window, &mut App) + 'static,
     toggle_zoom_cb: impl Fn(PaneId, &mut Window, &mut App) + 'static,
-    begin_pane_title_drag_cb: impl Fn(PaneId, Point<Pixels>) + 'static,
     rename_editor: Option<SurfaceRenameEditor>,
     divider_color: Hsla,
-    has_splits: bool,   // passed in from workspace (pane_count > 1)
+    hide_pane_title_bar: bool,
     cx: &App,
 ) -> AnyElement
 ```
 
-`has_splits` controls whether the title bar is rendered at all.
+`PaneTree` starts pane-title drags by creating a `DraggedTab` with `origin = DraggedTabOrigin::Pane`; workspace-level drag handlers own live target tracking and drop behavior.
 
 ---
 

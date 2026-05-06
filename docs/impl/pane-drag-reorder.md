@@ -81,7 +81,7 @@ pub enum DraggedTabOrigin {
 Rules:
 
 - `Sidebar`: affects only vertical sidebar reorder.
-- `HorizontalTabStrip`: affects horizontal tab reorder / tab-to-tab split preview.
+- `HorizontalTabStrip`: affects horizontal tab reorder.
 - `Pane`: affects pane split preview and pane-to-tab promotion.
 
 ### `PaneTitleDragState`
@@ -92,9 +92,7 @@ Tracks the visible workspace overlay and pane drop target:
 
 ```rust
 struct PaneTitleDragState {
-    pane_id: PaneId,
     title: SharedString,
-    start_pos: Point<Pixels>,
     current_pos: Point<Pixels>,
     active: bool,
     target: Option<PaneDropTarget>,
@@ -364,7 +362,6 @@ origin = cursor - preview_size / 2
 ## Known Follow-ups
 
 - Consider splitting `tab_strip_drop_slot` into separate `tab_reorder_drop_slot` and `pane_to_tab_drop_slot` to make state ownership explicit.
-- Remove stale fields from `PaneTitleDragState` if `pane_id` / `start_pos` remain unused after the branch settles.
 - If pane-to-tab labels still become empty after promotion, thread the captured drag label into `detach_pane_to_new_tab_at_slot(...)` as an explicit fallback.
 - Keep render-path debug logging out of the final branch; drag move events are high-frequency.
 

@@ -1,15 +1,17 @@
 # Tab Drag Layout Preview — Design Spec
 
-**Date**: 2026-05-06  
+**Date**: 2026-05-06
 **Branch**: `wey-gu/pane-title-bar`
 
 ---
 
 ## Overview
 
-When dragging a horizontal tab over another tab, Con should preview the layout that will result if the dragged tab is dropped into the target tab as a split. The preview starts only when the cursor is in a non-center edge zone of another tab.
+This is a forward-looking design note for a tab-to-tab split-merge workflow. It is not part of the current pane-title drag implementation.
 
-The selected visual direction is **Live split preview**: the target tab content area visually splits in-place, with the dragged tab layout tinted differently from the target tab layout. On drop, the dragged tab's entire pane layout is merged into the target tab and the dragged tab is removed from the tab strip.
+When dragging a horizontal tab over another tab, Con could preview the layout that will result if the dragged tab is dropped into the target tab as a split. The preview starts only when the cursor is in a non-center edge zone of another tab.
+
+The proposed visual direction is **Live split preview**: the target tab content area visually splits in-place, with the dragged tab layout tinted differently from the target tab layout. On drop, the dragged tab's entire pane layout is merged into the target tab and the dragged tab is removed from the tab strip.
 
 ---
 
@@ -234,4 +236,4 @@ Responsibilities:
 
 ## Open Decisions
 
-No open decisions. User selected Live split preview and confirmed full tab-layout merge on drop.
+Open for a follow-up PR. The current production `TabDragTarget` remains reorder-only.

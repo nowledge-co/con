@@ -1292,6 +1292,10 @@ impl PaneTree {
         }
     }
 
+    fn is_leaf(node: &PaneNode, pane_id: PaneId) -> bool {
+        matches!(node, PaneNode::Leaf { id, .. } if *id == pane_id)
+    }
+
     fn is_direct_sibling_noop_move(
         node: &PaneNode,
         source_pane_id: PaneId,
@@ -1308,24 +1312,15 @@ impl PaneTree {
                 ..
             } => {
                 if *split_direction == direction {
-                    let target_first = Self::contains_leaf(first, target_pane_id);
-                    let source_first = Self::contains_leaf(first, source_pane_id);
-                    let target_second = Self::contains_leaf(second, target_pane_id);
-                    let source_second = Self::contains_leaf(second, source_pane_id);
-
-                    if target_first
-                        && source_second
+                    if Self::is_leaf(first, target_pane_id)
+                        && Self::is_leaf(second, source_pane_id)
                         && placement == SplitPlacement::After
-                        && !source_first
-                        && !target_second
                     {
                         return true;
                     }
-                    if source_first
-                        && target_second
+                    if Self::is_leaf(first, source_pane_id)
+                        && Self::is_leaf(second, target_pane_id)
                         && placement == SplitPlacement::Before
-                        && !target_first
-                        && !source_second
                     {
                         return true;
                     }
@@ -2834,6 +2829,33 @@ mod tests {
 
         assert!(tree.is_noop_pane_move(1, 0, SplitDirection::Vertical, SplitPlacement::After,));
         assert!(tree.is_noop_pane_move(0, 1, SplitDirection::Vertical, SplitPlacement::Before,));
+        assert!(!tree.is_noop_pane_move(1, 0, SplitDirection::Horizontal, SplitPlacement::After,));
+    }
+
+    #[::core::prelude::v1::test]
+    fn pane_move_is_not_noop_when_source_and_target_are_in_opposite_subtrees() {
+        let tree = PaneTree {
+            root: PaneNode::Split {
+                split_id: 0,
+                direction: SplitDirection::Horizontal,
+                first: Box::new(PaneNode::Split {
+                    split_id: 1,
+                    direction: SplitDirection::Vertical,
+                    first: Box::new(empty_leaf(0)),
+                    second: Box::new(empty_leaf(2)),
+                    ratio: 0.5,
+                }),
+                second: Box::new(empty_leaf(1)),
+                ratio: 0.5,
+            },
+            focused_pane_id: 0,
+            zoomed_pane_id: None,
+            next_id: 3,
+            next_surface_id: 0,
+            next_split_id: 2,
+            dragging: None,
+        };
+
         assert!(!tree.is_noop_pane_move(1, 0, SplitDirection::Horizontal, SplitPlacement::After,));
     }
 }
