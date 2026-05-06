@@ -542,6 +542,12 @@ pub struct ConWorkspace {
     /// Drop slot (0..=N) tracked while a DraggedTab is in flight over
     /// the horizontal tab strip. Slot K = "insert before tab K".
     tab_strip_drop_slot: Option<usize>,
+    /// Active horizontal tab drag target. Split targets drive live layout
+    /// preview and suppress the reorder slot indicator.
+    tab_drag_target: Option<TabDragTarget>,
+    /// Drag source tab id captured from GPUI's drag preview callback so
+    /// drag-move handlers can resolve source/target indices.
+    active_dragged_tab_session_id: std::sync::Arc<std::sync::Mutex<Option<u64>>>,
     /// macOS titlebar drag is initiated explicitly after actual mouse
     /// movement so double-click still reaches the titlebar handler.
     #[cfg(target_os = "macos")]
@@ -1637,6 +1643,8 @@ impl ConWorkspace {
             tab_rename_cancelled_generation: None,
             tab_rename_generation: 0,
             tab_strip_drop_slot: None,
+            tab_drag_target: None,
+            active_dragged_tab_session_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
             #[cfg(target_os = "macos")]
             top_bar_should_move: false,
             pending_pane_title_drag_init: std::sync::Arc::new(std::sync::Mutex::new(None)),
@@ -10901,8 +10909,12 @@ impl Render for ConWorkspace {
         // In vertical-tabs mode the side panel owns the tab list so we keep
         // this strip empty even with multiple tabs.
         // Clear stale drop indicator when no drag is in flight.
-        if self.tab_strip_drop_slot.is_some() && !cx.has_active_drag() {
+        if (self.tab_strip_drop_slot.is_some() || self.tab_drag_target.is_some()) && !cx.has_active_drag() {
             self.tab_strip_drop_slot = None;
+            self.tab_drag_target = None;
+            if let Ok(mut guard) = self.active_dragged_tab_session_id.lock() {
+                *guard = None;
+            }
         }
 
         let show_horizontal_tabs = self.horizontal_tabs_visible();
@@ -10926,6 +10938,7 @@ impl Render for ConWorkspace {
                         && this.tab_strip_drop_slot == Some(tab_count)
                     {
                         this.tab_strip_drop_slot = None;
+                        this.tab_drag_target = None;
                         cx.notify();
                     }
                 },
@@ -10933,6 +10946,10 @@ impl Render for ConWorkspace {
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
                 let to = this.tab_strip_drop_slot.unwrap_or(tab_count);
                 this.tab_strip_drop_slot = None;
+                this.tab_drag_target = None;
+                if let Ok(mut guard) = this.active_dragged_tab_session_id.lock() {
+                    *guard = None;
+                }
                 this.reorder_tab_by_id(dragged.session_id, to, cx);
                 cx.notify();
             }));
@@ -11003,10 +11020,11 @@ impl Render for ConWorkspace {
                 // this tab when drop_slot == index, or on the right edge
                 // of the last tab when drop_slot == tab_count.
                 let show_indicator_left =
-                    tab_strip_drop_slot == Some(index) && cx.has_active_drag();
+                    tab_strip_drop_slot == Some(index) && cx.has_active_drag() && !matches!(self.tab_drag_target, Some(TabDragTarget::Split(_)));
                 let show_indicator_right = index + 1 == tab_count
                     && tab_strip_drop_slot == Some(tab_count)
-                    && cx.has_active_drag();
+                    && cx.has_active_drag()
+                    && !matches!(self.tab_drag_target, Some(TabDragTarget::Split(_)));
                 let indicator_color = theme.primary;
 
                 let dragged = DraggedTab {
@@ -11014,6 +11032,7 @@ impl Render for ConWorkspace {
                     label: display_title.clone().into(),
                     icon: tab_icon,
                 };
+                let active_dragged_tab_session_id = self.active_dragged_tab_session_id.clone();
 
                 let mut tab_el = div()
                     .id(ElementId::Name(format!("tab-{}", index).into()))
@@ -11065,12 +11084,43 @@ impl Render for ConWorkspace {
                     )
                     .on_drag(
                         dragged,
-                        |dragged: &DraggedTab, _offset, _window, cx: &mut App| {
+                        move |dragged: &DraggedTab, _offset, _window, cx: &mut App| {
+                            if let Ok(mut guard) = active_dragged_tab_session_id.lock() {
+                                *guard = Some(dragged.session_id);
+                            }
                             cx.new(|_| dragged.clone())
                         },
                     )
                     .on_drag_move::<DraggedTab>(cx.listener(
                         move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                            let dragged_session_id = this
+                                .active_dragged_tab_session_id
+                                .lock()
+                                .ok()
+                                .and_then(|guard| *guard);
+                            let dragged_tab_index = dragged_session_id.and_then(|session_id| {
+                                this.tabs
+                                    .iter()
+                                    .position(|tab| tab.summary_id == session_id)
+                            });
+                            if let Some(dragged_tab_index) = dragged_tab_index {
+                                if let Some(target) = tab_split_drop_target_from_position(
+                                    dragged_tab_index,
+                                    index,
+                                    event.event.position,
+                                    event.bounds,
+                                ) {
+                                    if this.tab_drag_target != Some(TabDragTarget::Split(target))
+                                        || this.tab_strip_drop_slot.is_some()
+                                    {
+                                        this.tab_drag_target = Some(TabDragTarget::Split(target));
+                                        this.tab_strip_drop_slot = None;
+                                        cx.notify();
+                                    }
+                                    return;
+                                }
+                            }
+
                             let Some(slot) = horizontal_tab_slot_from_position(
                                 event.event.position,
                                 event.bounds,
@@ -11078,7 +11128,11 @@ impl Render for ConWorkspace {
                             ) else {
                                 return;
                             };
-                            if this.tab_strip_drop_slot != Some(slot) {
+                            let new_target = Some(TabDragTarget::Reorder { slot });
+                            if this.tab_strip_drop_slot != Some(slot)
+                                || this.tab_drag_target != new_target
+                            {
+                                this.tab_drag_target = new_target;
                                 this.tab_strip_drop_slot = Some(slot);
                                 cx.notify();
                             }
@@ -11211,7 +11265,11 @@ impl Render for ConWorkspace {
                                     ) else {
                                         return;
                                     };
-                                    if this.tab_strip_drop_slot != Some(slot) {
+                                    let new_target = Some(TabDragTarget::Reorder { slot });
+                                    if this.tab_strip_drop_slot != Some(slot)
+                                        || this.tab_drag_target != new_target
+                                    {
+                                        this.tab_drag_target = new_target;
                                         this.tab_strip_drop_slot = Some(slot);
                                         cx.notify();
                                     }
@@ -12887,6 +12945,14 @@ fn pane_split_drop_target_from_position(
     })
 }
 
+fn remap_target_index_after_source_removal(from: usize, to: usize) -> Option<usize> {
+    match from.cmp(&to) {
+        std::cmp::Ordering::Equal => None,
+        std::cmp::Ordering::Less => Some(to.saturating_sub(1)),
+        std::cmp::Ordering::Greater => Some(to),
+    }
+}
+
 fn tab_split_drop_target_from_position(
     dragged_tab_index: usize,
     target_tab_index: usize,
@@ -13008,8 +13074,8 @@ mod tests {
         ConWorkspace, SplitDirection, SplitPlacement, TabRenameStateSnapshot,
         horizontal_tab_slot_from_position, normalize_tab_user_label,
         pane_split_drop_target_from_position, remap_tab_rename_state_after_close,
-        remap_tab_rename_state_after_reorder, tab_rename_commit_label, tab_rename_initial_label,
-        tab_split_drop_target_from_position, trailing_drop_slot_from_position,
+        remap_tab_rename_state_after_reorder, remap_target_index_after_source_removal,
+        tab_rename_commit_label, tab_rename_initial_label, tab_split_drop_target_from_position, trailing_drop_slot_from_position,
     };
     use gpui::{Bounds, Point, Size, px};
 
@@ -13116,6 +13182,13 @@ mod tests {
             ),
             "Deploy"
         );
+    }
+
+    #[test]
+    fn remap_target_index_after_source_removal_handles_ordering() {
+        assert_eq!(remap_target_index_after_source_removal(0, 0), None);
+        assert_eq!(remap_target_index_after_source_removal(0, 2), Some(1));
+        assert_eq!(remap_target_index_after_source_removal(2, 0), Some(0));
     }
 
     #[test]
