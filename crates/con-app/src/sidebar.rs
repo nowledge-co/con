@@ -510,6 +510,9 @@ impl SessionSidebar {
             // is squarely on a pill; this fallback covers the gaps.
             .on_drag_move::<DraggedTab>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                    if event.drag(cx).origin != DraggedTabOrigin::Sidebar {
+                        return;
+                    }
                     this.rail_drag_origin_y = Some(f32::from(event.bounds.origin.y));
                     if let Some(slot) =
                         rail_slot_for_cursor(event, session_count, this.leading_top_pad)
@@ -528,6 +531,9 @@ impl SessionSidebar {
             // user has to land the cursor precisely on a 32×32 pill
             // to reorder, which is unforgiving on a 44-px rail.
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                if dragged.origin != DraggedTabOrigin::Sidebar {
+                    return;
+                }
                 let to = this.drop_slot.or_else(|| {
                     rail_slot_for_cursor_position(
                         window.mouse_position(),
@@ -876,6 +882,9 @@ impl SessionSidebar {
             // last row lights up.
             .on_drag_move::<DraggedTab>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                    if event.drag(cx).origin != DraggedTabOrigin::Sidebar {
+                        return;
+                    }
                     if total == 0 {
                         return;
                     }
@@ -898,6 +907,9 @@ impl SessionSidebar {
                 },
             ))
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                if dragged.origin != DraggedTabOrigin::Sidebar {
+                    return;
+                }
                 // Body-level drop fallback. The per-row on_drop only
                 // fires when mouseup is squarely inside a row's
                 // bounds. If the user released just below the last
@@ -1161,6 +1173,9 @@ impl SessionSidebar {
             })
             .on_drag_move::<DraggedTab>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
+                    if event.drag(cx).origin != DraggedTabOrigin::Sidebar {
+                        return;
+                    }
                     if !point_in_bounds(&event.event.position, &event.bounds) {
                         return;
                     }
@@ -1180,6 +1195,9 @@ impl SessionSidebar {
                 },
             ))
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                if dragged.origin != DraggedTabOrigin::Sidebar {
+                    return;
+                }
                 let to = this.drop_slot.unwrap_or(i);
                 this.drop_slot = None;
                 cx.emit(SidebarReorder {
