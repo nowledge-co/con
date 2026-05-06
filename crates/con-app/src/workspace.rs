@@ -11938,11 +11938,13 @@ impl Render for ConWorkspace {
                                 drag.active = true;
                             }
                             if drag.active {
-                                // During pane-title drag we always use the
-                                // full tab-strip height as the detection zone
-                                // so the user can drag into the tab bar even
-                                // when only one tab exists (strip not yet shown).
-                                let top_bar_h = TOP_BAR_TABS_HEIGHT;
+                                // During pane-title drag we use a generous
+                                // detection zone: the full tab-strip height
+                                // PLUS the pane title bar height (28px).
+                                // This way the user only needs to drag the
+                                // title bar upward a little — not all the way
+                                // to y=0 — to trigger the tab-bar drop.
+                                let top_bar_h = TOP_BAR_TABS_HEIGHT + 28.0;
                                 let in_top_bar = f32::from(event.position.y) < top_bar_h;
                                 let tab_count = this.tabs.len();
                                 let tab_bounds = this
