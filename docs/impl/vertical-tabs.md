@@ -130,7 +130,7 @@ crates/con-app/src/sidebar.rs       (renamed conceptually: VerticalTabsPanel)
     surface reads on both light and dark themes regardless of which
     palette tokens the theme author picked
 
-crates/con-app/src/workspace.rs
+crates/con-app/src/workspace/
   - tabs_orientation: TabsOrientation field on ConWorkspace
   - horizontal_tabs_visible() / vertical_tabs_active() helpers
   - sync_tab_strip_motion now respects orientation (horizontal strip

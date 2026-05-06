@@ -60,7 +60,7 @@ kingston/
 │   ├── con/                   # main binary — GPUI app shell
 │   │   └── src/
 │   │       ├── main.rs         # Application bootstrap + keybindings
-│   │       ├── workspace.rs    # window, tabs, splits layout
+│   │       ├── workspace/      # window, tabs, splits, render, session wiring
 │   │       ├── ghostty_view.rs  # embedded Ghostty surface view
 │   │       ├── agent_panel.rs  # side panel for AI chat / tool output
 │   │       ├── input_bar.rs    # smart input bar (NLP/shell/skill modes)
@@ -107,6 +107,8 @@ kingston/
     ├── study/                 # technology study notes
     └── impl/                  # implementation notes
 ```
+
+See `docs/impl/workspace-modules.md` for the workspace module ownership map.
 
 ---
 
