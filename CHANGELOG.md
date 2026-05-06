@@ -19,6 +19,12 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**macOS**
+
+- Fixed embedded Ghostty surface scale sync when moving a window between Retina
+  and non-Retina displays. Existing panes now update display id, backing scale,
+  layer scale, and pixel size together instead of keeping stale cell metrics.
+
 **Panes**
 
 - Fixed pane-drag preview cleanup so canceled or completed drags do not leave a
