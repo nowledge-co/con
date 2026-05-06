@@ -64,9 +64,32 @@ static NATIVE_TRANSITION_UNDERLAY_OWNERS_ASSOCIATION_KEY: u8 = 0;
 static NEXT_NATIVE_TRANSITION_OWNER_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy)]
+struct NativeBackingSync {
+    scale_x: f64,
+    scale_y: f64,
+    width_px: u32,
+    height_px: u32,
+}
+
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn objc_getAssociatedObject(object: id, key: *const c_void) -> id;
     fn objc_setAssociatedObject(object: id, key: *const c_void, value: id, policy: usize);
+    fn con_ghostty_surface_install_backing_observer(view: *mut c_void, surface: *mut c_void);
+    fn con_ghostty_surface_remove_backing_observer(view: *mut c_void);
+    fn con_ghostty_surface_sync_backing(
+        view: *mut c_void,
+        surface: *mut c_void,
+        logical_width: f64,
+        logical_height: f64,
+        fallback_scale: f64,
+        out_scale_x: *mut f64,
+        out_scale_y: *mut f64,
+        out_width: *mut u32,
+        out_height: *mut u32,
+        out_display_id: *mut u32,
+    ) -> bool;
 }
 
 #[cfg(target_os = "macos")]
@@ -122,6 +145,8 @@ pub struct GhosttyView {
     initialized: bool,
     last_bounds: Option<Bounds<Pixels>>,
     scale_factor: f32,
+    #[cfg(target_os = "macos")]
+    display_id: Option<u32>,
     last_title: Option<String>,
     last_cwd: Option<String>,
     /// Data queued for the PTY before the surface was created.
@@ -196,6 +221,8 @@ impl GhosttyView {
             initialized: false,
             last_bounds: None,
             scale_factor: 1.0,
+            #[cfg(target_os = "macos")]
+            display_id: None,
             last_title: None,
             last_cwd: cwd,
             pending_write: None,
@@ -394,6 +421,11 @@ impl GhosttyView {
             );
         }
         self.native_underlay_view = None;
+        if let Some(nsview) = self.nsview {
+            unsafe {
+                con_ghostty_surface_remove_backing_observer(nsview as *mut c_void);
+            }
+        }
         if let Some(host_view) = self.host_view.take() {
             unsafe {
                 let superview: id = msg_send![host_view, superview];
@@ -551,7 +583,7 @@ impl GhosttyView {
             return;
         }
 
-        self.scale_factor = window.scale_factor();
+        self.scale_factor = window.scale_factor().max(f32::EPSILON);
 
         let raw_handle: raw_window_handle::WindowHandle<'_> =
             match HasWindowHandle::window_handle(window) {
@@ -628,7 +660,9 @@ impl GhosttyView {
             (host, document, surface, underlay)
         };
 
-        let scale = self.scale_factor as f64;
+        let scale =
+            Self::view_backing_scale(nsview, f64::from(window.scale_factor().max(f32::EPSILON)));
+        self.scale_factor = scale as f32;
         match self.app.new_surface(
             nsview as *mut c_void,
             scale,
@@ -637,12 +671,9 @@ impl GhosttyView {
             Some(self.initial_font_size),
         ) {
             Ok(terminal) => {
-                let width_px = (f32::from(bounds.size.width) * self.scale_factor) as u32;
-                let height_px = (f32::from(bounds.size.height) * self.scale_factor) as u32;
-                terminal.set_size(width_px, height_px);
-                terminal.set_content_scale(scale);
                 terminal.set_focus(self.surface_focused.get());
-                self.terminal = Some(Arc::new(terminal));
+                let terminal = Arc::new(terminal);
+                self.terminal = Some(terminal.clone());
                 self.restored_screen_text = None;
                 self.host_view = Some(host_view);
                 self.document_view = Some(document_view);
@@ -650,19 +681,27 @@ impl GhosttyView {
                 self.native_underlay_view = Some(underlay_view);
                 self.initialized = true;
                 self.next_surface_init_retry_at = None;
+                unsafe {
+                    con_ghostty_surface_install_backing_observer(
+                        nsview as *mut c_void,
+                        terminal.raw_surface() as *mut c_void,
+                    );
+                }
                 self.sync_native_backing_background();
                 self.apply_transition_underlay_visibility();
                 self.sync_window_background_blur();
+                let backing = self.sync_native_backing_properties(bounds, window);
                 // Force update_frame() to position the newly-created host.
                 // If a previous layout recorded the same bounds while the
                 // surface was still pending, an early-return here leaves the
                 // NSView at its bootstrap origin until a manual divider resize.
                 self.last_bounds = None;
+                let size = terminal.size();
                 log::info!(
                     "Ghostty surface created: {}x{} px, scale {}",
-                    width_px,
-                    height_px,
-                    scale
+                    backing.map_or(size.width_px, |backing| backing.width_px),
+                    backing.map_or(size.height_px, |backing| backing.height_px),
+                    self.scale_factor
                 );
                 self.sync_native_scroll_view();
 
@@ -859,7 +898,7 @@ impl GhosttyView {
         };
 
         self.ensure_initialized(bounds, window, cx);
-        self.update_frame(bounds);
+        self.update_frame(bounds, window);
         if showed_layout_fallback != self.show_layout_fallback() {
             cx.notify();
         }
@@ -874,14 +913,140 @@ impl GhosttyView {
     ) {
         let showed_layout_fallback = self.show_layout_fallback();
         self.ensure_initialized(bounds, window, cx);
-        self.update_frame(bounds);
+        self.update_frame(bounds, window);
         if showed_layout_fallback != self.show_layout_fallback() {
             cx.notify();
         }
     }
 
     #[cfg(target_os = "macos")]
-    fn update_frame(&mut self, bounds: Bounds<Pixels>) {
+    fn view_backing_scale(view: id, fallback_scale: f64) -> f64 {
+        if view.is_null() {
+            return fallback_scale.max(f64::EPSILON);
+        }
+
+        unsafe {
+            let unit = cocoa::foundation::NSSize::new(1.0, 1.0);
+            let backing: cocoa::foundation::NSSize = msg_send![view, convertSizeToBacking:unit];
+            if backing.height.is_finite() && backing.height > 0.0 {
+                backing.height
+            } else if backing.width.is_finite() && backing.width > 0.0 {
+                backing.width
+            } else {
+                fallback_scale.max(f64::EPSILON)
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn cached_scale_matches_native(&self, window: &Window) -> bool {
+        let Some(nsview) = self.nsview else {
+            return true;
+        };
+        let fallback_scale = f64::from(window.scale_factor().max(f32::EPSILON));
+        let native_scale = Self::view_backing_scale(nsview, fallback_scale);
+        (f64::from(self.scale_factor) - native_scale).abs() <= 0.001
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sync_native_backing_properties(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        window: &Window,
+    ) -> Option<NativeBackingSync> {
+        let Some(nsview) = self.nsview else {
+            self.scale_factor = window.scale_factor().max(f32::EPSILON);
+            return None;
+        };
+        let Some(terminal) = self.terminal.clone() else {
+            self.scale_factor = Self::view_backing_scale(
+                nsview,
+                f64::from(window.scale_factor().max(f32::EPSILON)),
+            ) as f32;
+            return None;
+        };
+
+        let before_size = terminal.size();
+        let previous_scale = self.scale_factor;
+        let previous_display_id = self.display_id;
+        let mut scale_x = 0.0;
+        let mut scale_y = 0.0;
+        let mut width_px = 0;
+        let mut height_px = 0;
+        let mut display_id = 0;
+        let fallback_scale =
+            Self::view_backing_scale(nsview, f64::from(window.scale_factor().max(f32::EPSILON)));
+
+        let ok = unsafe {
+            con_ghostty_surface_install_backing_observer(
+                nsview as *mut c_void,
+                terminal.raw_surface() as *mut c_void,
+            );
+            con_ghostty_surface_sync_backing(
+                nsview as *mut c_void,
+                terminal.raw_surface() as *mut c_void,
+                f64::from(bounds.size.width.as_f32().max(1.0)),
+                f64::from(bounds.size.height.as_f32().max(1.0)),
+                fallback_scale,
+                &mut scale_x,
+                &mut scale_y,
+                &mut width_px,
+                &mut height_px,
+                &mut display_id,
+            )
+        };
+        if !ok {
+            return None;
+        }
+
+        let display_id = (display_id != 0).then_some(display_id);
+        self.scale_factor = scale_y.max(f64::EPSILON) as f32;
+        if display_id.is_some() {
+            self.display_id = display_id;
+        }
+
+        let result = NativeBackingSync {
+            scale_x,
+            scale_y,
+            width_px,
+            height_px,
+        };
+        let scale_changed = (previous_scale - self.scale_factor).abs() > 0.001;
+        let display_changed = previous_display_id != self.display_id;
+        let size_changed = before_size.width_px != width_px || before_size.height_px != height_px;
+        if scale_changed || display_changed || size_changed {
+            terminal.draw();
+        }
+
+        if perf_trace_enabled() && (scale_changed || display_changed || size_changed) {
+            let after_size = terminal.size();
+            log::info!(
+                target: "con::perf",
+                "native backing sync scale={:.3}x{:.3}->{:.3}x{:.3} display={:?}->{:?} old_px={}x{} old_grid={}x{} new_px={}x{} new_grid={}x{} logical_pt={:.1}x{:.1}",
+                f64::from(previous_scale),
+                f64::from(previous_scale),
+                result.scale_x,
+                result.scale_y,
+                previous_display_id,
+                self.display_id,
+                before_size.width_px,
+                before_size.height_px,
+                before_size.columns,
+                before_size.rows,
+                after_size.width_px,
+                after_size.height_px,
+                after_size.columns,
+                after_size.rows,
+                bounds.size.width.as_f32(),
+                bounds.size.height.as_f32()
+            );
+        }
+
+        Some(result)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn update_frame(&mut self, bounds: Bounds<Pixels>, window: &Window) {
         // `last_bounds` is Con's layout cache, not Ghostty's protocol state.
         // Pane-local surfaces can be hidden, focused, and resized without
         // repainting every sibling; always verify the embedded surface still
@@ -890,6 +1055,7 @@ impl GhosttyView {
             && !self.awaiting_first_layout_visibility
             && !self.pending_native_layout
             && self.terminal_matches_bounds(bounds)
+            && self.cached_scale_matches_native(window)
         {
             return;
         }
@@ -925,7 +1091,8 @@ impl GhosttyView {
             }
         }
 
-        self.commit_surface_resize(bounds);
+        self.sync_native_scroll_view();
+        self.sync_native_backing_properties(bounds, window);
         self.sync_native_scroll_view();
 
         if let Some(started) = started {
@@ -1051,7 +1218,7 @@ impl GhosttyView {
         #[cfg(target_os = "macos")]
         {
             self.ensure_initialized(bounds, window, cx);
-            self.update_frame(bounds);
+            self.update_frame(bounds, window);
         }
         if showed_layout_fallback != self.show_layout_fallback() {
             cx.notify();
@@ -1109,39 +1276,6 @@ impl GhosttyView {
             );
         }
         matches
-    }
-
-    #[cfg(target_os = "macos")]
-    fn commit_surface_resize(&mut self, bounds: Bounds<Pixels>) {
-        let Some(ref terminal) = self.terminal else {
-            return;
-        };
-
-        let (width_px, height_px) = self.surface_size_in_backing_pixels(bounds);
-        let size = terminal.size();
-        if size.width_px == width_px && size.height_px == height_px {
-            return;
-        }
-
-        let started = perf_trace_enabled().then(Instant::now);
-        terminal.set_size(width_px, height_px);
-        terminal.draw();
-        if let Some(started) = started {
-            let elapsed = started.elapsed();
-            log::info!(
-                target: "con::perf",
-                "surface resize request old_px={}x{} old_grid={}x{} new_px={}x{} logical_pt={:.1}x{:.1} call_ms={:.3}",
-                size.width_px,
-                size.height_px,
-                size.columns,
-                size.rows,
-                width_px,
-                height_px,
-                bounds.size.width.as_f32(),
-                bounds.size.height.as_f32(),
-                elapsed.as_secs_f64() * 1000.0
-            );
-        }
     }
 
     /// Show or hide the native NSView. Used to manage z-order when

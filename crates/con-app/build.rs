@@ -39,6 +39,7 @@ fn main() {
             .file("src/objc/sparkle_trampoline.m")
             .file("src/objc/global_hotkey_trampoline.m")
             .file("src/objc/quick_terminal_trampoline.m")
+            .file("src/objc/ghostty_surface_trampoline.m")
             .flag("-fobjc-arc")
             .flag("-fmodules")
             .compile("con_objc_trampolines");
@@ -46,6 +47,7 @@ fn main() {
         println!("cargo:rerun-if-changed=src/objc/sparkle_trampoline.m");
         println!("cargo:rerun-if-changed=src/objc/global_hotkey_trampoline.m");
         println!("cargo:rerun-if-changed=src/objc/quick_terminal_trampoline.m");
+        println!("cargo:rerun-if-changed=src/objc/ghostty_surface_trampoline.m");
         println!("cargo:rustc-link-lib=framework=Carbon");
     }
 
