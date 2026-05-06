@@ -8,6 +8,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use gpui::{prelude::FluentBuilder as _, *};
+#[cfg(target_os = "macos")]
 use gpui_component::Theme;
 use gpui_component::{
     ActiveTheme, ElementExt, Sizable,
