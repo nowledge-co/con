@@ -161,13 +161,12 @@ pub fn render(
 
 | File | Change |
 |---|---|
-| `crates/con-app/src/pane_tree.rs` | Add `render_pane_title_bar()`, update `render_leaf()`, update `render()` / `render_node()` / `render_zoomed_leaf()` signatures, add `PaneTitleDragState` |
-| `crates/con-app/src/workspace.rs` | Wire new callbacks in `pane_tree.render(...)`, add `detach_pane_to_new_tab()`, add drag state tracking, render drop indicator in top bar |
+| `crates/con-app/src/pane_tree.rs` | Add `render_pane_title_bar()`, update `render_leaf()`, update `render()` / `render_node()` / `render_zoomed_leaf()` signatures, start pane title drags with `DraggedTabOrigin::Pane` |
+| `crates/con-app/src/workspace.rs` | Wire `pane_tree.render(...)`, add pane split drag state, render workspace-owned floating pane title preview, insert pane-to-tab ghost tabs in the horizontal tab strip, promote dropped panes to new tabs |
 
 ---
 
 ## Out of Scope
 
 - Title editing from the title bar (double-click rename) — use existing surface rename flow.
-- Drag pane to a different existing tab (only "new tab" drop target for now).
 - Drag between windows.

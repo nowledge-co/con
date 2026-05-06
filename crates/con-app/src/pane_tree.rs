@@ -2,13 +2,13 @@ use con_core::session::{PaneLayoutState, PaneSplitDirection, SurfaceState};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::{
-    ActiveTheme, Icon, InteractiveElementExt, Sizable,
-    button::{Button, ButtonVariants},
+    ActiveTheme, InteractiveElementExt, Sizable,
     input::{Input, InputState},
-    menu::{ContextMenuExt, DropdownMenu as _, PopupMenuItem},
+    menu::{ContextMenuExt, PopupMenuItem},
     tooltip::Tooltip,
 };
 
+use crate::sidebar::{DraggedTab, DraggedTabOrigin};
 use crate::terminal_pane::TerminalPane;
 
 const RESTORED_SCREEN_TEXT_MAX_LINES: usize = 600;
@@ -508,7 +508,8 @@ impl PaneTree {
         }
 
         let old_root = std::mem::replace(&mut self.root, Self::empty_placeholder_node());
-        let (remaining_root, Some(source_leaf)) = Self::extract_leaf(old_root, source_pane_id) else {
+        let (remaining_root, Some(source_leaf)) = Self::extract_leaf(old_root, source_pane_id)
+        else {
             return false;
         };
         let Some(remaining_root) = remaining_root else {
@@ -538,7 +539,25 @@ impl PaneTree {
         true
     }
 
+    pub fn is_noop_pane_move(
+        &self,
+        source_pane_id: PaneId,
+        target_pane_id: PaneId,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+    ) -> bool {
+        source_pane_id != target_pane_id
+            && Self::is_direct_sibling_noop_move(
+                &self.root,
+                source_pane_id,
+                target_pane_id,
+                direction,
+                placement,
+            )
+    }
+
     /// Merge another pane tree into this tree as a new root split.
+    #[cfg(test)]
     pub fn merge_tree(
         &mut self,
         mut incoming: PaneTree,
@@ -662,11 +681,8 @@ impl PaneTree {
     }
 
     pub fn pane_title(&self, pane_id: PaneId, cx: &App) -> Option<String> {
-        Self::find_terminal(&self.root, pane_id).map(|terminal| {
-            terminal
-                .title(cx)
-                .unwrap_or_else(|| "Terminal".to_string())
-        })
+        Self::find_terminal(&self.root, pane_id)
+            .map(|terminal| terminal.title(cx).unwrap_or_else(|| "Terminal".to_string()))
     }
 
     pub fn pane_bounds(&self, bounds: Bounds<Pixels>) -> Vec<(PaneId, Bounds<Pixels>)> {
@@ -744,15 +760,16 @@ impl PaneTree {
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
+        session_id: u64,
         begin_drag_cb: impl Fn(SplitId, f32) + 'static,
         focus_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
         rename_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
         close_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
         close_pane_cb: impl Fn(PaneId, &mut Window, &mut App) + 'static,
         toggle_zoom_cb: impl Fn(PaneId, &mut Window, &mut App) + 'static,
-        begin_pane_title_drag_cb: impl Fn(PaneId, Point<Pixels>) + 'static,
         rename_editor: Option<SurfaceRenameEditor>,
         divider_color: Hsla,
+        hide_pane_title_bar: bool,
         cx: &App,
     ) -> AnyElement {
         let focus_surface_cb = std::sync::Arc::new(focus_surface_cb);
@@ -760,7 +777,6 @@ impl PaneTree {
         let close_surface_cb = std::sync::Arc::new(close_surface_cb);
         let close_pane_cb = std::sync::Arc::new(close_pane_cb);
         let toggle_zoom_cb = std::sync::Arc::new(toggle_zoom_cb);
-        let begin_pane_title_drag_cb = std::sync::Arc::new(begin_pane_title_drag_cb);
         let has_splits = self.pane_count() > 1;
         let zoomed_pane_id = self.zoomed_pane_id;
 
@@ -774,10 +790,11 @@ impl PaneTree {
                 close_surface_cb.clone(),
                 close_pane_cb.clone(),
                 toggle_zoom_cb.clone(),
-                begin_pane_title_drag_cb.clone(),
                 rename_editor.clone(),
                 has_splits,
                 zoomed_pane_id,
+                session_id,
+                hide_pane_title_bar,
                 cx,
             ) {
                 return zoomed;
@@ -794,11 +811,12 @@ impl PaneTree {
             close_surface_cb,
             close_pane_cb,
             toggle_zoom_cb,
-            begin_pane_title_drag_cb,
             rename_editor,
             divider_color,
             has_splits,
             zoomed_pane_id,
+            session_id,
+            hide_pane_title_bar,
             cx,
         )
     }
@@ -862,7 +880,8 @@ impl PaneTree {
                     SplitDirection::Horizontal => {
                         let first_width = bounds.size.width * ratio;
                         let second_width = bounds.size.width - first_width;
-                        let first_bounds = Bounds::new(bounds.origin, size(first_width, bounds.size.height));
+                        let first_bounds =
+                            Bounds::new(bounds.origin, size(first_width, bounds.size.height));
                         let second_bounds = Bounds::new(
                             point(bounds.origin.x + first_width, bounds.origin.y),
                             size(second_width, bounds.size.height),
@@ -873,7 +892,8 @@ impl PaneTree {
                     SplitDirection::Vertical => {
                         let first_height = bounds.size.height * ratio;
                         let second_height = bounds.size.height - first_height;
-                        let first_bounds = Bounds::new(bounds.origin, size(bounds.size.width, first_height));
+                        let first_bounds =
+                            Bounds::new(bounds.origin, size(bounds.size.width, first_height));
                         let second_bounds = Bounds::new(
                             point(bounds.origin.x, bounds.origin.y + first_height),
                             size(bounds.size.width, second_height),
@@ -945,6 +965,7 @@ impl PaneTree {
         }
     }
 
+    #[cfg(test)]
     fn remap_leaf_ids(
         node: &mut PaneNode,
         next_pane_id: &mut PaneId,
@@ -1267,6 +1288,62 @@ impl PaneTree {
         }
     }
 
+    fn is_direct_sibling_noop_move(
+        node: &PaneNode,
+        source_pane_id: PaneId,
+        target_pane_id: PaneId,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+    ) -> bool {
+        match node {
+            PaneNode::Leaf { .. } => false,
+            PaneNode::Split {
+                direction: split_direction,
+                first,
+                second,
+                ..
+            } => {
+                if *split_direction == direction {
+                    let target_first = Self::contains_leaf(first, target_pane_id);
+                    let source_first = Self::contains_leaf(first, source_pane_id);
+                    let target_second = Self::contains_leaf(second, target_pane_id);
+                    let source_second = Self::contains_leaf(second, source_pane_id);
+
+                    if target_first
+                        && source_second
+                        && placement == SplitPlacement::After
+                        && !source_first
+                        && !target_second
+                    {
+                        return true;
+                    }
+                    if source_first
+                        && target_second
+                        && placement == SplitPlacement::Before
+                        && !target_first
+                        && !source_second
+                    {
+                        return true;
+                    }
+                }
+
+                Self::is_direct_sibling_noop_move(
+                    first,
+                    source_pane_id,
+                    target_pane_id,
+                    direction,
+                    placement,
+                ) || Self::is_direct_sibling_noop_move(
+                    second,
+                    source_pane_id,
+                    target_pane_id,
+                    direction,
+                    placement,
+                )
+            }
+        }
+    }
+
     fn extract_leaf(node: PaneNode, pane_id: PaneId) -> (Option<PaneNode>, Option<PaneNode>) {
         match node {
             PaneNode::Leaf { id, .. } if id == pane_id => (None, Some(node)),
@@ -1420,11 +1497,12 @@ impl PaneTree {
         close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
-        begin_pane_title_drag_cb: std::sync::Arc<dyn Fn(PaneId, Point<Pixels>) + 'static>,
         rename_editor: Option<SurfaceRenameEditor>,
         divider_color: Hsla,
         tree_has_splits: bool,
         zoomed_pane_id: Option<PaneId>,
+        session_id: u64,
+        hide_pane_title_bar: bool,
         cx: &App,
     ) -> AnyElement {
         match node {
@@ -1442,10 +1520,11 @@ impl PaneTree {
                 close_surface_cb,
                 close_pane_cb,
                 toggle_zoom_cb,
-                begin_pane_title_drag_cb,
                 rename_editor,
                 tree_has_splits,
                 zoomed_pane_id,
+                session_id,
+                hide_pane_title_bar,
                 cx,
             ),
             PaneNode::Split {
@@ -1472,8 +1551,6 @@ impl PaneTree {
                 let close_pane_cb_second = close_pane_cb.clone();
                 let toggle_zoom_cb_first = toggle_zoom_cb.clone();
                 let toggle_zoom_cb_second = toggle_zoom_cb.clone();
-                let begin_drag_title_first = begin_pane_title_drag_cb.clone();
-                let begin_drag_title_second = begin_pane_title_drag_cb.clone();
                 let rename_editor_first = rename_editor.clone();
                 let rename_editor_second = rename_editor.clone();
 
@@ -1487,11 +1564,12 @@ impl PaneTree {
                     close_cb_first,
                     close_pane_cb_first,
                     toggle_zoom_cb_first,
-                    begin_drag_title_first,
                     rename_editor_first,
                     divider_color,
                     tree_has_splits,
                     zoomed_pane_id,
+                    session_id,
+                    hide_pane_title_bar,
                     cx,
                 );
                 let second_el = Self::render_node(
@@ -1504,11 +1582,12 @@ impl PaneTree {
                     close_cb_second,
                     close_pane_cb_second,
                     toggle_zoom_cb_second,
-                    begin_drag_title_second,
                     rename_editor_second,
                     divider_color,
                     tree_has_splits,
                     zoomed_pane_id,
+                    session_id,
+                    hide_pane_title_bar,
                     cx,
                 );
 
@@ -1667,10 +1746,11 @@ impl PaneTree {
         close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
-        begin_pane_title_drag_cb: std::sync::Arc<dyn Fn(PaneId, Point<Pixels>) + 'static>,
         rename_editor: Option<SurfaceRenameEditor>,
         tree_has_splits: bool,
         zoomed_pane_id: Option<PaneId>,
+        session_id: u64,
+        hide_pane_title_bar: bool,
         cx: &App,
     ) -> Option<AnyElement> {
         match node {
@@ -1688,10 +1768,11 @@ impl PaneTree {
                 close_surface_cb,
                 close_pane_cb,
                 toggle_zoom_cb,
-                begin_pane_title_drag_cb,
                 rename_editor,
                 tree_has_splits,
                 zoomed_pane_id,
+                session_id,
+                hide_pane_title_bar,
                 cx,
             )),
             PaneNode::Leaf { .. } => None,
@@ -1704,10 +1785,11 @@ impl PaneTree {
                 close_surface_cb.clone(),
                 close_pane_cb.clone(),
                 toggle_zoom_cb.clone(),
-                begin_pane_title_drag_cb.clone(),
                 rename_editor.clone(),
                 tree_has_splits,
                 zoomed_pane_id,
+                session_id,
+                hide_pane_title_bar,
                 cx,
             )
             .or_else(|| {
@@ -1720,10 +1802,11 @@ impl PaneTree {
                     close_surface_cb,
                     close_pane_cb,
                     toggle_zoom_cb,
-                    begin_pane_title_drag_cb,
                     rename_editor,
                     tree_has_splits,
                     zoomed_pane_id,
+                    session_id,
+                    hide_pane_title_bar,
                     cx,
                 )
             }),
@@ -1735,13 +1818,13 @@ impl PaneTree {
     #[allow(clippy::too_many_arguments)]
     fn render_pane_title_bar(
         pane_id: PaneId,
+        session_id: u64,
         title: String,
         is_focused: bool,
         has_splits: bool,
         is_zoomed: bool,
         close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
-        begin_pane_title_drag_cb: std::sync::Arc<dyn Fn(PaneId, Point<Pixels>) + 'static>,
         cx: &App,
     ) -> AnyElement {
         let theme = cx.theme();
@@ -1756,39 +1839,37 @@ impl PaneTree {
             theme.foreground.opacity(0.52)
         };
         let btn_color = theme.foreground.opacity(0.52);
+        let btn_hover_bg = theme.foreground.opacity(0.08);
 
-        // ⋮ options button. Use gpui-component Button + dropdown menu so
-        // left-click opens the menu and does not also start a pane drag.
-        let close_pane_cb_for_menu = close_pane_cb.clone();
-        let toggle_zoom_cb_for_menu = toggle_zoom_cb.clone();
-        let zoom_label = if is_zoomed { "Restore" } else { "Maximize" };
-        let options_btn = Button::new(format!("pane-options-{pane_id}"))
-            .ghost()
-            .xsmall()
-            .compact()
+        // ⛶/⛶ fullscreen toggle button — always visible
+        let zoom_icon = if is_zoomed {
+            "phosphor/frame-corners.svg"
+        } else {
+            "phosphor/corners-out.svg"
+        };
+        let zoom_tooltip: SharedString = if is_zoomed {
+            "Exit fullscreen".into()
+        } else {
+            "Fullscreen".into()
+        };
+        let toggle_zoom_cb_btn = toggle_zoom_cb.clone();
+        let zoom_btn = div()
+            .id(ElementId::Name(format!("pane-zoom-{pane_id}").into()))
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(20.0))
+            .flex_shrink_0()
             .rounded(px(4.0))
-            .tooltip("Pane options")
-            .icon(
-                Icon::default()
-                    .path("phosphor/dots-three-vertical.svg")
-                    .text_color(btn_color),
-            )
-            .dropdown_menu_with_anchor(Corner::BottomLeft, move |menu, _window, _cx| {
-                let toggle_cb = toggle_zoom_cb_for_menu.clone();
-                let close_cb = close_pane_cb_for_menu.clone();
-                let mut menu = menu.item(
-                    PopupMenuItem::new(zoom_label).on_click(move |_, window, cx| {
-                        toggle_cb(pane_id, window, cx);
-                    }),
-                );
-                if has_splits {
-                    menu =
-                        menu.item(PopupMenuItem::new("Close Pane").on_click(move |_, window, cx| {
-                            close_cb(pane_id, window, cx);
-                        }));
-                }
-                menu
-            });
+            .cursor_pointer()
+            .hover(move |s| s.bg(btn_hover_bg))
+            .tooltip(move |window, cx| Tooltip::new(zoom_tooltip.clone()).build(window, cx))
+            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                toggle_zoom_cb_btn(pane_id, window, cx);
+                window.prevent_default();
+                cx.stop_propagation();
+            })
+            .child(svg().path(zoom_icon).size(px(11.0)).text_color(btn_color));
 
         // ✕ close button — only when there are splits
         let close_btn = if has_splits {
@@ -1822,6 +1903,10 @@ impl PaneTree {
         };
 
         // Title text (centered, flex-1)
+        // Whole bar — drag starts a GPUI DraggedTab so the tab strip
+        // handles it with the same live-reorder logic as tab-to-tab drag.
+        let drag_label: SharedString = title.clone().into();
+
         let title_el = div()
             .flex_1()
             .flex()
@@ -1838,8 +1923,16 @@ impl PaneTree {
                     .text_color(title_color)
                     .child(SharedString::from(title)),
             );
-
-        // Whole bar — mouse-down starts a potential drag-to-tab
+        let dragged = DraggedTab {
+            session_id,
+            label: drag_label,
+            icon: "phosphor/terminal.svg",
+            origin: DraggedTabOrigin::Pane,
+            preview_constraint: None,
+            pane_id: Some(pane_id),
+        };
+        // The whole title bar is draggable. The visible pane drag preview is
+        // rendered by Workspace, centred at the live cursor position.
         let mut bar = div()
             .id(ElementId::Name(format!("pane-title-bar-{pane_id}").into()))
             .flex()
@@ -1850,11 +1943,15 @@ impl PaneTree {
             .px(px(6.0))
             .bg(bar_bg)
             .cursor_grab()
-            .on_mouse_down(MouseButton::Left, move |event, _window, _cx| {
-                begin_pane_title_drag_cb(pane_id, event.position);
-            })
-            .child(options_btn)
-            .child(title_el);
+            .on_drag(
+                dragged,
+                move |dragged: &DraggedTab, _offset, _window, cx| {
+                    cx.stop_propagation();
+                    cx.new(|_| dragged.clone())
+                },
+            )
+            .child(title_el)
+            .child(zoom_btn);
 
         if let Some(close) = close_btn {
             bar = bar.child(close);
@@ -1874,10 +1971,11 @@ impl PaneTree {
         close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
-        begin_pane_title_drag_cb: std::sync::Arc<dyn Fn(PaneId, Point<Pixels>) + 'static>,
         rename_editor: Option<SurfaceRenameEditor>,
         tree_has_splits: bool,
         zoomed_pane_id: Option<PaneId>,
+        session_id: u64,
+        hide_pane_title_bar: bool,
         cx: &App,
     ) -> AnyElement {
         let theme = cx.theme();
@@ -1919,18 +2017,18 @@ impl PaneTree {
 
         let mut col = div().flex().flex_col().size_full();
 
-        // Title bar — only when there are 2+ panes
-        if tree_has_splits {
+        // Title bar — only when there are 2+ panes and not hidden by config
+        if tree_has_splits && !hide_pane_title_bar {
             let is_zoomed = zoomed_pane_id == Some(pane_id);
             let title_bar = Self::render_pane_title_bar(
                 pane_id,
+                session_id,
                 pane_title,
                 is_focused,
                 tree_has_splits,
                 is_zoomed,
                 close_pane_cb,
                 toggle_zoom_cb,
-                begin_pane_title_drag_cb,
                 cx,
             );
             col = col.child(title_bar);
@@ -2027,8 +2125,8 @@ impl PaneTree {
                 let rename_cb_for_menu = rename_surface_cb.clone();
                 let close_cb_for_menu = close_surface_cb.clone();
                 let close_cb_for_button = close_surface_cb.clone();
-                let can_close = surfaces.len() > 1
-                    || surface.close_pane_when_last && surface.owner.is_some();
+                let can_close =
+                    surfaces.len() > 1 || surface.close_pane_when_last && surface.owner.is_some();
                 let editing_input = rename_editor
                     .as_ref()
                     .filter(|editor| editor.surface_id == sid)
@@ -2133,13 +2231,12 @@ impl PaneTree {
                     .context_menu(move |menu, _window, _cx| {
                         let rename_cb = rename_cb_for_menu.clone();
                         let close_cb = close_cb_for_menu.clone();
-                        let mut menu =
-                            menu.item(PopupMenuItem::new("Rename Surface").on_click({
-                                let rename_cb = rename_cb.clone();
-                                move |_, window, cx| {
-                                    rename_cb(sid, window, cx);
-                                }
-                            }));
+                        let mut menu = menu.item(PopupMenuItem::new("Rename Surface").on_click({
+                            let rename_cb = rename_cb.clone();
+                            move |_, window, cx| {
+                                rename_cb(sid, window, cx);
+                            }
+                        }));
                         if can_close {
                             menu = menu.item(PopupMenuItem::new("Close Surface").on_click({
                                 let close_cb = close_cb.clone();
@@ -2682,7 +2779,10 @@ mod tests {
 
         assert_eq!(target.zoomed_pane_id(), None);
         assert!(target.focused_pane_id() >= 2);
-        assert!(PaneTree::contains_leaf(&target.root, target.focused_pane_id()));
+        assert!(PaneTree::contains_leaf(
+            &target.root,
+            target.focused_pane_id()
+        ));
     }
 
     #[::core::prelude::v1::test]
@@ -2708,5 +2808,31 @@ mod tests {
         assert_eq!(leaf_id(first), 1);
         assert_eq!(leaf_id(second), 0);
         assert_eq!(tree.focused_pane_id, 1);
+    }
+
+    #[::core::prelude::v1::test]
+    fn pane_move_noop_when_source_is_already_after_target_in_same_horizontal_split() {
+        let tree = simple_two_pane_tree();
+
+        assert!(tree.is_noop_pane_move(1, 0, SplitDirection::Horizontal, SplitPlacement::After,));
+        assert!(tree.is_noop_pane_move(0, 1, SplitDirection::Horizontal, SplitPlacement::Before,));
+        assert!(!tree.is_noop_pane_move(1, 0, SplitDirection::Vertical, SplitPlacement::Before,));
+        assert!(!tree.is_noop_pane_move(1, 0, SplitDirection::Horizontal, SplitPlacement::Before,));
+    }
+
+    #[::core::prelude::v1::test]
+    fn pane_move_noop_when_source_is_already_after_target_in_same_vertical_split() {
+        let mut tree = simple_two_pane_tree();
+        tree.root = PaneNode::Split {
+            split_id: 0,
+            direction: SplitDirection::Vertical,
+            first: Box::new(empty_leaf(0)),
+            second: Box::new(empty_leaf(1)),
+            ratio: 0.5,
+        };
+
+        assert!(tree.is_noop_pane_move(1, 0, SplitDirection::Vertical, SplitPlacement::After,));
+        assert!(tree.is_noop_pane_move(0, 1, SplitDirection::Vertical, SplitPlacement::Before,));
+        assert!(!tree.is_noop_pane_move(1, 0, SplitDirection::Horizontal, SplitPlacement::After,));
     }
 }
