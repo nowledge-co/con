@@ -5102,6 +5102,46 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    fn merge_tab_into_tab(
+        &mut self,
+        from_index: usize,
+        to_index: usize,
+        direction: SplitDirection,
+        placement: SplitPlacement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(target_index) =
+            tab_merge_indices_after_removal(self.tabs.len(), from_index, to_index)
+        else {
+            self.tab_drag_target = None;
+            self.tab_strip_drop_slot = None;
+            return;
+        };
+
+        self.reindex_pending_control_agent_requests_after_tab_close(from_index);
+        self.reindex_pending_surface_control_requests_after_tab_close(from_index);
+        self.remap_tab_rename_state_after_close(from_index);
+        let source_tab = self.tabs.remove(from_index);
+        self.tab_summary_engine.forget(source_tab.summary_id);
+        self.tabs[target_index].pane_tree.merge_tree(
+            source_tab.pane_tree,
+            direction,
+            placement,
+        );
+        self.active_tab = target_index;
+        self.tab_drag_target = None;
+        self.tab_strip_drop_slot = None;
+        if let Ok(mut guard) = self.active_dragged_tab_session_id.lock() {
+            *guard = None;
+        }
+        self.sync_sidebar(cx);
+        self.sync_active_terminal_focus_states(cx);
+        self.sync_active_tab_native_view_visibility_now_or_after_layout(false, window, cx);
+        self.save_session(cx);
+        cx.notify();
+    }
+
     fn remap_tab_rename_state_after_close(&mut self, closed_index: usize) {
         self.tab_rename =
             self.tab_rename
@@ -11033,12 +11073,28 @@ impl Render for ConWorkspace {
                     }
                 },
             ))
-            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
                 let to = this.tab_strip_drop_slot.unwrap_or(tab_count);
+                let split_target = if let Some(TabDragTarget::Split(target)) = this.tab_drag_target {
+                    Some(target)
+                } else {
+                    None
+                };
                 this.tab_strip_drop_slot = None;
                 this.tab_drag_target = None;
                 if let Ok(mut guard) = this.active_dragged_tab_session_id.lock() {
                     *guard = None;
+                }
+                if let Some(target) = split_target {
+                    this.merge_tab_into_tab(
+                        target.dragged_tab_index,
+                        target.target_tab_index,
+                        target.direction,
+                        target.placement,
+                        window,
+                        cx,
+                    );
+                    return;
                 }
                 this.reorder_tab_by_id(dragged.session_id, to, cx);
                 cx.notify();
@@ -11228,7 +11284,7 @@ impl Render for ConWorkspace {
                             }
                         },
                     ))
-                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                    .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
                         let to = this.tab_strip_drop_slot.unwrap_or(index);
                         this.tab_strip_drop_slot = None;
                         this.reorder_tab_by_id(dragged.session_id, to, cx);
@@ -11365,7 +11421,7 @@ impl Render for ConWorkspace {
                                     }
                                 },
                             ))
-                            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
+                            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
                                 let to = this.tab_strip_drop_slot.unwrap_or(tab_count);
                                 this.tab_strip_drop_slot = None;
                                 this.reorder_tab_by_id(dragged.session_id, to, cx);
@@ -13113,6 +13169,13 @@ fn remap_target_index_after_source_removal(from: usize, to: usize) -> Option<usi
     }
 }
 
+fn tab_merge_indices_after_removal(len: usize, from: usize, to: usize) -> Option<usize> {
+    if from >= len || to >= len {
+        return None;
+    }
+    remap_target_index_after_source_removal(from, to)
+}
+
 fn tab_split_drop_target_from_position(
     dragged_tab_index: usize,
     target_tab_index: usize,
@@ -13235,8 +13298,8 @@ mod tests {
         horizontal_tab_slot_from_position, normalize_tab_user_label,
         pane_split_drop_target_from_position, remap_tab_rename_state_after_close,
         remap_tab_rename_state_after_reorder, remap_target_index_after_source_removal,
-        split_preview_regions, tab_rename_commit_label, tab_rename_initial_label,
-        tab_split_drop_target_from_position, trailing_drop_slot_from_position,
+        split_preview_regions, tab_merge_indices_after_removal, tab_rename_commit_label,
+        tab_rename_initial_label, tab_split_drop_target_from_position, trailing_drop_slot_from_position,
     };
     use gpui::{Bounds, Point, Size, px};
 
@@ -13343,6 +13406,15 @@ mod tests {
             ),
             "Deploy"
         );
+    }
+
+    #[test]
+    fn tab_merge_indices_after_removal_validates_and_remaps() {
+        assert_eq!(tab_merge_indices_after_removal(3, 0, 0), None);
+        assert_eq!(tab_merge_indices_after_removal(3, 3, 0), None);
+        assert_eq!(tab_merge_indices_after_removal(3, 0, 3), None);
+        assert_eq!(tab_merge_indices_after_removal(3, 0, 2), Some(1));
+        assert_eq!(tab_merge_indices_after_removal(3, 2, 0), Some(0));
     }
 
     #[test]
