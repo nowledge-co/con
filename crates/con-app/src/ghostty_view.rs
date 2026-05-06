@@ -1725,15 +1725,10 @@ impl Drop for GhosttyView {
     fn drop(&mut self) {
         #[cfg(target_os = "macos")]
         {
-            if let Some(underlay_view) = self.native_underlay_view.take() {
-                Self::set_transition_underlay_owner_visible(
-                    underlay_view,
-                    self.native_transition_underlay_owner_id,
-                    false,
-                );
-            }
-            self.document_view = None;
-            self.nsview = None;
+            // The AppKit backing observer stores Ghostty's raw surface pointer.
+            // Detach it before `terminal` is dropped so a late screen/backing
+            // notification cannot call into freed libghostty state.
+            self.detach_host_view();
         }
         self.host_view = None;
     }

@@ -39,11 +39,19 @@ coordinate system.
   `ghostty_surface_set_display_id`, `ghostty_surface_set_content_scale`, and
   `ghostty_surface_set_size` in the same order as Ghostty's upstream AppKit
   view.
+- The content scale comes from a stable 1x1 point-to-backing conversion, not an
+  arbitrary frame-to-backing ratio, so fractional layout sizes during live
+  resize cannot perturb Ghostty's cell metrics.
 - Registered native window screen/backing-property observers for each embedded
   Ghostty `NSView`, so cross-display moves trigger a backing sync even when the
   GPUI pane bounds do not change.
 - Changed Con's macOS layout path to use the same backing sync helper instead of
   directly setting content scale from GPUI layout.
+- Detached the backing observer in `GhosttyView::drop` before the terminal field
+  releases Ghostty's raw surface pointer.
+- Kept the layout-path observer install as a window-move safety net, but made
+  the Objective-C installer observer-only so the explicit Rust sync does not
+  duplicate `ghostty_surface_set_*` calls on every layout pass.
 
 ## What We Learned
 

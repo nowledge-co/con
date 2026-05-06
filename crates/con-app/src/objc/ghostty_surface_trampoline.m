@@ -47,31 +47,24 @@ bool con_ghostty_surface_sync_backing(
     fallback_scale = con_valid_scale(fallback_scale, 1.0);
 
     NSWindow *window = view.window;
-    double layer_scale = fallback_scale;
+    double window_scale = fallback_scale;
     uint32_t display_id = 0;
     if (window != nil) {
-        layer_scale = con_valid_scale(window.backingScaleFactor, fallback_scale);
+        window_scale = con_valid_scale(window.backingScaleFactor, fallback_scale);
         display_id = con_ghostty_display_id_for_window(window);
     }
+
+    NSSize unit_backing = [view convertSizeToBacking:NSMakeSize(1.0, 1.0)];
+    double scale_x = con_valid_scale(unit_backing.width, window_scale);
+    double scale_y = con_valid_scale(unit_backing.height, window_scale);
 
     CALayer *layer = view.layer;
     if (layer != nil) {
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
-        layer.contentsScale = layer_scale;
+        layer.contentsScale = scale_y;
         [CATransaction commit];
     }
-
-    NSRect frame = view.frame;
-    NSRect backing_frame = [view convertRectToBacking:frame];
-    double scale_x = frame.size.width > 0.0
-        ? backing_frame.size.width / frame.size.width
-        : fallback_scale;
-    double scale_y = frame.size.height > 0.0
-        ? backing_frame.size.height / frame.size.height
-        : fallback_scale;
-    scale_x = con_valid_scale(scale_x, fallback_scale);
-    scale_y = con_valid_scale(scale_y, fallback_scale);
 
     NSSize logical_size = NSMakeSize(fmax(logical_width, 1.0), fmax(logical_height, 1.0));
     NSSize backing_size = [view convertSizeToBacking:logical_size];
@@ -120,7 +113,6 @@ bool con_ghostty_surface_sync_backing(
 - (void)installForView:(NSView *)view surface:(void *)surface {
     NSWindow *window = view.window;
     if (_window == window && _surface == surface && _screenObserver != nil && _backingObserver != nil) {
-        [self sync];
         return;
     }
 
@@ -152,7 +144,6 @@ bool con_ghostty_surface_sync_backing(
         [weakSelf sync];
     }];
 
-    [self sync];
 }
 
 - (void)invalidate {
