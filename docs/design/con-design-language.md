@@ -32,7 +32,7 @@ This design language is based on four inputs:
 
 1. **con's product vision and early implementation**
    - `DESIGN.md`
-   - `crates/con-app/src/workspace.rs`
+   - `crates/con-app/src/workspace/`
    - `crates/con-app/src/ghostty_view.rs`
    - `crates/con-app/src/input_bar.rs`
    - `crates/con-app/src/agent_panel.rs`

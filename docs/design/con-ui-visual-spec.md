@@ -666,7 +666,7 @@ The design team should produce polished views for at least:
 
 The current code already points toward a strong architecture:
 
-- `crates/con-app/src/workspace.rs` gives a useful shell composition model
+- `crates/con-app/src/workspace/` gives a useful shell composition model
 - `crates/con-app/src/ghostty_view.rs` keeps the terminal primary
 - `crates/con-app/src/input_bar.rs` proves the value of a bottom-anchored composer
 - `crates/con-app/src/agent_panel.rs` is the seed of the future companion timeline
