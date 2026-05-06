@@ -67,7 +67,6 @@ pub const PANEL_MAX_WIDTH: f32 = 360.0;
 const HOVER_CARD_WIDTH: f32 = 240.0;
 /// Per-row height in pinned mode (two-line layout — name + subtitle).
 const ROW_HEIGHT: f32 = 44.0;
-const ROW_HEIGHT_NO_SUBTITLE: f32 = 32.0;
 /// Per-icon size in the rail.
 const RAIL_ICON_SIZE: f32 = 32.0;
 /// Vertical gap between rail icons. Used to compute the icon's
@@ -989,11 +988,7 @@ impl SessionSidebar {
         let drop_above = drop_slot == Some(i) && cx.has_active_drag();
         let drop_below = i + 1 == total && drop_slot == Some(total) && cx.has_active_drag();
 
-        let row_h = if session.subtitle.is_some() {
-            ROW_HEIGHT
-        } else {
-            ROW_HEIGHT_NO_SUBTITLE
-        };
+        let row_h = ROW_HEIGHT;
 
         let label_block: AnyElement = if is_renaming {
             if let Some(input) = rename_input {
