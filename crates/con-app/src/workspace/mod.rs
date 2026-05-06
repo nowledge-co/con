@@ -37,7 +37,6 @@ const SPLIT_PREVIEW_SEAM_THICKNESS: f32 = 6.0;
 const TAB_DRAG_PREVIEW_WIDTH: f32 = 180.0;
 const TAB_DRAG_PREVIEW_HEIGHT: f32 = 28.0;
 
-#[cfg(target_os = "macos")]
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, InlineInputSubmit,
     InlineSkillAutocompleteChanged, LoadConversation, NewConversation, PanelState,
