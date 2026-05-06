@@ -16,6 +16,12 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**macOS**
+
+- Fixed a live-resize flash regression on Intel Macs by committing embedded
+  Ghostty backing size before moving the AppKit surface hierarchy, avoiding a
+  one-frame mismatch between the Metal surface and terminal framebuffer.
+
 **Windows, Linux**
 
 - Fixed terminal `Ctrl+<punctuation>` C0 chords such as `Ctrl+]`, `Ctrl+/`,
