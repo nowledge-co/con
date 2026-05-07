@@ -18,9 +18,9 @@
   <a href="https://github.com/nowledge-co/con-terminal/issues/34"><img alt="Windows preview (tracker)" src="https://img.shields.io/badge/Windows-preview-0078D4?logo=windows&logoColor=white&style=flat"></a>
   <a href="https://github.com/nowledge-co/con-terminal/issues/18"><img alt="Linux preview (tracker)" src="https://img.shields.io/badge/Linux-preview-1D4ED8?logo=linux&logoColor=white&style=flat"></a>
   <a href="https://www.rust-lang.org/"><img alt="Rust" src="https://img.shields.io/badge/Rust-CE422B?logo=rust&logoColor=white&style=flat"></a>
-  <a href="https://con.nowledge.co/docs"><img alt="Docs" src="https://img.shields.io/badge/Docs-con.nowledge.co-2F4F4F?style=flat"></a>
-  <a href="https://con.nowledge.co/changelog"><img alt="Changelog" src="https://img.shields.io/badge/Changelog-latest-4A5568?style=flat"></a>
-  <a href="https://con.nowledge.co/llms.txt"><img alt="llms.txt for AI agents" src="https://img.shields.io/badge/llms.txt-agent_readable-6B7280?style=flat"></a>
+  <a href="https://con.nowledge.co/docs"><img alt="Docs" src="https://img.shields.io/badge/Docs-con-2F4F4F?style=flat"></a>
+  <a href="https://con.nowledge.co/changelog"><img alt="Changelog" src="https://img.shields.io/badge/changelog-latest-4A5568?logo=git&style=flat&color=white"></a>
+  <a href="https://con.nowledge.co/llms.txt"><img alt="llms.txt for AI agents" src="https://img.shields.io/badge/llms.txt-agent_readable-6B7280?logo=dependabot&style=flat"></a>
 </p>
 
 ## Why con?
