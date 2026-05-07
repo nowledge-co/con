@@ -36,6 +36,10 @@ con shows it beside the action.
 
 Appearance controls the parts of con you look at all day:
 
+<p align="center">
+  <img width="1080" alt="Con Appearance settings with theme and transparency controls" src="https://github.com/user-attachments/assets/c730d158-139b-46d5-adbb-0cd48d38b603" />
+</p>
+
 - terminal theme
 - terminal and UI fonts
 - terminal opacity and blur

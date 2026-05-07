@@ -9,6 +9,10 @@ agent, opening a split, or focusing a worker.
 
 con uses a few names consistently:
 
+<p align="center">
+  <img width="1080" alt="Con workspace with terminal panes, tabs, and the agent panel" src="https://github.com/user-attachments/assets/81dcf6e4-6074-497e-98b8-00c884442cc2" />
+</p>
+
 | Name | Meaning | Use it for |
 | --- | --- | --- |
 | Window | A top-level app window | Separate projects or monitors |
@@ -93,6 +97,10 @@ Command mode can target more than one pane. Use the pane picker to send a
 command to the focused pane, every pane, or a selected set. The picker mirrors
 the current pane layout, so you can choose by position instead of remembering
 pane numbers.
+
+<p align="center">
+  <img width="1080" alt="Con pane broadcast picker mirroring the current split-pane layout" src="https://github.com/user-attachments/assets/21e295c9-34eb-465c-90b8-5ba3163182e5" />
+</p>
 
 ## Advanced: surfaces
 

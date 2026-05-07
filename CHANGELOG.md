@@ -22,6 +22,16 @@ con is still pre-release, so entries may group related beta work while the produ
   [#162](https://github.com/nowledge-co/con-terminal/pull/162) by
   [@sundy-li](https://github.com/sundy-li))_
 
+### Changed
+
+**Docs**
+
+- Clarified official install paths versus community package-manager paths,
+  including AUR `con-bin` maintainer credit for `czyt`, Scoop bucket credit for
+  `EFLKumo`, and screenshot placement across the public docs. _(PR
+  [#164](https://github.com/nowledge-co/con-terminal/pull/164) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ### Fixed
 
 **macOS**

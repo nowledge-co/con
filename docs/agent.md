@@ -6,6 +6,10 @@ The agent panel is there when terminal context matters and a model can help. It
 reads the pane you are using, acts in view, and asks before doing work that
 should not happen silently.
 
+<p align="center">
+  <img width="1080" alt="Con agent panel next to a terminal workspace" src="https://github.com/user-attachments/assets/e1972fac-9df3-443b-be08-c0eec4697cf3" />
+</p>
+
 ## When to use it
 
 Use the agent when the answer depends on terminal state:
