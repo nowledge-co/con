@@ -179,6 +179,7 @@ impl ConWorkspace {
                     user_label: tab_state.user_label.clone(),
                     ai_label: None,
                     ai_icon: None,
+                    color: tab_state.color,
                     summary_id: i as u64,
                     needs_attention: false,
                     session: agent_session,
@@ -202,6 +203,7 @@ impl ConWorkspace {
                 user_label: None,
                 ai_label: None,
                 ai_icon: None,
+                color: None,
                 summary_id: 0,
                 needs_attention: false,
                 session: AgentSession::new(),
@@ -243,6 +245,7 @@ impl ConWorkspace {
                         icon: presentation.icon,
                         has_user_label: tab.user_label.is_some(),
                         pane_count,
+                        color: tab.color,
                     }
                 })
                 .collect();
@@ -357,7 +360,11 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_reorder)
             .detach();
+        cx.subscribe_in(&sidebar, window, Self::on_sidebar_pane_to_tab)
+            .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_close_others)
+            .detach();
+        cx.subscribe_in(&sidebar, window, Self::on_sidebar_set_color)
             .detach();
         cx.observe(&sidebar, |this, sidebar, cx| {
             // The sidebar also notifies for transient hover and drag
@@ -724,6 +731,7 @@ impl ConWorkspace {
             tab_strip_drop_slot: None,
             tab_drag_target: None,
             active_dragged_tab_session_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            tab_drag_preview: std::sync::Arc::new(std::sync::Mutex::new(None)),
             #[cfg(target_os = "macos")]
             top_bar_should_move: false,
             pane_title_drag: None,

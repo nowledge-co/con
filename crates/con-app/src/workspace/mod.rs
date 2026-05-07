@@ -59,8 +59,8 @@ use crate::settings_panel::{
 };
 use crate::sidebar::{
     DraggedTab, DraggedTabOrigin, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry,
-    SessionSidebar, SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate, SidebarRename,
-    SidebarReorder, SidebarSelect,
+    SessionSidebar, SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate, SidebarPaneToTab,
+    SidebarRename, SidebarReorder, SidebarSelect, SidebarSetColor,
 };
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use con_terminal::TerminalTheme;
@@ -269,6 +269,10 @@ pub struct ConWorkspace {
     /// Drag source tab id captured from GPUI's drag preview callback so
     /// drag-move handlers can resolve source/target indices.
     active_dragged_tab_session_id: std::sync::Arc<std::sync::Mutex<Option<u64>>>,
+    /// Workspace-owned visible preview for horizontal tab drags. We hide the
+    /// GPUI active-drag preview and render this overlay so movement can be
+    /// locked to the tab row.
+    tab_drag_preview: std::sync::Arc<std::sync::Mutex<Option<TabDragPreviewState>>>,
     /// macOS titlebar drag is initiated explicitly after actual mouse
     /// movement so double-click still reaches the titlebar handler.
     #[cfg(target_os = "macos")]

@@ -59,6 +59,8 @@ mod motion;
 mod pane_tree;
 mod settings_panel;
 mod sidebar;
+mod tab_colors;
+mod tab_context_menu;
 mod terminal_context_menu;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod terminal_ime;

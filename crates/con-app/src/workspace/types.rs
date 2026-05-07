@@ -14,6 +14,44 @@ pub(super) fn pane_title_drag_to_tab_active(drag: Option<&PaneTitleDragState>) -
     drag.is_some_and(|drag| drag.active)
 }
 
+/// Workspace-owned drag preview state for horizontal tab-strip drags.
+/// GPUI's built-in active-drag preview does not reliably honor relative
+/// `.top/.left` constraints, so horizontal tab drags hide that preview and
+/// render this overlay from the workspace root instead.
+#[derive(Clone)]
+pub(super) struct TabDragPreviewState {
+    pub(super) title: SharedString,
+    pub(super) icon: &'static str,
+    pub(super) source_top: Pixels,
+    pub(super) cursor_offset_x: Pixels,
+}
+
+pub(super) fn tab_drag_overlay_origin(
+    mouse: Point<Pixels>,
+    preview: &TabDragPreviewState,
+    min_left: Pixels,
+    max_left: Pixels,
+) -> Point<Pixels> {
+    point(
+        (mouse.x - preview.cursor_offset_x).clamp(min_left, max_left),
+        preview.source_top,
+    )
+}
+
+pub(super) fn tab_drag_overlay_probe_position(
+    mouse: Point<Pixels>,
+    preview: &TabDragPreviewState,
+    preview_size: Size<Pixels>,
+    min_left: Pixels,
+    max_left: Pixels,
+) -> Point<Pixels> {
+    let origin = tab_drag_overlay_origin(mouse, preview, min_left, max_left);
+    point(
+        origin.x + preview_size.width / 2.0,
+        origin.y + preview_size.height / 2.0,
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum PaneDropTarget {
     NewTab { slot: usize },
@@ -156,6 +194,8 @@ pub(super) struct Tab {
     /// vertical panel) or context menu. `None` means "use smart
     /// auto-derived name".
     pub(super) user_label: Option<String>,
+    /// Optional accent color set via the tab context menu.
+    pub(super) color: Option<con_core::session::TabAccentColor>,
     /// AI-suggested label, when the suggestion model is enabled and
     /// has produced one. Sits between `user_label` and the regex
     /// heuristic in the naming priority — never overrides an

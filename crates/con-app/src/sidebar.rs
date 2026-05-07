@@ -42,16 +42,17 @@
 
 use crate::motion::MotionValue;
 use gpui::{
-    AnyElement, App, Context, Div, Entity, EventEmitter, FontWeight, Hsla, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Render, SharedString,
-    Stateful, StatefulInteractiveElement, Styled, WeakEntity, Window, div, prelude::*, px, svg,
+    AnyElement, App, Bounds, Context, Div, Entity, EventEmitter, FontWeight, Hsla,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point,
+    Render, SharedString, Size, Stateful, StatefulInteractiveElement, Styled, WeakEntity, Window,
+    div, point, prelude::*, px, svg,
 };
 use gpui_component::{
-    ActiveTheme, InteractiveElementExt, Sizable,
+    ActiveTheme, ElementExt, InteractiveElementExt, Sizable,
     input::{Escape as InputEscape, Input, InputEvent, InputState},
-    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
+    menu::{ContextMenuExt, PopupMenu},
 };
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -94,6 +95,8 @@ pub struct SessionEntry {
     /// the rail's hover card so the user can see "this tab has 3
     /// panes" without expanding.
     pub pane_count: usize,
+    /// Optional accent color set via the tab context menu.
+    pub color: Option<con_core::session::TabAccentColor>,
 }
 
 /// Visual state of the panel.
@@ -136,8 +139,19 @@ pub struct DraggedTabPreviewConstraint {
     pub top: Pixels,
     pub height: Pixels,
     pub preview_height: Pixels,
+    /// X offset of the cursor inside the source tab element at drag start.
+    /// GPUI places the drag preview root at `current_mouse - cursor_offset`,
+    /// so this is enough to compute the preview's natural left edge.
+    pub cursor_offset_x: Pixels,
+    /// Left edge of the tab bar in window coordinates.
+    pub left: Pixels,
+    /// Width of the tab bar (used to clamp the right edge).
+    pub bar_width: Pixels,
+    /// Width of the drag preview element.
+    pub preview_width: Pixels,
 }
 
+#[cfg(test)]
 pub fn constrained_drag_preview_y_shift(
     mouse_y: Pixels,
     constraint: DraggedTabPreviewConstraint,
@@ -146,6 +160,25 @@ pub fn constrained_drag_preview_y_shift(
     let max_top = constraint.top + (constraint.height - constraint.preview_height).max(px(0.0));
     let desired_top = root_top.clamp(constraint.top, max_top);
     desired_top - root_top
+}
+
+/// Compute the X shift to apply to the drag preview so it stays inside
+/// the horizontal tab bar.
+///
+/// GPUI places the preview root at `current_mouse - cursor_offset`,
+/// where `cursor_offset` is the cursor's position inside the source element
+/// when drag starts. Therefore the preview's natural left edge is exactly
+/// `mouse_x - cursor_offset_x`; clamping that value and subtracting the
+/// natural left gives the relative `.left()` shift to apply.
+#[cfg(test)]
+pub fn constrained_drag_preview_x_shift(
+    mouse_x: Pixels,
+    constraint: DraggedTabPreviewConstraint,
+) -> Pixels {
+    let natural_left = mouse_x - constraint.cursor_offset_x;
+    let max_left = constraint.left + (constraint.bar_width - constraint.preview_width).max(px(0.0));
+    let desired_left = natural_left.clamp(constraint.left, max_left);
+    desired_left - natural_left
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -157,22 +190,21 @@ pub enum DraggedTabOrigin {
 }
 
 impl Render for DraggedTab {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        let preview_y_shift = self
-            .preview_constraint
-            .map(|constraint| {
-                constrained_drag_preview_y_shift(window.mouse_position().y, constraint)
-            })
-            .unwrap_or(px(0.0));
-
-        // Pane-origin drags render their visible floating title from Workspace
-        // using the live cursor position. GPUI's built-in drag preview is hidden
-        // for panes because its root is tied to the wide pane title-bar hitbox.
-        if self.origin == DraggedTabOrigin::Pane {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Pane-origin and horizontal-tab-strip drags render their visible
+        // previews from Workspace-owned overlays. GPUI's built-in active-drag
+        // preview cannot be reliably axis-constrained with relative style
+        // offsets, so hide it for these origins.
+        if matches!(
+            self.origin,
+            DraggedTabOrigin::Pane
+                | DraggedTabOrigin::HorizontalTabStrip
+                | DraggedTabOrigin::Sidebar
+        ) {
             return div().size(px(0.0));
         }
 
+        let theme = cx.theme();
         div()
             .flex()
             .items_center()
@@ -192,8 +224,6 @@ impl Render for DraggedTab {
                     .text_color(theme.foreground),
             )
             .child(div().truncate().child(self.label.clone()))
-            .relative()
-            .top(preview_y_shift)
     }
 }
 
@@ -234,6 +264,10 @@ pub struct SessionSidebar {
     /// `on_drop` gives us the window mouse position but not the
     /// element bounds, so we cache this from `on_drag_move`.
     rail_drag_origin_y: Option<f32>,
+    /// Last painted bounds for visible vertical tab targets (rail icons or panel rows).
+    tab_bounds: Rc<RefCell<Vec<Bounds<Pixels>>>>,
+    /// Workspace-independent visible preview for vertical tab drags.
+    drag_preview: Rc<RefCell<Option<SidebarDragPreviewState>>>,
     /// Effective UI opacity from the workspace appearance settings.
     /// Lower values let the window/terminal backdrop treatment show
     /// through, matching the rest of con's chrome.
@@ -266,8 +300,18 @@ pub struct SidebarReorder {
     /// position. Drag/drop emits an absolute destination slot.
     pub move_delta: Option<isize>,
 }
+
+pub struct SidebarPaneToTab {
+    pub pane_id: usize,
+    pub to: usize,
+}
 pub struct SidebarCloseOthers {
     pub session_id: u64,
+}
+
+pub struct SidebarSetColor {
+    pub session_id: u64,
+    pub color: Option<con_core::session::TabAccentColor>,
 }
 
 impl EventEmitter<SidebarSelect> for SessionSidebar {}
@@ -276,7 +320,9 @@ impl EventEmitter<SidebarCloseTab> for SessionSidebar {}
 impl EventEmitter<SidebarRename> for SessionSidebar {}
 impl EventEmitter<SidebarDuplicate> for SessionSidebar {}
 impl EventEmitter<SidebarReorder> for SessionSidebar {}
+impl EventEmitter<SidebarPaneToTab> for SessionSidebar {}
 impl EventEmitter<SidebarCloseOthers> for SessionSidebar {}
+impl EventEmitter<SidebarSetColor> for SessionSidebar {}
 
 impl SessionSidebar {
     pub fn new(_cx: &mut Context<Self>) -> Self {
@@ -299,7 +345,21 @@ impl SessionSidebar {
             hovered_rail: None,
             drop_slot: None,
             rail_drag_origin_y: None,
+            tab_bounds: Rc::new(RefCell::new(Vec::new())),
+            drag_preview: Rc::new(RefCell::new(None)),
             ui_opacity: 0.92,
+        }
+    }
+
+    pub fn force_clear_drag_state(&mut self, cx: &mut Context<Self>) {
+        let had_state = self.drop_slot.is_some()
+            || self.rail_drag_origin_y.is_some()
+            || self.drag_preview.borrow().is_some();
+        self.drop_slot = None;
+        self.rail_drag_origin_y = None;
+        self.clear_drag_preview();
+        if had_state {
+            cx.notify();
         }
     }
 
@@ -345,6 +405,109 @@ impl SessionSidebar {
 
     pub fn set_effective_panel_max_width(&mut self, width: f32) {
         self.effective_panel_max_width = width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
+    }
+
+    pub fn update_drag_preview_from_mouse(
+        &mut self,
+        mouse: Point<Pixels>,
+        viewport_size: Size<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(preview) = self.drag_preview.borrow().clone() else {
+            return;
+        };
+        let preview_size = vertical_drag_preview_size(self.is_pinned());
+        let max_top = (viewport_size.height - preview_size.height).max(px(0.0));
+        let probe =
+            vertical_drag_overlay_probe_position(mouse, &preview, preview_size, px(0.0), max_top);
+        let bounds = self.tab_bounds.borrow().clone();
+        if let Some(slot) = vertical_slot_from_bounds(probe.y, &bounds, self.sessions.len())
+            && self.drop_slot != Some(slot)
+        {
+            self.drop_slot = Some(slot);
+            self.hovered_rail = None;
+            cx.notify();
+        }
+    }
+
+    fn ensure_drag_preview(
+        &mut self,
+        dragged: &DraggedTab,
+        source_left: Pixels,
+        cursor_offset_y: Pixels,
+    ) {
+        if self.drag_preview.borrow().is_some() {
+            return;
+        }
+        *self.drag_preview.borrow_mut() = Some(SidebarDragPreviewState {
+            label: dragged.label.clone(),
+            icon: dragged.icon,
+            source_left,
+            cursor_offset_y,
+            is_pane_origin: dragged.origin == DraggedTabOrigin::Pane,
+        });
+    }
+
+    fn clear_drag_preview(&mut self) {
+        *self.drag_preview.borrow_mut() = None;
+    }
+
+    pub fn drag_preview_overlay(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let preview = self.drag_preview.borrow().clone()?;
+        // Only render the sidebar overlay when the cursor is actually inside
+        // the sidebar (drop_slot is Some). If the pane is being dragged but
+        // the cursor is outside the sidebar, the workspace pane floating
+        // preview should be the only visible preview.
+        if self.drop_slot.is_none() {
+            return None;
+        }
+        // For pane-origin drags, the workspace floating preview already follows
+        // the cursor. The sidebar only needs to show the drop indicator line —
+        // no extra overlay here.
+        if preview.is_pane_origin {
+            return None;
+        }
+        let theme = cx.theme();
+        let preview_size = vertical_drag_preview_size(self.is_pinned());
+        let max_top = (window.viewport_size().height - preview_size.height).max(px(0.0));
+        let origin = vertical_drag_overlay_origin(
+            window.mouse_position(),
+            &preview,
+            preview_size,
+            px(0.0),
+            max_top,
+        );
+        Some(
+            div()
+                .absolute()
+                .left(origin.x)
+                .top(origin.y)
+                .w(preview_size.width)
+                .h(preview_size.height)
+                .px(px(10.0))
+                .rounded(px(4.0))
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .cursor_grab()
+                .bg(theme.title_bar.opacity(0.92))
+                .font_family(theme.font_family.clone())
+                .text_size(px(12.0))
+                .text_color(theme.foreground.opacity(0.82))
+                .child(
+                    svg()
+                        .path(preview.icon)
+                        .size(px(12.0))
+                        .flex_shrink_0()
+                        .text_color(theme.foreground),
+                )
+                .child(div().flex_1().min_w_0().truncate().child(preview.label))
+                .into_any_element(),
+        )
     }
 
     pub fn clamped_panel_width(width: f32, effective_max_width: f32) -> f32 {
@@ -480,6 +643,7 @@ impl SessionSidebar {
         let theme = cx.theme();
         let rail_bg = sidebar_surface(theme, self.ui_opacity, 0.035);
         let session_count = self.sessions.len();
+        self.tab_bounds.borrow_mut().clear();
         let mut rail = div()
             .id("vertical-tabs-rail")
             .relative()
@@ -509,16 +673,56 @@ impl SessionSidebar {
             // is squarely on a pill; this fallback covers the gaps.
             .on_drag_move::<DraggedTab>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
-                    if event.drag(cx).origin != DraggedTabOrigin::Sidebar {
+                    if !matches!(
+                        event.drag(cx).origin,
+                        DraggedTabOrigin::Sidebar | DraggedTabOrigin::Pane
+                    ) {
                         return;
                     }
                     this.rail_drag_origin_y = Some(f32::from(event.bounds.origin.y));
-                    if let Some(slot) =
-                        rail_slot_for_cursor(event, session_count, this.leading_top_pad)
-                    {
+                    let is_pane = event.drag(cx).origin == DraggedTabOrigin::Pane;
+                    // For pane-origin drags, only proceed if the cursor is
+                    // actually inside the container bounds. GPUI bubbles
+                    // drag_move to parent containers even when the cursor is
+                    // outside them, so without this check the sidebar would
+                    // show indicators while the pane is still on the right.
+                    if !point_in_bounds(&event.event.position, &event.bounds) {
+                        if this.drop_slot.is_some() || this.drag_preview.borrow().is_some() {
+                            this.drop_slot = None;
+                            this.clear_drag_preview();
+                            cx.notify();
+                        }
+                        return;
+                    }
+                    let slot = if !is_pane {
+                        let bounds = this.tab_bounds.borrow().clone();
+                        vertical_slot_from_bounds(event.event.position.y, &bounds, session_count)
+                            .or_else(|| {
+                                rail_slot_for_cursor(event, session_count, this.leading_top_pad)
+                            })
+                    } else {
+                        let bounds = this.tab_bounds.borrow().clone();
+                        vertical_slot_from_bounds(event.event.position.y, &bounds, session_count)
+                    };
+                    if let Some(slot) = slot {
+                        // Cursor is over a tab item — create/keep preview.
+                        let preview_size = vertical_drag_preview_size(this.is_pinned());
+                        this.ensure_drag_preview(
+                            event.drag(cx),
+                            event.bounds.origin.x,
+                            preview_size.height / 2.0,
+                        );
                         if this.drop_slot != Some(slot) {
                             this.drop_slot = Some(slot);
                             this.hovered_rail = None;
+                            cx.notify();
+                        }
+                    } else if is_pane {
+                        // Pane drag but cursor not over any tab item — clear
+                        // preview and drop slot so the sidebar overlay hides.
+                        if this.drop_slot.is_some() || this.drag_preview.borrow().is_some() {
+                            this.drop_slot = None;
+                            this.clear_drag_preview();
                             cx.notify();
                         }
                     }
@@ -530,25 +734,57 @@ impl SessionSidebar {
             // user has to land the cursor precisely on a 32×32 pill
             // to reorder, which is unforgiving on a 44-px rail.
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
-                if dragged.origin != DraggedTabOrigin::Sidebar {
+                if !matches!(
+                    dragged.origin,
+                    DraggedTabOrigin::Sidebar | DraggedTabOrigin::Pane
+                ) {
+                    return;
+                }
+                // For pane-origin drags, only handle the drop if the cursor
+                // was actually inside the sidebar (drop_slot is Some). If the
+                // user dropped on the pane content area, the event bubbles here
+                // but we must not steal it.
+                if dragged.origin == DraggedTabOrigin::Pane && this.drop_slot.is_none() {
+                    this.clear_drag_preview();
                     return;
                 }
                 let to = this.drop_slot.or_else(|| {
-                    rail_slot_for_cursor_position(
-                        window.mouse_position(),
-                        this.rail_drag_origin_y,
-                        session_count,
-                        this.leading_top_pad,
-                    )
+                    let bounds = this.tab_bounds.borrow().clone();
+                    let probe_y = if dragged.origin == DraggedTabOrigin::Sidebar {
+                        window.mouse_position().y
+                    } else {
+                        event_probe_y_from_vertical_preview(
+                            window.mouse_position(),
+                            dragged,
+                            &bounds,
+                        )
+                    };
+                    vertical_slot_from_bounds(probe_y, &bounds, session_count).or_else(|| {
+                        rail_slot_for_cursor_position(
+                            window.mouse_position(),
+                            this.rail_drag_origin_y,
+                            session_count,
+                            this.leading_top_pad,
+                        )
+                    })
                 });
                 this.drop_slot = None;
                 this.rail_drag_origin_y = None;
+                this.clear_drag_preview();
                 if let Some(to) = to {
-                    cx.emit(SidebarReorder {
-                        session_id: dragged.session_id,
-                        to,
-                        move_delta: None,
-                    });
+                    match dragged.origin {
+                        DraggedTabOrigin::Sidebar => cx.emit(SidebarReorder {
+                            session_id: dragged.session_id,
+                            to,
+                            move_delta: None,
+                        }),
+                        DraggedTabOrigin::Pane => {
+                            if let Some(pane_id) = dragged.pane_id {
+                                cx.emit(SidebarPaneToTab { pane_id, to });
+                            }
+                        }
+                        DraggedTabOrigin::HorizontalTabStrip => {}
+                    }
                 }
                 cx.notify();
             }))
@@ -582,10 +818,10 @@ impl SessionSidebar {
             // pill if drop_slot == i, or below the last pill if
             // drop_slot == N. Both states share the same indicator
             // primitive; positioning is the only difference.
-            let show_indicator_above = self.drop_slot == Some(i) && cx.has_active_drag();
-            let show_indicator_below = i + 1 == session_count
-                && self.drop_slot == Some(session_count)
-                && cx.has_active_drag();
+            let drag_in_sidebar = cx.has_active_drag() && self.drag_preview.borrow().is_some();
+            let show_indicator_above = self.drop_slot == Some(i) && drag_in_sidebar;
+            let show_indicator_below =
+                i + 1 == session_count && self.drop_slot == Some(session_count) && drag_in_sidebar;
             let session_id = session.id;
             let dragged = DraggedTab {
                 session_id,
@@ -596,6 +832,17 @@ impl SessionSidebar {
                 pane_id: None,
             };
 
+            let tab_bounds = self.tab_bounds.clone();
+            let active_accent_bg_rail: Option<gpui::Hsla> = session.color.map(|c| {
+                let mut h = crate::tab_colors::tab_accent_color_hsla(c, cx);
+                h.a = 0.35;
+                h
+            });
+            let pill_bg = if is_active {
+                active_accent_bg_rail.unwrap_or(active_bg)
+            } else {
+                gpui::transparent_black()
+            };
             let mut pill = div()
                 .id(SharedString::from(format!("rail-tab-{i}")))
                 .relative()
@@ -605,11 +852,7 @@ impl SessionSidebar {
                 .size(px(RAIL_ICON_SIZE))
                 .rounded(px(8.0))
                 .cursor_pointer()
-                .bg(if is_active {
-                    active_bg
-                } else {
-                    gpui::transparent_black()
-                })
+                .bg(pill_bg)
                 .hover(move |s| if is_active { s } else { s.bg(hover_bg) })
                 .on_mouse_down(
                     MouseButton::Left,
@@ -637,6 +880,9 @@ impl SessionSidebar {
                 .on_drag(dragged, |dragged, _offset, _window, cx| {
                     cx.new(|_| dragged.clone())
                 })
+                .on_prepaint(move |bounds, _, _| {
+                    tab_bounds.borrow_mut().push(bounds);
+                })
                 .child(
                     svg()
                         .path(session.icon)
@@ -657,6 +903,22 @@ impl SessionSidebar {
                         .size(px(6.0))
                         .rounded_full()
                         .bg(theme.primary),
+                );
+            }
+            if is_active {
+                let dot_color = if let Some(color) = session.color {
+                    crate::tab_colors::tab_accent_color_hsla(color, cx)
+                } else {
+                    crate::tab_colors::active_tab_indicator_color()
+                };
+                pill = pill.child(
+                    div()
+                        .absolute()
+                        .bottom(px(3.0))
+                        .right(px(3.0))
+                        .size(px(6.0))
+                        .rounded_full()
+                        .bg(dot_color),
                 );
             }
             if show_indicator_above {
@@ -853,6 +1115,7 @@ impl SessionSidebar {
             );
 
         let total = self.sessions.len();
+        self.tab_bounds.borrow_mut().clear();
         // Body-level drag fallback: per-row drag_move + on_drop only
         // fire when the cursor is squarely inside a row's bounds. If
         // the user releases the mouse just below the last row (a
@@ -881,32 +1144,79 @@ impl SessionSidebar {
             // last row lights up.
             .on_drag_move::<DraggedTab>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
-                    if event.drag(cx).origin != DraggedTabOrigin::Sidebar {
+                    if !matches!(
+                        event.drag(cx).origin,
+                        DraggedTabOrigin::Sidebar | DraggedTabOrigin::Pane
+                    ) {
+                        return;
+                    }
+                    let is_pane = event.drag(cx).origin == DraggedTabOrigin::Pane;
+                    // For all drag origins, only proceed if cursor is inside container.
+                    if !point_in_bounds(&event.event.position, &event.bounds) {
+                        if this.drop_slot.is_some() || this.drag_preview.borrow().is_some() {
+                            this.drop_slot = None;
+                            this.clear_drag_preview();
+                            cx.notify();
+                        }
+                        return;
+                    }
+                    let bounds = this.tab_bounds.borrow().clone();
+                    let slot = vertical_slot_from_bounds(event.event.position.y, &bounds, total);
+                    if let Some(slot) = slot {
+                        // Cursor is over a tab item — create/keep preview.
+                        let preview_size = vertical_drag_preview_size(this.is_pinned());
+                        this.ensure_drag_preview(
+                            event.drag(cx),
+                            event.bounds.origin.x,
+                            preview_size.height / 2.0,
+                        );
+                        if this.drop_slot != Some(slot) {
+                            this.drop_slot = Some(slot);
+                            cx.notify();
+                        }
+                        return;
+                    }
+                    if is_pane {
+                        // Pane drag but cursor not over any tab item — clear.
+                        if this.drop_slot.is_some() || this.drag_preview.borrow().is_some() {
+                            this.drop_slot = None;
+                            this.clear_drag_preview();
+                            cx.notify();
+                        }
                         return;
                     }
                     if total == 0 {
                         return;
                     }
-                    // Conservative estimate so we don't flicker
-                    // between drop_slot=N-1 and drop_slot=N for a
-                    // cursor still on the last row. We promote to
-                    // slot=N only when the cursor is well below
-                    // where the last row could plausibly be —
-                    // `total * ROW_HEIGHT + gaps` from the top of
-                    // the list bounds.
+                    // Sidebar drag: "below last row" fallback.
                     let approx_row_h = ROW_HEIGHT;
                     let last_row_bottom_estimate =
                         f32::from(event.bounds.origin.y) + (total as f32) * (approx_row_h + 2.0);
-                    if f32::from(event.event.position.y) >= last_row_bottom_estimate
-                        && this.drop_slot != Some(total)
-                    {
-                        this.drop_slot = Some(total);
-                        cx.notify();
+                    if f32::from(event.event.position.y) >= last_row_bottom_estimate {
+                        let preview_missing = this.drag_preview.borrow().is_none();
+                        let preview_size = vertical_drag_preview_size(this.is_pinned());
+                        this.ensure_drag_preview(
+                            event.drag(cx),
+                            event.bounds.origin.x,
+                            preview_size.height / 2.0,
+                        );
+                        if this.drop_slot != Some(total) || preview_missing {
+                            this.drop_slot = Some(total);
+                            cx.notify();
+                        }
                     }
                 },
             ))
-            .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
-                if dragged.origin != DraggedTabOrigin::Sidebar {
+            .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
+                if !matches!(
+                    dragged.origin,
+                    DraggedTabOrigin::Sidebar | DraggedTabOrigin::Pane
+                ) {
+                    return;
+                }
+                // For pane-origin drags, only handle if cursor was in sidebar.
+                if dragged.origin == DraggedTabOrigin::Pane && this.drop_slot.is_none() {
+                    this.clear_drag_preview();
                     return;
                 }
                 // Body-level drop fallback. The per-row on_drop only
@@ -915,19 +1225,35 @@ impl SessionSidebar {
                 // row (the "after the last row" gesture) no per-row
                 // handler fires and the drag is silently dropped —
                 // hence this fallback.
-                let to = this.drop_slot.unwrap_or(total);
+                let to = this
+                    .drop_slot
+                    .or_else(|| {
+                        let bounds = this.tab_bounds.borrow().clone();
+                        vertical_slot_from_bounds(window.mouse_position().y, &bounds, total)
+                    })
+                    .unwrap_or(total);
                 this.drop_slot = None;
-                cx.emit(SidebarReorder {
-                    session_id: dragged.session_id,
-                    to,
-                    move_delta: None,
-                });
+                this.clear_drag_preview();
+                match dragged.origin {
+                    DraggedTabOrigin::Sidebar => cx.emit(SidebarReorder {
+                        session_id: dragged.session_id,
+                        to,
+                        move_delta: None,
+                    }),
+                    DraggedTabOrigin::Pane => {
+                        if let Some(pane_id) = dragged.pane_id {
+                            cx.emit(SidebarPaneToTab { pane_id, to });
+                        }
+                    }
+                    DraggedTabOrigin::HorizontalTabStrip => {}
+                }
                 cx.notify();
             }));
 
         let renaming_index = self.rename.as_ref().map(|r| r.index);
         let rename_input = self.rename.as_ref().map(|r| r.input.clone());
         let drop_slot = self.drop_slot;
+        let drag_in_sidebar = cx.has_active_drag() && self.drag_preview.borrow().is_some();
 
         for i in 0..total {
             let session_clone = SessionEntry {
@@ -939,6 +1265,7 @@ impl SessionSidebar {
                 icon: self.sessions[i].icon,
                 has_user_label: self.sessions[i].has_user_label,
                 pane_count: self.sessions[i].pane_count,
+                color: self.sessions[i].color,
             };
             let row = self.render_panel_row(
                 i,
@@ -947,6 +1274,7 @@ impl SessionSidebar {
                 rename_input.clone(),
                 drop_slot,
                 total,
+                drag_in_sidebar,
                 window,
                 cx,
             );
@@ -973,6 +1301,7 @@ impl SessionSidebar {
         rename_input: Option<Entity<InputState>>,
         drop_slot: Option<usize>,
         total: usize,
+        drag_in_sidebar: bool,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -985,8 +1314,8 @@ impl SessionSidebar {
         // the last row (i == total-1) when drop_slot == total. Slot
         // semantics: K means "insert at index K"; slot N means "at
         // the bottom".
-        let drop_above = drop_slot == Some(i) && cx.has_active_drag();
-        let drop_below = i + 1 == total && drop_slot == Some(total) && cx.has_active_drag();
+        let drop_above = drop_slot == Some(i) && drag_in_sidebar;
+        let drop_below = i + 1 == total && drop_slot == Some(total) && drag_in_sidebar;
 
         let row_h = ROW_HEIGHT;
 
@@ -1093,8 +1422,13 @@ impl SessionSidebar {
                 gpui::transparent_black()
             });
 
+        let active_accent_bg_row: Option<gpui::Hsla> = session.color.map(|c| {
+            let mut h = crate::tab_colors::tab_accent_color_hsla(c, cx);
+            h.a = 0.35;
+            h
+        });
         let row_bg = if is_active {
-            elevated_surface(theme, self.ui_opacity)
+            active_accent_bg_row.unwrap_or_else(|| elevated_surface(theme, self.ui_opacity))
         } else {
             gpui::transparent_black()
         };
@@ -1108,6 +1442,7 @@ impl SessionSidebar {
             preview_constraint: None,
             pane_id: None,
         };
+        let tab_bounds = self.tab_bounds.clone();
 
         let mut icon_stack = div().relative().flex_shrink_0().child(
             svg()
@@ -1128,6 +1463,22 @@ impl SessionSidebar {
                     .size(px(6.0))
                     .rounded_full()
                     .bg(theme.primary),
+            );
+        }
+        if is_active {
+            let dot_color = if let Some(color) = session.color {
+                crate::tab_colors::tab_accent_color_hsla(color, cx)
+            } else {
+                crate::tab_colors::active_tab_indicator_color()
+            };
+            icon_stack = icon_stack.child(
+                div()
+                    .absolute()
+                    .bottom(px(-2.0))
+                    .right(px(-2.0))
+                    .size(px(6.0))
+                    .rounded_full()
+                    .bg(dot_color),
             );
         }
 
@@ -1166,20 +1517,28 @@ impl SessionSidebar {
             .on_drag(dragged, |dragged, _offset, _window, cx| {
                 cx.new(|_| dragged.clone())
             })
+            .on_prepaint(move |bounds, _, _| {
+                tab_bounds.borrow_mut().push(bounds);
+            })
             .on_drag_move::<DraggedTab>(cx.listener(
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
-                    if event.drag(cx).origin != DraggedTabOrigin::Sidebar {
+                    if !matches!(
+                        event.drag(cx).origin,
+                        DraggedTabOrigin::Sidebar | DraggedTabOrigin::Pane
+                    ) {
                         return;
                     }
                     if !point_in_bounds(&event.event.position, &event.bounds) {
                         return;
                     }
-                    // Top half of row → drop slot = i (insert above
-                    // this row). Bottom half → drop slot = i + 1
-                    // (insert below). Without the bottom-half rule
-                    // the deepest slot reachable from row N-1 was
-                    // N-1, leaving no way to drag a tab to the
-                    // bottom of the list.
+                    // Cursor is inside this row — create/keep preview.
+                    let preview_size = vertical_drag_preview_size(this.is_pinned());
+                    this.ensure_drag_preview(
+                        event.drag(cx),
+                        event.bounds.origin.x,
+                        preview_size.height / 2.0,
+                    );
+                    // Top half → insert above (slot = i), bottom half → insert below (slot = i+1).
                     let local_y = event.event.position.y - event.bounds.origin.y;
                     let half = event.bounds.size.height / 2.0;
                     let slot = if local_y < half { i } else { i + 1 };
@@ -1190,25 +1549,51 @@ impl SessionSidebar {
                 },
             ))
             .on_drop(cx.listener(move |this, dragged: &DraggedTab, _, cx| {
-                if dragged.origin != DraggedTabOrigin::Sidebar {
+                if !matches!(
+                    dragged.origin,
+                    DraggedTabOrigin::Sidebar | DraggedTabOrigin::Pane
+                ) {
+                    return;
+                }
+                // For pane-origin drags, only handle if cursor was in sidebar.
+                if dragged.origin == DraggedTabOrigin::Pane && this.drop_slot.is_none() {
+                    this.clear_drag_preview();
                     return;
                 }
                 let to = this.drop_slot.unwrap_or(i);
                 this.drop_slot = None;
-                cx.emit(SidebarReorder {
-                    session_id: dragged.session_id,
-                    to,
-                    move_delta: None,
-                });
+                this.clear_drag_preview();
+                match dragged.origin {
+                    DraggedTabOrigin::Sidebar => cx.emit(SidebarReorder {
+                        session_id: dragged.session_id,
+                        to,
+                        move_delta: None,
+                    }),
+                    DraggedTabOrigin::Pane => {
+                        if let Some(pane_id) = dragged.pane_id {
+                            cx.emit(SidebarPaneToTab { pane_id, to });
+                        }
+                    }
+                    DraggedTabOrigin::HorizontalTabStrip => {}
+                }
                 cx.notify();
             }))
             .context_menu({
                 let total = total;
                 let session_id = session.id;
                 let has_user_label = session.has_user_label;
+                let current_color = session.color;
                 let weak = cx.weak_entity();
                 move |menu, _window, _cx| {
-                    build_row_context_menu(menu, weak.clone(), i, session_id, total, has_user_label)
+                    build_row_context_menu(
+                        menu,
+                        weak.clone(),
+                        i,
+                        session_id,
+                        total,
+                        has_user_label,
+                        current_color,
+                    )
                 }
             })
             .child(drop_line_above)
@@ -1231,8 +1616,20 @@ impl Render for SessionSidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Clear stale drop indicator after the drag completes — GPUI
         // doesn't expose an on_drag_end hook for the source element.
-        if self.drop_slot.is_some() && !cx.has_active_drag() {
-            self.drop_slot = None;
+        let has_drag = cx.has_active_drag();
+        if !has_drag {
+            let mut changed = false;
+            if self.drop_slot.is_some() {
+                self.drop_slot = None;
+                changed = true;
+            }
+            if self.drag_preview.borrow().is_some() {
+                self.clear_drag_preview();
+                changed = true;
+            }
+            if changed {
+                cx.notify();
+            }
         }
         // Drive the width-tween animation frame.
         let _progress = self.width_motion.value(window);
@@ -1431,96 +1828,108 @@ fn build_row_context_menu(
     session_id: u64,
     total: usize,
     has_user_label: bool,
+    current_color: Option<con_core::session::TabAccentColor>,
 ) -> PopupMenu {
-    let mut menu = menu
-        .item(PopupMenuItem::new("Rename").on_click({
-            let weak = weak.clone();
-            move |_, window, cx| {
-                if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |this, cx| {
-                        this.start_rename_by_id(session_id, window, cx)
-                    });
-                }
-            }
-        }))
-        .item(PopupMenuItem::new("Duplicate").on_click({
-            let weak = weak.clone();
-            move |_, _, cx| {
-                if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |_, cx| cx.emit(SidebarDuplicate { session_id }));
-                }
-            }
-        }));
-    if has_user_label {
-        menu = menu.item(PopupMenuItem::new("Reset Name").on_click({
-            let weak = weak.clone();
-            move |_, _, cx| {
-                if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |_, cx| {
-                        cx.emit(SidebarRename {
-                            session_id,
-                            label: None,
-                            changed_by_user: true,
-                        })
-                    });
-                }
-            }
-        }));
-    }
-    menu = menu.separator();
-    if index > 0 {
-        menu = menu.item(PopupMenuItem::new("Move Up").on_click({
-            let weak = weak.clone();
-            move |_, _, cx| {
-                if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |_, cx| {
-                        cx.emit(SidebarReorder {
-                            session_id,
-                            to: index - 1,
-                            move_delta: Some(-1),
-                        })
-                    });
-                }
-            }
-        }));
-    }
-    if index + 1 < total {
-        menu = menu.item(PopupMenuItem::new("Move Down").on_click({
-            let weak = weak.clone();
-            move |_, _, cx| {
-                if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |_, cx| {
-                        cx.emit(SidebarReorder {
-                            session_id,
-                            to: index + 2,
-                            move_delta: Some(1),
-                        })
-                    });
-                }
-            }
-        }));
-    }
-    menu = menu
-        .separator()
-        .item(PopupMenuItem::new("Close Tab").on_click({
-            let weak = weak.clone();
-            move |_, _, cx| {
-                if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |_, cx| cx.emit(SidebarCloseTab { session_id }));
-                }
-            }
-        }));
-    if total > 1 {
-        menu = menu.item(PopupMenuItem::new("Close Other Tabs").on_click({
-            let weak = weak.clone();
-            move |_, _, cx| {
-                if let Some(entity) = weak.upgrade() {
-                    entity.update(cx, |_, cx| cx.emit(SidebarCloseOthers { session_id }));
-                }
-            }
-        }));
-    }
-    menu
+    use crate::tab_context_menu::{TabMenuOptions, build_tab_context_menu};
+    build_tab_context_menu(
+        menu,
+        TabMenuOptions {
+            rename: {
+                let weak = weak.clone();
+                Box::new(move |window, cx| {
+                    if let Some(e) = weak.upgrade() {
+                        e.update(cx, |this, cx| {
+                            this.start_rename_by_id(session_id, window, cx)
+                        });
+                    }
+                })
+            },
+            duplicate: {
+                let weak = weak.clone();
+                Box::new(move |_window, cx| {
+                    if let Some(e) = weak.upgrade() {
+                        e.update(cx, |_, cx| cx.emit(SidebarDuplicate { session_id }));
+                    }
+                })
+            },
+            reset_name: if has_user_label {
+                let weak = weak.clone();
+                Some(Box::new(move |_window, cx| {
+                    if let Some(e) = weak.upgrade() {
+                        e.update(cx, |_, cx| {
+                            cx.emit(SidebarRename {
+                                session_id,
+                                label: None,
+                                changed_by_user: true,
+                            })
+                        });
+                    }
+                }))
+            } else {
+                None
+            },
+            move_up: if index > 0 {
+                let weak = weak.clone();
+                Some(Box::new(move |_window, cx| {
+                    if let Some(e) = weak.upgrade() {
+                        e.update(cx, |_, cx| {
+                            cx.emit(SidebarReorder {
+                                session_id,
+                                to: index - 1,
+                                move_delta: Some(-1),
+                            })
+                        });
+                    }
+                }))
+            } else {
+                None
+            },
+            move_down: if index + 1 < total {
+                let weak = weak.clone();
+                Some(Box::new(move |_window, cx| {
+                    if let Some(e) = weak.upgrade() {
+                        e.update(cx, |_, cx| {
+                            cx.emit(SidebarReorder {
+                                session_id,
+                                to: index + 2,
+                                move_delta: Some(1),
+                            })
+                        });
+                    }
+                }))
+            } else {
+                None
+            },
+            close_to_right: None,
+            close_tab: {
+                let weak = weak.clone();
+                Box::new(move |_window, cx| {
+                    if let Some(e) = weak.upgrade() {
+                        e.update(cx, |_, cx| cx.emit(SidebarCloseTab { session_id }));
+                    }
+                })
+            },
+            close_others: if total > 1 {
+                let weak = weak.clone();
+                Some(Box::new(move |_window, cx| {
+                    if let Some(e) = weak.upgrade() {
+                        e.update(cx, |_, cx| cx.emit(SidebarCloseOthers { session_id }));
+                    }
+                }))
+            } else {
+                None
+            },
+            set_color: {
+                let weak = weak.clone();
+                Box::new(move |color, _window, cx| {
+                    if let Some(e) = weak.upgrade() {
+                        e.update(cx, |_, cx| cx.emit(SidebarSetColor { session_id, color }));
+                    }
+                })
+            },
+            current_color,
+        },
+    )
 }
 
 fn panel_icon_button_small<F>(
@@ -1591,6 +2000,84 @@ fn blur_should_commit_for_lifecycle(
         && state.active_generation == Some(blur_generation)
 }
 
+#[derive(Clone)]
+pub struct SidebarDragPreviewState {
+    pub label: SharedString,
+    pub icon: &'static str,
+    pub source_left: Pixels,
+    pub cursor_offset_y: Pixels,
+    /// True when the drag originated from a pane title bar. In that case the
+    /// workspace floating preview already follows the cursor, so the sidebar
+    /// should only show the drop indicator — not an additional overlay.
+    pub is_pane_origin: bool,
+}
+
+pub fn vertical_drag_preview_size(pinned: bool) -> Size<Pixels> {
+    Size {
+        width: if pinned { px(180.0) } else { px(RAIL_WIDTH) },
+        height: if pinned { px(28.0) } else { px(RAIL_ICON_SIZE) },
+    }
+}
+
+pub fn vertical_drag_overlay_origin(
+    mouse: Point<Pixels>,
+    preview: &SidebarDragPreviewState,
+    _preview_size: Size<Pixels>,
+    min_top: Pixels,
+    max_top: Pixels,
+) -> Point<Pixels> {
+    point(
+        preview.source_left,
+        (mouse.y - preview.cursor_offset_y).clamp(min_top, max_top),
+    )
+}
+
+pub fn vertical_drag_overlay_probe_position(
+    mouse: Point<Pixels>,
+    preview: &SidebarDragPreviewState,
+    preview_size: Size<Pixels>,
+    min_top: Pixels,
+    max_top: Pixels,
+) -> Point<Pixels> {
+    let origin = vertical_drag_overlay_origin(mouse, preview, preview_size, min_top, max_top);
+    point(
+        origin.x + preview_size.width / 2.0,
+        origin.y + preview_size.height / 2.0,
+    )
+}
+
+fn event_probe_y_from_vertical_preview(
+    mouse: Point<Pixels>,
+    dragged: &DraggedTab,
+    _bounds: &[Bounds<Pixels>],
+) -> Pixels {
+    let preview_size = vertical_drag_preview_size(false);
+    let cursor_offset_y = dragged
+        .preview_constraint
+        .map(|constraint| constraint.cursor_offset_y)
+        .unwrap_or(preview_size.height / 2.0);
+    mouse.y - cursor_offset_y + preview_size.height / 2.0
+}
+
+pub fn vertical_slot_from_bounds(
+    probe_y: Pixels,
+    bounds: &[Bounds<Pixels>],
+    item_count: usize,
+) -> Option<usize> {
+    if item_count == 0 || bounds.is_empty() {
+        return None;
+    }
+    let mut slot = item_count;
+    for (i, bounds) in bounds.iter().enumerate() {
+        let mid_y = bounds.origin.y + bounds.size.height / 2.0;
+        if probe_y < mid_y {
+            slot = i;
+            break;
+        }
+    }
+    Some(slot.min(item_count))
+}
+
 fn normalize_sidebar_rename_label(value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -1603,9 +2090,74 @@ fn normalize_sidebar_rename_label(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        begin_rename_after_cancel_lifecycle, begin_rename_lifecycle,
+        SidebarDragPreviewState, begin_rename_after_cancel_lifecycle, begin_rename_lifecycle,
         blur_should_commit_for_lifecycle, cancel_rename_lifecycle, normalize_sidebar_rename_label,
+        vertical_drag_overlay_probe_position, vertical_slot_from_bounds,
     };
+    use gpui::{Bounds, Point, Size, px};
+
+    #[test]
+    fn vertical_slot_from_bounds_uses_row_midpoints() {
+        let bounds = vec![
+            Bounds::new(
+                Point {
+                    x: px(10.0),
+                    y: px(100.0),
+                },
+                Size {
+                    width: px(200.0),
+                    height: px(40.0),
+                },
+            ),
+            Bounds::new(
+                Point {
+                    x: px(10.0),
+                    y: px(144.0),
+                },
+                Size {
+                    width: px(200.0),
+                    height: px(40.0),
+                },
+            ),
+        ];
+
+        assert_eq!(vertical_slot_from_bounds(px(90.0), &bounds, 2), Some(0));
+        assert_eq!(vertical_slot_from_bounds(px(121.0), &bounds, 2), Some(1));
+        assert_eq!(vertical_slot_from_bounds(px(180.0), &bounds, 2), Some(2));
+    }
+
+    #[test]
+    fn vertical_drag_overlay_probe_locks_x_and_uses_overlay_center() {
+        let preview = SidebarDragPreviewState {
+            label: "tab".into(),
+            icon: "phosphor/terminal.svg",
+            source_left: px(12.0),
+            cursor_offset_y: px(8.0),
+            is_pane_origin: false,
+        };
+
+        let probe = vertical_drag_overlay_probe_position(
+            Point {
+                x: px(480.0),
+                y: px(220.0),
+            },
+            &preview,
+            Size {
+                width: px(180.0),
+                height: px(28.0),
+            },
+            px(50.0),
+            px(400.0),
+        );
+
+        assert_eq!(
+            probe,
+            Point {
+                x: px(102.0),
+                y: px(226.0)
+            }
+        );
+    }
 
     #[test]
     fn normalize_sidebar_rename_label_trims_and_clears_blank_values() {

@@ -773,6 +773,7 @@ impl PaneTree {
         toggle_zoom_cb: impl Fn(PaneId, &mut Window, &mut App) + 'static,
         rename_editor: Option<SurfaceRenameEditor>,
         divider_color: Hsla,
+        tab_accent_color: Option<con_core::session::TabAccentColor>,
         hide_pane_title_bar: bool,
         cx: &App,
     ) -> AnyElement {
@@ -798,6 +799,7 @@ impl PaneTree {
                 has_splits,
                 zoomed_pane_id,
                 session_id,
+                tab_accent_color,
                 hide_pane_title_bar,
                 cx,
             ) {
@@ -820,6 +822,7 @@ impl PaneTree {
             has_splits,
             zoomed_pane_id,
             session_id,
+            tab_accent_color,
             hide_pane_title_bar,
             cx,
         )
@@ -1501,6 +1504,7 @@ impl PaneTree {
         tree_has_splits: bool,
         zoomed_pane_id: Option<PaneId>,
         session_id: u64,
+        tab_accent_color: Option<con_core::session::TabAccentColor>,
         hide_pane_title_bar: bool,
         cx: &App,
     ) -> AnyElement {
@@ -1523,6 +1527,7 @@ impl PaneTree {
                 tree_has_splits,
                 zoomed_pane_id,
                 session_id,
+                tab_accent_color,
                 hide_pane_title_bar,
                 cx,
             ),
@@ -1568,6 +1573,7 @@ impl PaneTree {
                     tree_has_splits,
                     zoomed_pane_id,
                     session_id,
+                    tab_accent_color,
                     hide_pane_title_bar,
                     cx,
                 );
@@ -1586,6 +1592,7 @@ impl PaneTree {
                     tree_has_splits,
                     zoomed_pane_id,
                     session_id,
+                    tab_accent_color,
                     hide_pane_title_bar,
                     cx,
                 );
@@ -1749,6 +1756,7 @@ impl PaneTree {
         tree_has_splits: bool,
         zoomed_pane_id: Option<PaneId>,
         session_id: u64,
+        tab_accent_color: Option<con_core::session::TabAccentColor>,
         hide_pane_title_bar: bool,
         cx: &App,
     ) -> Option<AnyElement> {
@@ -1771,6 +1779,7 @@ impl PaneTree {
                 tree_has_splits,
                 zoomed_pane_id,
                 session_id,
+                tab_accent_color,
                 hide_pane_title_bar,
                 cx,
             )),
@@ -1788,6 +1797,7 @@ impl PaneTree {
                 tree_has_splits,
                 zoomed_pane_id,
                 session_id,
+                tab_accent_color,
                 hide_pane_title_bar,
                 cx,
             )
@@ -1805,6 +1815,7 @@ impl PaneTree {
                     tree_has_splits,
                     zoomed_pane_id,
                     session_id,
+                    tab_accent_color,
                     hide_pane_title_bar,
                     cx,
                 )
@@ -1822,13 +1833,20 @@ impl PaneTree {
         is_focused: bool,
         has_splits: bool,
         is_zoomed: bool,
+        tab_accent_color: Option<con_core::session::TabAccentColor>,
         close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         cx: &App,
     ) -> AnyElement {
         let theme = cx.theme();
         let bar_bg = if is_focused {
-            theme.tab_bar_segmented
+            if let Some(color) = tab_accent_color {
+                let mut h = crate::tab_colors::tab_accent_color_hsla(color, cx);
+                h.a = 0.35;
+                h
+            } else {
+                theme.tab_bar_segmented
+            }
         } else {
             theme.tab_bar_segmented.opacity(0.78)
         };
@@ -1937,7 +1955,7 @@ impl PaneTree {
             .flex()
             .flex_row()
             .items_center()
-            .h(px(28.0))
+            .h(px(24.0))
             .w_full()
             .px(px(6.0))
             .bg(bar_bg)
@@ -1974,6 +1992,7 @@ impl PaneTree {
         tree_has_splits: bool,
         zoomed_pane_id: Option<PaneId>,
         session_id: u64,
+        tab_accent_color: Option<con_core::session::TabAccentColor>,
         hide_pane_title_bar: bool,
         cx: &App,
     ) -> AnyElement {
@@ -2023,6 +2042,7 @@ impl PaneTree {
                 is_focused,
                 tree_has_splits,
                 is_zoomed,
+                tab_accent_color,
                 close_pane_cb,
                 toggle_zoom_cb,
                 cx,
@@ -2051,7 +2071,7 @@ impl PaneTree {
                 .flex()
                 .items_center()
                 .gap(px(4.0))
-                .h(px(22.0))
+                .h(px(24.0))
                 .max_w(relative(1.0))
                 .ml(px(8.0))
                 .mr(px(8.0))
@@ -2250,7 +2270,7 @@ impl PaneTree {
             let strip = div()
                 .flex()
                 .items_center()
-                .h(px(28.0))
+                .h(px(24.0))
                 .w_full()
                 .bg(theme.transparent)
                 .child(surface_rail);

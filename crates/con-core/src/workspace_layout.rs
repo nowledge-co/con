@@ -326,6 +326,7 @@ impl WorkspaceLayout {
                 conversation_id: None,
                 agent_routing,
                 user_label: tab.title.clone(),
+                color: None,
             });
         }
 
@@ -345,6 +346,7 @@ impl WorkspaceLayout {
                     default_model,
                 ),
                 user_label: self.name.clone(),
+                color: None,
             });
         }
 
@@ -1149,6 +1151,7 @@ mod tests {
                     }],
                 },
                 user_label: Some("Dev".to_string()),
+                color: None,
             }],
             active_tab: 0,
             agent_panel_open: true,
@@ -1319,6 +1322,7 @@ panes = []
                 conversation_id: None,
                 agent_routing: AgentRoutingState::default(),
                 user_label: None,
+                color: None,
             }],
             active_tab: 0,
             agent_panel_open: false,

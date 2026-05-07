@@ -288,6 +288,7 @@ impl ConWorkspace {
             user_label: None,
             ai_label: None,
             ai_icon: None,
+            color: None,
             summary_id,
             needs_attention: false,
             session: AgentSession::new(),
@@ -460,6 +461,17 @@ impl ConWorkspace {
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
+    }
+
+    pub(super) fn close_tab_by_id(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.tab_index_for_summary_id(tab_id) {
+            self.close_tab_by_index(index, window, cx);
+        }
     }
 
     pub(super) fn destroy_quick_terminal_window(

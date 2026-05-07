@@ -82,40 +82,7 @@ impl ConWorkspace {
         else {
             return;
         };
-        // For now, "duplicate" = open a new tab whose CWD matches the
-        // source tab's focused terminal cwd. The conversation, panel
-        // state, and history don't carry over — that's intentional;
-        // duplicate is for "open another shell here", not "fork
-        // session state".
-        let cwd = self.tabs[index]
-            .pane_tree
-            .focused_terminal()
-            .current_dir(cx);
-        let terminal = self.create_terminal(cwd.as_deref(), window, cx);
-        let tab_number = self.tabs.len() + 1;
-        let summary_id = self.next_tab_summary_id;
-        self.next_tab_summary_id += 1;
-        self.tabs.push(Tab {
-            pane_tree: PaneTree::new(terminal),
-            title: format!("Terminal {}", tab_number),
-            user_label: self.tabs[index].user_label.clone(),
-            ai_label: None,
-            ai_icon: None,
-            summary_id,
-            needs_attention: false,
-            session: AgentSession::new(),
-            agent_routing: self.tabs[index].agent_routing.clone(),
-            panel_state: PanelState::new(),
-            runtime_trackers: RefCell::new(HashMap::new()),
-            runtime_cache: RefCell::new(HashMap::new()),
-            shell_history: HashMap::new(),
-        });
-        let new_index = self.tabs.len() - 1;
-        if self.sync_tab_strip_motion() {
-            #[cfg(target_os = "macos")]
-            self.arm_top_chrome_snap_guard(cx);
-        }
-        self.activate_tab(new_index, window, cx);
+        self.duplicate_tab(index, window, cx);
     }
 
     pub(super) fn on_sidebar_reorder(
@@ -218,6 +185,21 @@ impl ConWorkspace {
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
+    }
+
+    pub(super) fn on_sidebar_pane_to_tab(
+        &mut self,
+        _sidebar: &Entity<SessionSidebar>,
+        event: &SidebarPaneToTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        clear_pane_tab_promotion_drag_state(
+            &mut self.pane_title_drag,
+            &mut self.tab_strip_drop_slot,
+            &mut self.tab_drag_target,
+        );
+        self.detach_pane_to_new_tab_at_slot(event.pane_id, event.to, window, cx);
     }
 
     /// Reorder a tab identified by `session_id` to drop slot `to`
@@ -378,6 +360,17 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    pub(super) fn begin_tab_rename_by_id(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.tab_index_for_summary_id(tab_id) {
+            self.begin_tab_rename(index, window, cx);
+        }
+    }
+
     pub(super) fn commit_tab_rename(
         &mut self,
         tab_id: u64,
@@ -482,6 +475,23 @@ impl ConWorkspace {
         }
     }
 
+    pub(super) fn on_sidebar_set_color(
+        &mut self,
+        _sidebar: &Entity<SessionSidebar>,
+        event: &SidebarSetColor,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.summary_id == event.session_id)
+        else {
+            return;
+        };
+        self.set_tab_color(index, event.color, cx);
+    }
+
     pub(super) fn sync_sidebar(&self, cx: &mut Context<Self>) {
         let sessions: Vec<SessionEntry> = self
             .tabs
@@ -511,6 +521,7 @@ impl ConWorkspace {
                     icon: presentation.icon,
                     has_user_label: tab.user_label.is_some(),
                     pane_count,
+                    color: tab.color,
                 }
             })
             .collect();
