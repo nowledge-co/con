@@ -26,6 +26,7 @@ use parking_lot::Mutex;
 use crate::ffi;
 
 const DEFAULT_GHOSTTY_FONT_FAMILY: &str = "Ioskeley Mono";
+const CON_SHELL_INTEGRATION_FEATURES: &str = "no-cursor,ssh-env,ssh-terminfo";
 
 fn sanitize_font_family_for_ghostty(font_family: &str) -> &str {
     let trimmed = font_family.trim();
@@ -158,7 +159,11 @@ impl GhosttyConfigPatch {
         // Disable ghostty shell-integration cursor override so con's
         // cursor-style setting is respected. Ghostty's integration
         // unconditionally forces a bar cursor at prompts otherwise.
-        s.push_str("shell-integration-features = no-cursor\n");
+        // Enable ssh-env and ssh-terminfo so Ghostty's shell integration
+        // auto-installs xterm-ghostty terminfo on remote SSH hosts.
+        s.push_str("shell-integration-features = ");
+        s.push_str(CON_SHELL_INTEGRATION_FEATURES);
+        s.push('\n');
         if let Some(background_image) = &self.background_image {
             s.push_str(&format!("background-image = {:?}\n", background_image));
             if let Some(background_image_opacity) = self.background_image_opacity {
@@ -206,23 +211,13 @@ fn build_ghostty_config(patch: &GhosttyConfigPatch) -> Result<ffi::ghostty_confi
         return Err("ghostty_config_new returned null".into());
     }
 
-    if patch.colors.is_some()
-        || patch.font_family.is_some()
-        || patch.font_size.is_some()
-        || patch.background_opacity.is_some()
-        || patch.background_blur.is_some()
-        || patch.cursor_style.is_some()
-        || patch.background_image.is_some()
-        || patch.background_image_opacity.is_some()
-        || patch.background_image_position.is_some()
-        || patch.background_image_fit.is_some()
-        || patch.background_image_repeat.is_some()
-    {
-        let path = patch.write_config_file()?;
-        let path_str = path.to_str().ok_or("non-UTF8 path")?;
-        let cpath = CString::new(path_str).map_err(|e| format!("CString: {}", e))?;
-        unsafe { ffi::ghostty_config_load_file(config, cpath.as_ptr()) };
-    }
+    // Always load Con's runtime config, even when no appearance patch fields
+    // are present. Some terminal behavior is part of Con's product default
+    // rather than a user patch, most notably shell integration features.
+    let path = patch.write_config_file()?;
+    let path_str = path.to_str().ok_or("non-UTF8 path")?;
+    let cpath = CString::new(path_str).map_err(|e| format!("CString: {}", e))?;
+    unsafe { ffi::ghostty_config_load_file(config, cpath.as_ptr()) };
 
     unsafe { ffi::ghostty_config_finalize(config) };
     Ok(config)
@@ -1657,5 +1652,12 @@ mod tests {
         let config = patch.to_config_string();
         assert!(config.contains("font-family = \"Ioskeley Mono\""));
         assert!(!config.contains(".ZedMono"));
+    }
+
+    #[test]
+    fn ghostty_config_always_includes_con_shell_integration_features() {
+        let config = GhosttyConfigPatch::default().to_config_string();
+
+        assert!(config.contains("shell-integration-features = no-cursor,ssh-env,ssh-terminfo"));
     }
 }
