@@ -282,7 +282,16 @@ impl Render for ConWorkspace {
         // the immutable cx borrow that the rest of `render` relies on.
         let vertical_tabs_overlay = if self.vertical_tabs_active() {
             self.sidebar.update(cx, |sidebar, cx| {
-                sidebar.render_hover_card_overlay(window, cx)
+                if cx.has_active_drag() {
+                    sidebar.update_drag_preview_from_mouse(
+                        window.mouse_position(),
+                        window.viewport_size(),
+                        cx,
+                    );
+                }
+                sidebar
+                    .drag_preview_overlay(window, cx)
+                    .or_else(|| sidebar.render_hover_card_overlay(window, cx))
             })
         } else {
             None
@@ -389,6 +398,7 @@ impl Render for ConWorkspace {
                 }
             };
             let session_id = self.tabs[self.active_tab].summary_id;
+            let tab_accent_color = self.tabs[self.active_tab].color;
             self.tabs[self.active_tab].pane_tree.render(
                 session_id,
                 begin_drag_cb,
@@ -399,6 +409,7 @@ impl Render for ConWorkspace {
                 toggle_zoom_cb,
                 self.surface_rename.clone(),
                 pane_divider_color,
+                tab_accent_color,
                 self.hide_pane_title_bar,
                 cx,
             )
@@ -828,6 +839,44 @@ impl Render for ConWorkspace {
                             return;
                         }
 
+                        if let Some(preview) = this
+                            .tab_drag_preview
+                            .lock()
+                            .ok()
+                            .and_then(|guard| guard.clone())
+                        {
+                            let preview_size = tab_like_drag_preview_size();
+                            let leading_pad = if cfg!(target_os = "macos") { 78.0 } else { 8.0 };
+                            let min_left = px(leading_pad);
+                            let max_left =
+                                (win.viewport_size().width - preview_size.width).max(min_left);
+                            let probe = tab_drag_overlay_probe_position(
+                                event.position,
+                                &preview,
+                                preview_size,
+                                min_left,
+                                max_left,
+                            );
+                            let tab_bounds = this
+                                .tab_strip_tab_bounds
+                                .lock()
+                                .ok()
+                                .map(|g| g.clone())
+                                .unwrap_or_default();
+                            if let Some(slot) =
+                                horizontal_tab_slot_from_bounds(probe, &tab_bounds, this.tabs.len())
+                            {
+                                let new_target = Some(TabDragTarget::Reorder { slot });
+                                if this.tab_strip_drop_slot != Some(slot)
+                                    || this.tab_drag_target != new_target
+                                {
+                                    this.tab_strip_drop_slot = Some(slot);
+                                    this.tab_drag_target = new_target;
+                                    cx.notify();
+                                }
+                            }
+                        }
+
                         if this.active_tab >= this.tabs.len() {
                             return;
                         }
@@ -919,6 +968,15 @@ impl Render for ConWorkspace {
                                 &mut this.tab_drag_target,
                             );
                             cx.notify();
+                        }
+                        // Safety cleanup/redraw for sidebar drag state — on_drop may not
+                        // fire if the cursor was outside all sidebar hit targets, and GPUI
+                        // can leave the last drop-indicator paint around until the next
+                        // sidebar repaint. Force one repaint on mouseup in vertical-tabs mode.
+                        if this.vertical_tabs_active() {
+                            this.sidebar.update(cx, |sidebar, cx| {
+                                sidebar.force_clear_drag_state(cx);
+                            });
                         }
 
                         if this.active_tab >= this.tabs.len() {
@@ -1059,6 +1117,46 @@ impl Render for ConWorkspace {
                 }))
                 .child(top_bar)
                 .child(main_area);
+
+        if let Some(preview) = self
+            .tab_drag_preview
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+        {
+            let preview_size = tab_like_drag_preview_size();
+            let leading_pad = if cfg!(target_os = "macos") { 78.0 } else { 8.0 };
+            let min_left = px(leading_pad);
+            let max_left = (window.viewport_size().width - preview_size.width).max(min_left);
+            let left =
+                tab_drag_overlay_origin(window.mouse_position(), &preview, min_left, max_left).x;
+            root = root.child(
+                div()
+                    .absolute()
+                    .left(left)
+                    .top(preview.source_top)
+                    .w(preview_size.width)
+                    .h(preview_size.height)
+                    .px(px(10.0))
+                    .rounded(px(4.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .cursor_grab()
+                    .bg(theme.title_bar.opacity(0.92))
+                    .font_family(theme.font_family.clone())
+                    .text_size(px(12.0))
+                    .text_color(theme.foreground.opacity(0.82))
+                    .child(
+                        svg()
+                            .path(preview.icon)
+                            .size(px(12.0))
+                            .flex_shrink_0()
+                            .text_color(theme.foreground),
+                    )
+                    .child(div().flex_1().min_w_0().truncate().child(preview.title)),
+            );
+        }
 
         if let Some(drag) = self.pane_title_drag.as_ref().filter(|drag| drag.active) {
             let preview_size = Size {

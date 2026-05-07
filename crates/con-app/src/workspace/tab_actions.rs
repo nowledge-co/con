@@ -495,4 +495,116 @@ impl ConWorkspace {
         self.save_session(cx);
         cx.notify();
     }
+
+    /// Duplicate the tab at `index`, preserving pane layout and each pane's CWD.
+    pub(super) fn duplicate_tab(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if index >= self.tabs.len() {
+            return;
+        }
+
+        // Serialize the current pane tree layout (with cwd for every pane).
+        let layout = self.tabs[index].pane_tree.to_state(cx, false);
+        let focused_pane_id = Some(self.tabs[index].pane_tree.focused_pane_id());
+
+        // Rebuild the pane tree from the serialized layout, spawning a fresh
+        // terminal in each pane's cwd.
+        let ghostty_app = self.ghostty_app.clone();
+        let font_size = self.font_size;
+        let mut make_terminal =
+            |cwd: Option<&str>, _screen_text: Option<&[String]>, _force: bool| {
+                make_ghostty_terminal(&ghostty_app, cwd, None, font_size, window, cx)
+            };
+        let pane_tree = PaneTree::from_state(&layout, focused_pane_id, &mut make_terminal);
+
+        let summary_id = self.next_tab_summary_id;
+        self.next_tab_summary_id += 1;
+        let new_tab = Tab {
+            pane_tree,
+            title: format!("Terminal {}", summary_id + 1),
+            user_label: self.tabs[index].user_label.clone(),
+            ai_label: None,
+            ai_icon: None,
+            color: self.tabs[index].color,
+            summary_id,
+            needs_attention: false,
+            session: AgentSession::new(),
+            agent_routing: self.tabs[index].agent_routing.clone(),
+            panel_state: PanelState::new(),
+            runtime_trackers: RefCell::new(HashMap::new()),
+            runtime_cache: RefCell::new(HashMap::new()),
+            shell_history: HashMap::new(),
+        };
+        let insert_at = index + 1;
+        self.tabs.insert(insert_at, new_tab);
+        if self.active_tab >= insert_at {
+            self.active_tab += 1;
+        }
+        if self.sync_tab_strip_motion() {
+            #[cfg(target_os = "macos")]
+            self.arm_top_chrome_snap_guard(cx);
+        }
+        self.activate_tab(insert_at, window, cx);
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    /// Close all tabs except the one at `index`.
+    pub(super) fn close_other_tabs(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if index >= self.tabs.len() || self.tabs.len() <= 1 {
+            return;
+        }
+        // Close from the end to avoid index shifting.
+        for i in (0..self.tabs.len()).rev() {
+            if i != index {
+                self.close_tab_by_index(i, window, cx);
+            }
+        }
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    /// Close all tabs to the right of `index` (exclusive).
+    pub(super) fn close_tabs_to_right(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if index >= self.tabs.len().saturating_sub(1) {
+            return;
+        }
+        // Close from the end to avoid index shifting.
+        let last = self.tabs.len() - 1;
+        for i in (index + 1..=last).rev() {
+            self.close_tab_by_index(i, window, cx);
+        }
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    /// Set (or clear) the accent color for a tab by index.
+    pub(super) fn set_tab_color(
+        &mut self,
+        index: usize,
+        color: Option<con_core::session::TabAccentColor>,
+        cx: &mut Context<Self>,
+    ) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        self.tabs[index].color = color;
+        self.save_session(cx);
+        self.sync_sidebar(cx);
+        cx.notify();
+    }
 }

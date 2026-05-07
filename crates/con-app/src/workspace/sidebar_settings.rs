@@ -101,6 +101,7 @@ impl ConWorkspace {
             user_label: self.tabs[index].user_label.clone(),
             ai_label: None,
             ai_icon: None,
+            color: None,
             summary_id,
             needs_attention: false,
             session: AgentSession::new(),
@@ -218,6 +219,21 @@ impl ConWorkspace {
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();
+    }
+
+    pub(super) fn on_sidebar_pane_to_tab(
+        &mut self,
+        _sidebar: &Entity<SessionSidebar>,
+        event: &SidebarPaneToTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        clear_pane_tab_promotion_drag_state(
+            &mut self.pane_title_drag,
+            &mut self.tab_strip_drop_slot,
+            &mut self.tab_drag_target,
+        );
+        self.detach_pane_to_new_tab_at_slot(event.pane_id, event.to, window, cx);
     }
 
     /// Reorder a tab identified by `session_id` to drop slot `to`
@@ -482,6 +498,23 @@ impl ConWorkspace {
         }
     }
 
+    pub(super) fn on_sidebar_set_color(
+        &mut self,
+        _sidebar: &Entity<SessionSidebar>,
+        event: &SidebarSetColor,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.summary_id == event.session_id)
+        else {
+            return;
+        };
+        self.set_tab_color(index, event.color, cx);
+    }
+
     pub(super) fn sync_sidebar(&self, cx: &mut Context<Self>) {
         let sessions: Vec<SessionEntry> = self
             .tabs
@@ -511,6 +544,7 @@ impl ConWorkspace {
                     icon: presentation.icon,
                     has_user_label: tab.user_label.is_some(),
                     pane_count,
+                    color: tab.color,
                 }
             })
             .collect();

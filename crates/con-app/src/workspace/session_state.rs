@@ -80,6 +80,7 @@ impl ConWorkspace {
                     conversation_id: Some(tab.session.conversation_id()),
                     agent_routing: tab.agent_routing.clone(),
                     user_label: tab.user_label.clone(),
+                    color: tab.color,
                 }
             })
             .collect();

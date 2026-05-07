@@ -352,6 +352,7 @@ impl ConWorkspace {
             user_label: tab_state.user_label.clone(),
             ai_label: None,
             ai_icon: None,
+            color: tab_state.color,
             summary_id,
             needs_attention: false,
             session: AgentSession::new(),

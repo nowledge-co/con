@@ -73,6 +73,24 @@ pub struct TabState {
     /// context menu's "Rename" entry.
     #[serde(default)]
     pub user_label: Option<String>,
+    /// Optional accent color for this tab, set via the tab context menu.
+    #[serde(default)]
+    pub color: Option<TabAccentColor>,
+}
+
+/// User-selectable accent color for a tab. Stored as a string tag so
+/// future colors can be added without breaking existing sessions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabAccentColor {
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Teal,
+    Blue,
+    Purple,
+    Pink,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -174,6 +192,7 @@ impl Default for Session {
                 conversation_id: None,
                 agent_routing: AgentRoutingState::default(),
                 user_label: None,
+                color: None,
             }],
             active_tab: 0,
             agent_panel_open: false,

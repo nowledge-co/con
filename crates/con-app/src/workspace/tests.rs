@@ -7,11 +7,13 @@ use super::{
     pane_split_drop_target_from_position, pane_title_drag_tab_slot, pane_title_drag_to_tab_active,
     rebase_active_tab_for_insert, remap_drop_slot_for_current_order,
     remap_tab_rename_state_after_close, remap_tab_rename_state_after_reorder,
-    split_preview_local_rect, split_preview_regions, tab_drag_preview_origin,
-    tab_like_drag_preview_size, tab_rename_commit_label, tab_rename_initial_label,
-    trailing_drop_slot_from_position,
+    split_preview_local_rect, split_preview_regions, tab_drag_overlay_probe_position,
+    tab_drag_preview_origin, tab_like_drag_preview_size, tab_rename_commit_label,
+    tab_rename_initial_label, trailing_drop_slot_from_position,
 };
-use crate::sidebar::{DraggedTabPreviewConstraint, constrained_drag_preview_y_shift};
+use crate::sidebar::{
+    DraggedTabPreviewConstraint, constrained_drag_preview_x_shift, constrained_drag_preview_y_shift,
+};
 use gpui::{Bounds, Point, Size, px};
 
 #[test]
@@ -63,11 +65,92 @@ fn dragged_tab_preview_y_shift_updates_with_current_mouse_position() {
         top: px(28.0),
         height: px(36.0),
         preview_height: px(28.0),
+        cursor_offset_x: px(0.0),
+        left: px(0.0),
+        bar_width: px(1000.0),
+        preview_width: px(120.0),
     };
 
     assert_eq!(
         constrained_drag_preview_y_shift(px(120.0), constraint),
         px(-72.0)
+    );
+}
+
+#[test]
+fn dragged_tab_preview_y_shift_locks_to_source_tab_top() {
+    let constraint = DraggedTabPreviewConstraint {
+        cursor_offset_y: px(10.0),
+        top: px(40.0),
+        height: px(28.0),
+        preview_height: px(28.0),
+        cursor_offset_x: px(20.0),
+        left: px(78.0),
+        bar_width: px(600.0),
+        preview_width: px(120.0),
+    };
+
+    // GPUI natural top at this mouse position is 190 (= 200 - 10).
+    // The shift should move it back to the source tab top 40.
+    assert_eq!(
+        constrained_drag_preview_y_shift(px(200.0), constraint),
+        px(-150.0)
+    );
+}
+
+#[test]
+fn dragged_tab_preview_x_shift_clamps_inside_tab_bar() {
+    let constraint = DraggedTabPreviewConstraint {
+        cursor_offset_y: px(10.0),
+        top: px(40.0),
+        height: px(28.0),
+        preview_height: px(28.0),
+        cursor_offset_x: px(20.0),
+        left: px(78.0),
+        bar_width: px(300.0),
+        preview_width: px(120.0),
+    };
+
+    // Natural left 30 (= 50 - 20) is before the tab bar; shift to 78.
+    assert_eq!(
+        constrained_drag_preview_x_shift(px(50.0), constraint),
+        px(48.0)
+    );
+    // Natural left 480 (= 500 - 20) is after max_left 258; shift left.
+    assert_eq!(
+        constrained_drag_preview_x_shift(px(500.0), constraint),
+        px(-222.0)
+    );
+}
+
+#[test]
+fn horizontal_tab_reorder_probe_uses_locked_overlay_center_not_mouse_y() {
+    let preview = super::TabDragPreviewState {
+        title: "tab".into(),
+        icon: "phosphor/terminal.svg",
+        source_top: px(6.0),
+        cursor_offset_x: px(40.0),
+    };
+    let probe = tab_drag_overlay_probe_position(
+        Point {
+            x: px(300.0),
+            y: px(240.0),
+        },
+        &preview,
+        Size {
+            width: px(180.0),
+            height: px(28.0),
+        },
+        px(78.0),
+        px(1020.0),
+    );
+
+    assert_eq!(
+        probe,
+        Point {
+            x: px(350.0),
+            y: px(20.0)
+        }
     );
 }
 

@@ -326,6 +326,7 @@ impl WorkspaceLayout {
                 conversation_id: None,
                 agent_routing,
                 user_label: tab.title.clone(),
+                color: None,
             });
         }
 
@@ -345,6 +346,7 @@ impl WorkspaceLayout {
                     default_model,
                 ),
                 user_label: self.name.clone(),
+                color: None,
             });
         }
 

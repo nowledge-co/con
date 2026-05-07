@@ -736,6 +736,7 @@ impl ConWorkspace {
                 user_label: None,
                 ai_label: None,
                 ai_icon: None,
+                color: None,
                 summary_id,
                 needs_attention: false,
                 session: AgentSession::new(),

@@ -1,4 +1,5 @@
 use super::super::*;
+use gpui_component::menu::ContextMenuExt;
 
 impl ConWorkspace {
     pub(super) fn render_top_bar(
@@ -107,13 +108,18 @@ impl ConWorkspace {
             if let Ok(mut guard) = self.active_dragged_tab_session_id.lock() {
                 *guard = None;
             }
+            if let Ok(mut guard) = self.tab_drag_preview.lock() {
+                *guard = None;
+            }
         }
 
         // Also show the tab strip during pane-to-tab drag so the ghost tab
         // preview is visible even when there is currently only one tab.
+        // In vertical-tabs mode the sidebar owns the tab list, so pane drags
+        // must NOT trigger the horizontal tab strip.
         let show_horizontal_tabs = self.horizontal_tabs_visible()
-            || pane_title_drag_to_tab_active
-            || pane_origin_drag_active;
+            || (!self.vertical_tabs_active()
+                && (pane_title_drag_to_tab_active || pane_origin_drag_active));
         let tab_count = self.tabs.len();
         let tab_strip_drop_slot = self.tab_strip_drop_slot;
         // Snapshot rename state for this render frame.
@@ -125,23 +131,44 @@ impl ConWorkspace {
             .flex_1()
             .min_w_0()
             .items_end()
-            // Container-level drop fallback — catches drops in the gaps
-            // between tabs. The trailing after-last-tab slot is handled
-            // by a dedicated element with real bounds below.
-            .on_drag_move::<DraggedTab>(cx.listener(
+            // Container-level drag-move: position-based slot calculation.
+            // This is the authoritative handler for HorizontalTabStrip drags.
+            // It uses the full tab_strip_tab_bounds array to compute the drop
+            // slot from the cursor's absolute X position, so it works even
+            // when the cursor jumps over tabs without hovering them individually.
+            // The per-tab on_drag_move handlers are kept as a fast path but
+            // this container handler guarantees correctness for all paths.
+            .on_drag_move::<DraggedTab>(cx.listener({
+                let tab_strip_tab_bounds = self.tab_strip_tab_bounds.clone();
                 move |this, event: &gpui::DragMoveEvent<DraggedTab>, _, cx| {
-                    if event.drag(cx).origin == DraggedTabOrigin::Pane {
+                    if event.drag(cx).origin != DraggedTabOrigin::HorizontalTabStrip {
                         return;
                     }
-                    if point_in_bounds(&event.event.position, &event.bounds)
-                        && this.tab_strip_drop_slot == Some(tab_count)
+                    if !point_in_bounds(&event.event.position, &event.bounds) {
+                        return;
+                    }
+                    let tab_bounds = tab_strip_tab_bounds
+                        .lock()
+                        .ok()
+                        .map(|g| g.clone())
+                        .unwrap_or_default();
+                    let current_tab_count = this.tabs.len();
+                    let Some(slot) = horizontal_tab_slot_from_bounds(
+                        event.event.position,
+                        &tab_bounds,
+                        current_tab_count,
+                    ) else {
+                        return;
+                    };
+                    let new_target = Some(TabDragTarget::Reorder { slot });
+                    if this.tab_strip_drop_slot != Some(slot) || this.tab_drag_target != new_target
                     {
-                        this.tab_strip_drop_slot = None;
-                        this.tab_drag_target = None;
+                        this.tab_strip_drop_slot = Some(slot);
+                        this.tab_drag_target = new_target;
                         cx.notify();
                     }
-                },
-            ))
+                }
+            }))
             // Pane-origin drag: update tab_strip_drop_slot when cursor is in
             // the tab strip so the ghost tab preview follows the cursor.
             .on_drag_move::<DraggedTab>(cx.listener(
@@ -183,6 +210,11 @@ impl ConWorkspace {
                     &mut this.tab_drag_target,
                 );
                 if let Ok(mut guard) = this.active_dragged_tab_session_id.lock() {
+                    *guard = None;
+                }
+                if dragged.origin == DraggedTabOrigin::HorizontalTabStrip
+                    && let Ok(mut guard) = this.tab_drag_preview.lock()
+                {
                     *guard = None;
                 }
                 if dragged.origin == DraggedTabOrigin::Pane {
@@ -265,6 +297,7 @@ impl ConWorkspace {
                 let needs_attention = tab.needs_attention && !is_active;
                 let terminal = tab.pane_tree.focused_terminal();
                 let session_id = tab.summary_id;
+                let tab_color = tab.color;
                 let is_dragged_source = is_dragged_tab_source(dragged_source_id, session_id);
                 let hostname_for_tab = self.effective_remote_host_for_tab(index, terminal, cx);
                 let title_for_tab = terminal.title(cx);
@@ -332,20 +365,29 @@ impl ConWorkspace {
                     && tab_strip_preview_active;
                 let indicator_color = theme.primary;
 
+                let preview_size = tab_like_drag_preview_size();
                 let dragged = DraggedTab {
                     session_id,
                     label: display_title.clone().into(),
                     icon: tab_icon,
                     origin: DraggedTabOrigin::HorizontalTabStrip,
                     preview_constraint: Some(crate::sidebar::DraggedTabPreviewConstraint {
-                        cursor_offset_y: window.mouse_position().y - px(TOP_BAR_COMPACT_HEIGHT),
+                        // Filled with GPUI's real cursor-in-element offset in
+                        // on_drag below. The dummy values avoid guessing tab
+                        // geometry during render construction.
+                        cursor_offset_y: px(0.0),
                         top: px(TOP_BAR_COMPACT_HEIGHT),
-                        height: px(TOP_BAR_TABS_HEIGHT - TOP_BAR_COMPACT_HEIGHT),
-                        preview_height: tab_like_drag_preview_size().height,
+                        height: preview_size.height,
+                        preview_height: preview_size.height,
+                        cursor_offset_x: px(0.0),
+                        left: px(leading_pad),
+                        bar_width: window.viewport_size().width - px(leading_pad),
+                        preview_width: preview_size.width,
                     }),
                     pane_id: None,
                 };
                 let active_dragged_tab_session_id = self.active_dragged_tab_session_id.clone();
+                let tab_drag_preview = self.tab_drag_preview.clone();
                 let dragged_tab_source_index = dragged_source_id.and_then(|dragged_id| {
                     self.tabs
                         .iter()
@@ -402,7 +444,7 @@ impl ConWorkspace {
                     )
                     .on_drag(
                         dragged,
-                        move |dragged: &DraggedTab, _offset, _window, cx: &mut App| {
+                        move |dragged: &DraggedTab, offset, window, cx: &mut App| {
                             // Only track session id for tab-strip drags.
                             // Pane-origin drags must not set this or the dragged
                             // tab will be hidden and live-reorder will misfire.
@@ -411,7 +453,27 @@ impl ConWorkspace {
                                     *guard = Some(dragged.session_id);
                                 }
                             }
-                            cx.new(|_| dragged.clone())
+                            let mut d = dragged.clone();
+                            if let Some(ref mut c) = d.preview_constraint {
+                                // GPUI's offset is cursor-in-source-element. Store it
+                                // for drop math/debug helpers, but the visible preview
+                                // is rendered by Workspace's overlay below.
+                                c.cursor_offset_x = offset.x;
+                                c.cursor_offset_y = offset.y;
+                                c.top = window.mouse_position().y - offset.y;
+                                c.height = c.preview_height;
+                                if dragged.origin == DraggedTabOrigin::HorizontalTabStrip
+                                    && let Ok(mut guard) = tab_drag_preview.lock()
+                                {
+                                    *guard = Some(TabDragPreviewState {
+                                        title: dragged.label.clone(),
+                                        icon: dragged.icon,
+                                        source_top: c.top,
+                                        cursor_offset_x: offset.x,
+                                    });
+                                }
+                            }
+                            cx.new(|_| d)
                         },
                     )
                     .on_drag_move::<DraggedTab>(cx.listener(
@@ -470,6 +532,11 @@ impl ConWorkspace {
                         if let Ok(mut guard) = this.active_dragged_tab_session_id.lock() {
                             *guard = None;
                         }
+                        if dragged.origin == DraggedTabOrigin::HorizontalTabStrip
+                            && let Ok(mut guard) = this.tab_drag_preview.lock()
+                        {
+                            *guard = None;
+                        }
                         if dragged.origin == DraggedTabOrigin::Pane {
                             if let Some(pane_id) = dragged.pane_id {
                                 this.detach_pane_to_new_tab_at_slot(pane_id, to, window, cx);
@@ -480,20 +547,39 @@ impl ConWorkspace {
                         cx.notify();
                     }));
 
+                // Compute tab background — accent color overrides the default.
+                let accent_bg: Option<Hsla> = tab_color.map(|c| {
+                    let mut h = crate::tab_colors::tab_accent_color_hsla(c, cx);
+                    h.a = if is_active { 0.35 } else { 0.12 };
+                    h
+                });
                 if is_active {
                     tab_el = tab_el
                         .rounded_t(px(7.0))
-                        .bg(theme.background.opacity(elevated_ui_surface_opacity))
+                        .map(|el| match accent_bg {
+                            Some(bg) => el.bg(bg),
+                            None => el.bg(theme.background.opacity(elevated_ui_surface_opacity)),
+                        })
                         .text_color(theme.foreground)
                         .font_weight(FontWeight::MEDIUM);
                 } else {
+                    let accent_hover: Option<Hsla> = tab_color.map(|c| {
+                        let mut h = crate::tab_colors::tab_accent_color_hsla(c, cx);
+                        h.a = 0.18;
+                        h
+                    });
                     tab_el = tab_el
                         .rounded_t(px(6.0))
-                        .bg(theme.background.opacity(0.14))
+                        .map(|el| match accent_bg {
+                            Some(bg) => el.bg(bg),
+                            None => el.bg(theme.background.opacity(0.14)),
+                        })
                         .text_color(theme.muted_foreground.opacity(0.72))
-                        .hover(|s: gpui::StyleRefinement| {
-                            s.bg(theme.background.opacity(0.20))
-                                .text_color(theme.foreground.opacity(0.82))
+                        .hover(move |s: gpui::StyleRefinement| match accent_hover {
+                            Some(bg) => s.bg(bg).text_color(theme.foreground.opacity(0.82)),
+                            None => s
+                                .bg(theme.background.opacity(0.20))
+                                .text_color(theme.foreground.opacity(0.82)),
                         });
                 }
 
@@ -533,6 +619,24 @@ impl ConWorkspace {
                             .rounded_full()
                             .flex_shrink_0()
                             .bg(theme.primary),
+                    );
+                }
+
+                // Tab active indicator dot — only shown on the active tab.
+                // Has accent color → use that color; no color → green dot.
+                if is_active {
+                    let dot_color = if let Some(color) = tab_color {
+                        crate::tab_colors::tab_accent_color_hsla(color, cx)
+                    } else {
+                        // Green active indicator
+                        crate::tab_colors::active_tab_indicator_color()
+                    };
+                    tab_content = tab_content.child(
+                        div()
+                            .size(px(7.0))
+                            .rounded_full()
+                            .flex_shrink_0()
+                            .bg(dot_color),
                     );
                 }
 
@@ -675,7 +779,90 @@ impl ConWorkspace {
                     visual_pos += 1;
                 }
 
-                tabs_container = tabs_container.child(tab_el.child(tab_content));
+                tabs_container = tabs_container.child({
+                    let weak = cx.weak_entity();
+                    let has_right = index + 1 < tab_count;
+                    let has_others = tab_count > 1;
+                    tab_el.child(tab_content).context_menu(
+                        move |menu: gpui_component::menu::PopupMenu, _window, _cx| {
+                            use crate::tab_context_menu::{TabMenuOptions, build_tab_context_menu};
+                            let w = weak.clone();
+                            build_tab_context_menu(
+                                menu,
+                                TabMenuOptions {
+                                    rename: {
+                                        let w = w.clone();
+                                        Box::new(move |window, cx| {
+                                            if let Some(e) = w.upgrade() {
+                                                e.update(cx, |this, cx| {
+                                                    this.begin_tab_rename(index, window, cx)
+                                                });
+                                            }
+                                        })
+                                    },
+                                    duplicate: {
+                                        let w = w.clone();
+                                        Box::new(move |window, cx| {
+                                            if let Some(e) = w.upgrade() {
+                                                e.update(cx, |this, cx| {
+                                                    this.duplicate_tab(index, window, cx)
+                                                });
+                                            }
+                                        })
+                                    },
+                                    reset_name: None,
+                                    move_up: None,
+                                    move_down: None,
+                                    close_to_right: if has_right {
+                                        let w = w.clone();
+                                        Some(Box::new(move |window, cx| {
+                                            if let Some(e) = w.upgrade() {
+                                                e.update(cx, |this, cx| {
+                                                    this.close_tabs_to_right(index, window, cx)
+                                                });
+                                            }
+                                        }))
+                                    } else {
+                                        None
+                                    },
+                                    close_tab: {
+                                        let w = w.clone();
+                                        Box::new(move |window, cx| {
+                                            if let Some(e) = w.upgrade() {
+                                                e.update(cx, |this, cx| {
+                                                    this.close_tab_by_index(index, window, cx)
+                                                });
+                                            }
+                                        })
+                                    },
+                                    close_others: if has_others {
+                                        let w = w.clone();
+                                        Some(Box::new(move |window, cx| {
+                                            if let Some(e) = w.upgrade() {
+                                                e.update(cx, |this, cx| {
+                                                    this.close_other_tabs(index, window, cx)
+                                                });
+                                            }
+                                        }))
+                                    } else {
+                                        None
+                                    },
+                                    set_color: {
+                                        let w = w.clone();
+                                        Box::new(move |color, _window, cx| {
+                                            if let Some(e) = w.upgrade() {
+                                                e.update(cx, |this, cx| {
+                                                    this.set_tab_color(index, color, cx)
+                                                });
+                                            }
+                                        })
+                                    },
+                                    current_color: tab_color,
+                                },
+                            )
+                        },
+                    )
+                });
                 visual_pos += 1;
 
                 if index + 1 == tab_count {

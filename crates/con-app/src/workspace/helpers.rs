@@ -171,6 +171,42 @@ pub(super) fn horizontal_tab_slot_from_drag(
     }
 }
 
+/// Position-based slot calculation using the full tab bounds array.
+/// This is the authoritative slot source for container-level drag-move
+/// handlers — it works regardless of which individual tab the cursor
+/// is currently over, so it handles "jump over tabs" correctly.
+///
+/// `tab_bounds` is in visual render order (already reordered for live
+/// preview). `tab_count` is the number of real tabs (excluding any ghost).
+///
+/// Returns `None` when `tab_bounds` is empty (first drag frame before
+/// prepaint has run). Returns `Some(slot)` where slot is 0..=tab_count.
+///
+/// The returned slot is in drop-slot space (same coordinate system as
+/// `tab_strip_drop_slot` and `reorder_tab_by_id`'s `to` parameter).
+/// `render_indices` is built so that visual position i == drop slot i,
+/// so `visual_slot` can be used directly as the drop slot.
+pub(super) fn horizontal_tab_slot_from_bounds(
+    cursor: gpui::Point<gpui::Pixels>,
+    tab_bounds: &[gpui::Bounds<gpui::Pixels>],
+    tab_count: usize,
+) -> Option<usize> {
+    if tab_bounds.is_empty() {
+        return None;
+    }
+    // Find which visual slot the cursor is in by comparing against each
+    // tab's midpoint — same logic as pane_title_drag_tab_slot.
+    let mut slot = tab_count;
+    for (i, bounds) in tab_bounds.iter().enumerate() {
+        let mid_x = bounds.origin.x + bounds.size.width / 2.0;
+        if cursor.x < mid_x {
+            slot = i;
+            break;
+        }
+    }
+    Some(slot)
+}
+
 pub(super) fn trailing_drop_slot_from_position(
     cursor: gpui::Point<gpui::Pixels>,
     bounds: gpui::Bounds<gpui::Pixels>,
