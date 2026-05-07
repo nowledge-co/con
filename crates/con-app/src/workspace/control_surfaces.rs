@@ -801,11 +801,17 @@ impl ConWorkspace {
             "enter" | "return" => Ok(b"\n".to_vec()),
             "tab" => Ok(b"\t".to_vec()),
             "backspace" => Ok(vec![0x7f]),
-            _ if let Some(code) = crate::terminal_keys::ctrl_chord_to_c0(key) => Ok(vec![code]),
-            _ if key.chars().count() == 1 => Ok(key.as_bytes().to_vec()),
-            _ => Err(ControlError::invalid_params(format!(
-                "Unsupported surface key `{key}`. Supported keys: escape, enter, tab, backspace, ctrl-<letter>, ctrl-space/ctrl-@, ctrl-[, ctrl-\\, ctrl-], ctrl-^, ctrl-_, ctrl-/, ctrl-?, ctrl-~, ctrl-2..8."
-            ))),
+            _ => {
+                if let Some(code) = crate::terminal_keys::ctrl_chord_to_c0(key) {
+                    return Ok(vec![code]);
+                }
+                if key.chars().count() == 1 {
+                    return Ok(key.as_bytes().to_vec());
+                }
+                return Err(ControlError::invalid_params(format!(
+                    "Unsupported surface key `{key}`. Supported keys: escape, enter, tab, backspace, ctrl-<letter>, ctrl-space/ctrl-@, ctrl-[, ctrl-\\, ctrl-], ctrl-^, ctrl-_, ctrl-/, ctrl-?, ctrl-~, ctrl-2..8."
+                )));
+            }
         }
     }
 
