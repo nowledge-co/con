@@ -4,7 +4,7 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.64`
+## `v0.1.0-beta.64` - 2026-05-07
 
 ### Added
 
@@ -55,7 +55,7 @@ con is still pre-release, so entries may group related beta work while the produ
 - Made the portable CI Zig installer retry against Con's mirror if the primary
   Zig download fails. _(PR [#149](https://github.com/nowledge-co/con-terminal/pull/149) by [@sundy-li](https://github.com/sundy-li))_
 
-## `v0.1.0-beta.63`
+## `v0.1.0-beta.63` - 2026-05-05
 
 ### Added
 
