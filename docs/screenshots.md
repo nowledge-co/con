@@ -9,6 +9,10 @@ one place, so the other docs can stay focused.
 
 <img alt="Con main window with terminal panes, tabs, and the agent panel" src="https://github.com/user-attachments/assets/389898d6-56bf-46aa-9279-65e59a57ed23" />
 
+### Quick Terminal
+
+<img alt="Quick Terminal open over the desktop on macOS" src="https://github.com/user-attachments/assets/a668bca2-eb75-4fcc-a579-719f2babde45" />
+
 ### Agent panel
 
 <img alt="Con agent panel next to a terminal workspace" src="https://github.com/user-attachments/assets/e1972fac-9df3-443b-be08-c0eec4697cf3" />
