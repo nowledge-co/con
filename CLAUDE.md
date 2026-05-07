@@ -89,12 +89,20 @@ Windows-named binary requires.
 - Implementation details live in `docs/impl/socket-api.md`.
 - The current live E2E workflow lives in `docs/impl/con-cli-e2e.md`.
 
-## Local Skill
+## Local Skills
 
-- Project-local skill: `skills/con-cli-e2e/SKILL.md`
-- Project-local skill: `skills/gpui-cache-aware/SKILL.md`
-- Use it when validating the control plane from an external agent or when writing eval automation against a real running Con session.
-- The skill expects agents to prefer `con-cli --json`, verify pane capabilities before acting, and treat `panes create` as provisional until the new pane reports as alive and shell-ready.
+- `skills/con-cli-e2e/SKILL.md` — use when validating the control plane from
+  an external agent or when writing eval automation against a real running Con
+  session. Prefer `con-cli --json`, verify pane capabilities before acting, and
+  treat `panes create` as provisional until the new pane reports as alive and
+  shell-ready.
+- `skills/gpui-cache-aware/SKILL.md` — use when reviewing or changing UI
+  performance, especially markdown/chat rendering, terminal-adjacent UI, or
+  resize/animation paths.
+- `skills/changelog-release-notes/SKILL.md` — use before editing
+  `CHANGELOG.md`, release notes, or PR descriptions that summarize
+  release-visible work. Always check the latest shipped beta and add PR +
+  GitHub author credit for every PR-derived changelog item.
 
 ## Design Language
 
