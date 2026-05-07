@@ -252,7 +252,8 @@ crates/con-app/src/sidebar.rs
   ~ force_clear_drag_state: only notifies when state actually changed
 
 crates/con-app/src/workspace/sidebar_settings.rs
-  ~ on_sidebar_duplicate: full pane tree copy + preserve color
+  ~ on_sidebar_duplicate: delegates to duplicate_tab() so both orientations
+    preserve the full pane tree, copy color, and insert next to the source tab
   + on_sidebar_set_color handler
 ```
 

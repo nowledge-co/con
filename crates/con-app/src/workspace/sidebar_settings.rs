@@ -82,40 +82,7 @@ impl ConWorkspace {
         else {
             return;
         };
-        // Duplicate the full pane tree layout, preserving each pane's CWD.
-        let layout = self.tabs[index].pane_tree.to_state(cx, false);
-        let focused_pane_id = Some(self.tabs[index].pane_tree.focused_pane_id());
-        let ghostty_app = self.ghostty_app.clone();
-        let font_size = self.font_size;
-        let mut make_terminal =
-            |cwd: Option<&str>, _screen_text: Option<&[String]>, _force: bool| {
-                make_ghostty_terminal(&ghostty_app, cwd, None, font_size, window, cx)
-            };
-        let pane_tree = PaneTree::from_state(&layout, focused_pane_id, &mut make_terminal);
-        let summary_id = self.next_tab_summary_id;
-        self.next_tab_summary_id += 1;
-        self.tabs.push(Tab {
-            pane_tree,
-            title: format!("Terminal {}", summary_id + 1),
-            user_label: self.tabs[index].user_label.clone(),
-            ai_label: None,
-            ai_icon: None,
-            color: self.tabs[index].color,
-            summary_id,
-            needs_attention: false,
-            session: AgentSession::new(),
-            agent_routing: self.tabs[index].agent_routing.clone(),
-            panel_state: PanelState::new(),
-            runtime_trackers: RefCell::new(HashMap::new()),
-            runtime_cache: RefCell::new(HashMap::new()),
-            shell_history: HashMap::new(),
-        });
-        let new_index = self.tabs.len() - 1;
-        if self.sync_tab_strip_motion() {
-            #[cfg(target_os = "macos")]
-            self.arm_top_chrome_snap_guard(cx);
-        }
-        self.activate_tab(new_index, window, cx);
+        self.duplicate_tab(index, window, cx);
     }
 
     pub(super) fn on_sidebar_reorder(
