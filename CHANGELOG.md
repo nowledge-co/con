@@ -4,6 +4,19 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.65`
+
+### Fixed
+
+**Windows, Linux**
+
+- Fixed terminal `Ctrl+<punctuation>` C0 chords such as `Ctrl+]`, `Ctrl+/`,
+  `Ctrl+@`, and `Ctrl+Space`, so tmux prefixes like `set -g prefix C-]` now
+  send the expected control byte instead of being dropped or typed literally.
+  The surface control API also accepts legacy `ctrl-2..8` aliases for
+  automation, while interactive `Ctrl+1..9` remains reserved for tab switching
+  on Windows and Linux.
+
 ## `v0.1.0-beta.64`
 
 ### Added

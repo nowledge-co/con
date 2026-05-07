@@ -1090,6 +1090,7 @@ impl GhosttyView {
         }
 
         if event.prefer_character_input
+            && !keystroke.modifiers.control
             && keystroke
                 .key_char
                 .as_deref()
@@ -1098,22 +1099,28 @@ impl GhosttyView {
             return false;
         }
 
-        // Ctrl + ascii letter → control char (Ctrl-C = 0x03 etc.)
+        // Ctrl + defined ASCII keys → C0 control bytes. This includes
+        // punctuation controls terminals rely on, such as Ctrl+] for tmux's
+        // `C-]` prefix (GS / 0x1d), not just Ctrl+A-Z.
         if keystroke.modifiers.control
             && !keystroke.modifiers.alt
             && !keystroke.modifiers.platform
-            && !keystroke.modifiers.shift
-            && keystroke.key.len() == 1
+            && (keystroke.key.len() == 1
+                || keystroke
+                    .key_char
+                    .as_deref()
+                    .is_some_and(|text| text.len() == 1))
         {
-            if let Some(ch) = keystroke.key.chars().next() {
-                if ch.is_ascii_alphabetic() {
-                    let code = ch.to_ascii_uppercase() as u8 - b'@';
-                    let byte = [code];
-                    if let Ok(s) = std::str::from_utf8(&byte) {
-                        terminal.send_text(s);
-                        return true;
-                    }
-                }
+            if let Some(code) = crate::terminal_keys::ctrl_keystroke_to_c0(
+                &keystroke.key,
+                keystroke.key_char.as_deref(),
+                keystroke.modifiers.shift,
+            ) {
+                let byte = [code];
+                let text = std::str::from_utf8(&byte)
+                    .expect("terminal C0 control bytes are always valid UTF-8");
+                terminal.send_text(text);
+                return true;
             }
         }
 

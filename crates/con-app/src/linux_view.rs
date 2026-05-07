@@ -627,6 +627,7 @@ impl GhosttyView {
         }
 
         if event.prefer_character_input
+            && !keystroke.modifiers.control
             && keystroke
                 .key_char
                 .as_deref()
@@ -637,17 +638,22 @@ impl GhosttyView {
 
         if keystroke.modifiers.control
             && !keystroke.modifiers.alt
-            && !keystroke.modifiers.shift
-            && keystroke.key.len() == 1
+            && (keystroke.key.len() == 1
+                || keystroke
+                    .key_char
+                    .as_deref()
+                    .is_some_and(|text| text.len() == 1))
         {
-            if let Some(ch) = keystroke.key.chars().next() {
-                if ch.is_ascii_alphabetic() {
-                    let control = [ch.to_ascii_uppercase() as u8 - b'@'];
-                    if let Ok(text) = std::str::from_utf8(&control) {
-                        terminal.send_text(text);
-                        return true;
-                    }
-                }
+            if let Some(code) = crate::terminal_keys::ctrl_keystroke_to_c0(
+                &keystroke.key,
+                keystroke.key_char.as_deref(),
+                keystroke.modifiers.shift,
+            ) {
+                let control = [code];
+                let text = std::str::from_utf8(&control)
+                    .expect("terminal C0 control bytes are always valid UTF-8");
+                terminal.send_text(text);
+                return true;
             }
         }
 
