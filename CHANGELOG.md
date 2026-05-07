@@ -4,7 +4,7 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.65`
+## `v0.1.0-beta.64`
 
 ### Added
 
@@ -12,22 +12,7 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Enabled Ghostty SSH shell-integration features for macOS terminal sessions,
   so remote SSH hosts can receive `xterm-ghostty` terminfo and terminal
-  environment hints while Con still preserves its own cursor-style setting.
-
-### Fixed
-
-**Windows, Linux**
-
-- Fixed terminal `Ctrl+<punctuation>` C0 chords such as `Ctrl+]`, `Ctrl+/`,
-  `Ctrl+@`, and `Ctrl+Space`, so tmux prefixes like `set -g prefix C-]` now
-  send the expected control byte instead of being dropped or typed literally.
-  The surface control API also accepts legacy `ctrl-2..8` aliases for
-  automation, while interactive `Ctrl+1..9` remains reserved for tab switching
-  on Windows and Linux.
-
-## `v0.1.0-beta.64`
-
-### Added
+  environment hints while Con still preserves its own cursor-style setting. _(PR [#159](https://github.com/nowledge-co/con-terminal/pull/159) by [@chenghuzi](https://github.com/chenghuzi))_
 
 **Panes**
 
@@ -45,6 +30,18 @@ con is still pre-release, so entries may group related beta work while the produ
 - Fixed embedded Ghostty surface scale sync when moving a window between Retina
   and non-Retina displays. Existing panes now update display id, backing scale,
   layer scale, and pixel size together instead of keeping stale cell metrics. _(PR [#150](https://github.com/nowledge-co/con-terminal/pull/150) by [@chenghuzi](https://github.com/chenghuzi))_
+- Fixed a live-resize flash regression on Intel Macs by committing embedded
+  Ghostty backing size before moving the AppKit surface hierarchy, avoiding a
+  one-frame mismatch between the Metal surface and terminal framebuffer. _(PR [#152](https://github.com/nowledge-co/con-terminal/pull/152) by [@wey-gu](https://github.com/wey-gu))_
+
+**Windows, Linux**
+
+- Fixed terminal `Ctrl+<punctuation>` C0 chords such as `Ctrl+]`, `Ctrl+/`,
+  `Ctrl+@`, and `Ctrl+Space`, so tmux prefixes like `set -g prefix C-]` now
+  send the expected control byte instead of being dropped or typed literally.
+  The surface control API also accepts legacy `ctrl-2..8` aliases for
+  automation, while interactive `Ctrl+1..9` remains reserved for tab switching
+  on Windows and Linux. _(PR [#156](https://github.com/nowledge-co/con-terminal/pull/156) by [@wey-gu](https://github.com/wey-gu))_
 
 **Panes**
 

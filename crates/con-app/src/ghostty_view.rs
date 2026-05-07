@@ -1044,6 +1044,14 @@ impl GhosttyView {
         self.last_bounds = Some(bounds);
         self.sync_native_backing_background();
 
+        // Keep libghostty's framebuffer/PTY size ahead of every AppKit frame
+        // commit. Moving the host/document/surface hierarchy before the backing
+        // size is updated creates one live-resize frame where AppKit can
+        // present a Metal surface at the new pane bounds while Ghostty is still
+        // drawing the previous size. Intel macOS compositors expose that
+        // transient mismatch as a resize flash.
+        self.sync_native_backing_properties(bounds, window);
+
         if let Some(host_view) = self.host_view {
             unsafe {
                 let superview: id = msg_send![host_view, superview];
@@ -1072,8 +1080,6 @@ impl GhosttyView {
             }
         }
 
-        self.sync_native_scroll_view();
-        self.sync_native_backing_properties(bounds, window);
         self.sync_native_scroll_view();
 
         if let Some(started) = started {
