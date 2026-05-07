@@ -52,6 +52,14 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Tabs and Panes**
+
+- Preserved user-assigned tab accent colors across inactive tabs, vertical tab
+  entries, and split-pane title bars at lower emphasis, and shortened pane
+  titles to the final path component on Unix and Windows-style paths. _(PR
+  [#168](https://github.com/nowledge-co/con-terminal/pull/168) by
+  [@sundy-li](https://github.com/sundy-li))_
+
 **macOS**
 
 - Fixed the remaining Intel Mac live-resize flash by ensuring Con no longer

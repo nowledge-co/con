@@ -2,6 +2,10 @@ use con_core::session::TabAccentColor;
 use gpui::{App, Hsla};
 use gpui_component::ActiveTheme;
 
+pub(crate) const TAB_ACCENT_ACTIVE_ALPHA: f32 = 0.35;
+pub(crate) const TAB_ACCENT_INACTIVE_ALPHA: f32 = 0.12;
+pub(crate) const TAB_ACCENT_INACTIVE_HOVER_ALPHA: f32 = 0.20;
+
 /// Map a `TabAccentColor` to an `Hsla` for rendering dots and tab backgrounds.
 pub(crate) fn tab_accent_color_hsla(color: TabAccentColor, cx: &App) -> Hsla {
     let is_dark = cx.theme().is_dark();
@@ -18,6 +22,13 @@ pub(crate) fn tab_accent_color_hsla(color: TabAccentColor, cx: &App) -> Hsla {
         TabAccentColor::Unknown => (142.0, 0.40, 0.45, 0.55),
     };
     gpui::hsla(h / 360.0, s, if is_dark { ld } else { ll }, 1.0)
+}
+
+/// Render a user-assigned tab accent as a low- or high-emphasis chrome surface.
+pub(crate) fn tab_accent_surface_hsla(color: TabAccentColor, alpha: f32, cx: &App) -> Hsla {
+    let mut h = tab_accent_color_hsla(color, cx);
+    h.a = alpha;
+    h
 }
 
 /// Green dot used to indicate the active tab when no explicit accent color is set.

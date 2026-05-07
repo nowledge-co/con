@@ -32,8 +32,8 @@
 //! Visual rules
 //! ---
 //! - Active row: elevated pill bg + foreground text. **No accent
-//!   bar.** A single, unambiguous selection cue is enough; doubling
-//!   it (pill + bar + bold + accent color) is decorative chrome.
+//!   bar.** A single, unambiguous selection cue is enough; tab accent
+//!   colors render as the row surface itself at active/inactive alpha.
 //! - Action affordances (rename pencil, close X) are hover-only on
 //!   every row, including the active one. Quiet by default; reveal
 //!   on intent.
@@ -833,24 +833,37 @@ impl SessionSidebar {
             };
 
             let tab_bounds = self.tab_bounds.clone();
-            let accent_bg_rail: Option<gpui::Hsla> = session
-                .color
-                .map(|c| crate::tab_colors::tab_accent_color_hsla(c, cx));
+            let accent_color = session.color;
             let pill_bg = if is_active {
-                accent_bg_rail
-                    .map(|mut h| {
-                        h.a = 0.35;
-                        h
+                accent_color
+                    .map(|color| {
+                        crate::tab_colors::tab_accent_surface_hsla(
+                            color,
+                            crate::tab_colors::TAB_ACCENT_ACTIVE_ALPHA,
+                            cx,
+                        )
                     })
                     .unwrap_or(active_bg)
             } else {
-                accent_bg_rail
-                    .map(|mut h| {
-                        h.a = 0.15;
-                        h
+                accent_color
+                    .map(|color| {
+                        crate::tab_colors::tab_accent_surface_hsla(
+                            color,
+                            crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA,
+                            cx,
+                        )
                     })
                     .unwrap_or(gpui::transparent_black())
             };
+            let inactive_hover_bg = accent_color
+                .map(|color| {
+                    crate::tab_colors::tab_accent_surface_hsla(
+                        color,
+                        crate::tab_colors::TAB_ACCENT_INACTIVE_HOVER_ALPHA,
+                        cx,
+                    )
+                })
+                .unwrap_or(hover_bg);
             let mut pill = div()
                 .id(SharedString::from(format!("rail-tab-{i}")))
                 .relative()
@@ -861,7 +874,13 @@ impl SessionSidebar {
                 .rounded(px(8.0))
                 .cursor_pointer()
                 .bg(pill_bg)
-                .hover(move |s| if is_active { s } else { s.bg(hover_bg) })
+                .hover(move |s| {
+                    if is_active {
+                        s
+                    } else {
+                        s.bg(inactive_hover_bg)
+                    }
+                })
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |_this, _, _, cx| {
@@ -1430,25 +1449,38 @@ impl SessionSidebar {
                 gpui::transparent_black()
             });
 
-        let accent_bg_row: Option<gpui::Hsla> = session
-            .color
-            .map(|c| crate::tab_colors::tab_accent_color_hsla(c, cx));
+        let accent_color = session.color;
         let row_bg = if is_active {
-            accent_bg_row
-                .map(|mut h| {
-                    h.a = 0.35;
-                    h
+            accent_color
+                .map(|color| {
+                    crate::tab_colors::tab_accent_surface_hsla(
+                        color,
+                        crate::tab_colors::TAB_ACCENT_ACTIVE_ALPHA,
+                        cx,
+                    )
                 })
                 .unwrap_or_else(|| elevated_surface(theme, self.ui_opacity))
         } else {
-            accent_bg_row
-                .map(|mut h| {
-                    h.a = 0.15;
-                    h
+            accent_color
+                .map(|color| {
+                    crate::tab_colors::tab_accent_surface_hsla(
+                        color,
+                        crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA,
+                        cx,
+                    )
                 })
                 .unwrap_or(gpui::transparent_black())
         };
         let hover_bg = sidebar_surface(theme, self.ui_opacity, 0.075);
+        let inactive_hover_bg = accent_color
+            .map(|color| {
+                crate::tab_colors::tab_accent_surface_hsla(
+                    color,
+                    crate::tab_colors::TAB_ACCENT_INACTIVE_HOVER_ALPHA,
+                    cx,
+                )
+            })
+            .unwrap_or(hover_bg);
 
         let dragged = DraggedTab {
             session_id,
@@ -1516,7 +1548,13 @@ impl SessionSidebar {
             } else {
                 theme.muted_foreground.opacity(0.92)
             })
-            .hover(move |s| if is_active { s } else { s.bg(hover_bg) })
+            .hover(move |s| {
+                if is_active {
+                    s
+                } else {
+                    s.bg(inactive_hover_bg)
+                }
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |_this, _, _, cx| {

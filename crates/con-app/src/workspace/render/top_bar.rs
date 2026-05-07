@@ -548,31 +548,36 @@ impl ConWorkspace {
                         cx.notify();
                     }));
 
-                let accent_bg: Option<Hsla> =
-                    tab_color.map(|c| crate::tab_colors::tab_accent_color_hsla(c, cx));
                 if is_active {
                     tab_el = tab_el
                         .rounded_t(px(7.0))
-                        .map(|el| match accent_bg {
-                            Some(mut h) => {
-                                h.a = 0.35;
-                                el.bg(h)
-                            }
+                        .map(|el| match tab_color {
+                            Some(color) => el.bg(crate::tab_colors::tab_accent_surface_hsla(
+                                color,
+                                crate::tab_colors::TAB_ACCENT_ACTIVE_ALPHA,
+                                cx,
+                            )),
                             None => el.bg(theme.background.opacity(elevated_ui_surface_opacity)),
                         })
                         .text_color(theme.foreground)
                         .font_weight(FontWeight::MEDIUM);
                 } else {
-                    let inactive_bg = accent_bg
-                        .map(|mut h| {
-                            h.a = 0.15;
-                            h
+                    let inactive_bg = tab_color
+                        .map(|color| {
+                            crate::tab_colors::tab_accent_surface_hsla(
+                                color,
+                                crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA,
+                                cx,
+                            )
                         })
                         .unwrap_or(theme.background.opacity(0.14));
-                    let inactive_hover_bg = accent_bg
-                        .map(|mut h| {
-                            h.a = 0.22;
-                            h
+                    let inactive_hover_bg = tab_color
+                        .map(|color| {
+                            crate::tab_colors::tab_accent_surface_hsla(
+                                color,
+                                crate::tab_colors::TAB_ACCENT_INACTIVE_HOVER_ALPHA,
+                                cx,
+                            )
                         })
                         .unwrap_or(theme.background.opacity(0.20));
                     tab_el = tab_el
