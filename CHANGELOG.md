@@ -8,6 +8,15 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**macOS**
+
+- Fixed the remaining Intel Mac live-resize flash by ensuring Con no longer
+  forces a synchronous Ghostty Metal draw before AppKit has committed the
+  hosted surface's final layer bounds for that resize frame. _(Issue
+  [#70](https://github.com/nowledge-co/con-terminal/issues/70), PR
+  [#163](https://github.com/nowledge-co/con-terminal/pull/163) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 **Windows**
 
 - Fixed continuously updating TUIs such as Codex, `top`, `watch`, and `btop`
