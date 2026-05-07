@@ -28,7 +28,7 @@ mod font_loader;
 mod pipeline;
 
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use windows::Win32::Graphics::Direct3D::{
@@ -125,10 +125,30 @@ pub struct Renderer {
     /// show before the shell has printed anything.
     last_generation: Mutex<u64>,
     selection: Mutex<Option<Selection>>,
+    /// Wall-clock time of the last `Rendered` outcome. Drives the
+    /// `MIN_FALLBACK_PRESENT_INTERVAL` cap that decouples presentation
+    /// rate from the VT update rate, so continuous-output TUIs (issue
+    /// #114) don't churn one full-frame image-handoff per prepaint.
+    /// `None` until the first frame is presented.
+    last_presented_at: Mutex<Option<Instant>>,
 
     width_px: u32,
     height_px: u32,
 }
+
+/// Minimum wall-clock spacing between two `Rendered` outcomes from the
+/// continuous-output fallback path. Set to one 60 Hz vsync interval —
+/// presenting faster than this is wasted work because GPUI only paints
+/// once per refresh, and each present pays a full-frame Map + memcpy
+/// + `bgra_frame_to_image` + sprite-atlas upload.
+///
+/// Short bursts (`ls`, `dir`, `clear`) finish well under one interval,
+/// so the fallback never fires for them and the established mailbox
+/// "snap to final" behavior is preserved exactly. Sustained TUIs
+/// (codex, watch, top) hit the cap and update at 60 Hz instead of
+/// freezing. User-driven paths (mouse / key / paste / generation
+/// target) bypass the cap via the `block_drain` branch.
+const MIN_FALLBACK_PRESENT_INTERVAL: Duration = Duration::from_millis(16);
 
 /// Freshly rendered BGRA patch. Coordinates and sizes are physical pixels.
 pub struct FramePatchBgra {
@@ -149,7 +169,15 @@ pub enum RenderOutcome {
     /// No change since the previous call — reuse the prior image.
     Unchanged,
     /// Fresh BGRA bytes, ready to hand to GPUI as an `ImageSource`.
-    Rendered(FrameBgra),
+    Rendered {
+        frame: FrameBgra,
+        /// A newer copy was submitted while this frame was drained from
+        /// an older staging slot. The caller should publish this frame
+        /// now, then schedule one more prepaint so the fresher in-flight
+        /// copy can be drained even if VT output stops immediately after
+        /// the fallback present.
+        needs_followup_prepaint: bool,
+    },
     /// GPU work was submitted but the staging ring has nothing older
     /// ready to drain without waiting. Caller should keep the previous
     /// image and schedule another prepaint unless this frame was marked
@@ -246,6 +274,7 @@ impl Renderer {
             has_full_frame: Mutex::new(false),
             last_generation: Mutex::new(u64::MAX),
             selection: Mutex::new(None),
+            last_presented_at: Mutex::new(None),
             width_px: width,
             height_px: height,
         })
@@ -331,27 +360,73 @@ impl Renderer {
         Ok(())
     }
 
-    /// Render one frame and return a BGRA byte buffer sized to the
-    /// current render target.
+    /// Render one frame and return BGRA bytes (full or row-patched)
+    /// for the caller to publish through GPUI.
     ///
-    /// `prefer_latest` is set by the view/session for user-driven
-    /// interactions (typing, paste, mouse actions). In that mode we
-    /// prefer the freshly submitted slot over any older already-drained
-    /// frame so the caller paints the newest state now, but only while
-    /// the staging ring is otherwise clear. Once the GPU is already
-    /// behind (for example after a fullscreen resize), unread staging
-    /// slots are treated as disposable and we stay non-blocking.
+    /// # State machine
     ///
-    /// Non-interactive work like resize/fullscreen keeps the old
-    /// non-blocking behavior: if the ring has nothing older to drain,
-    /// we return `Pending` and let the next prepaint pick up the fresh
-    /// slot once the GPU copy has finished.
+    /// Inputs read each call:
+    /// * `snapshot.generation`, `selection`, viewport geometry —
+    ///   combined into a fingerprint that decides `needs_draw`.
+    /// * Staging ring's `oldest_in_flight()` — the GPU copy queued by
+    ///   a prior call that may now have completed.
+    /// * `prefer_latest` — set by `host_view` when the user is
+    ///   actively waiting on a specific frame (mouse / key / paste /
+    ///   `low_latency_generation_target`).
     ///
-    /// The ring behaves like a mailbox, not a must-deliver queue:
-    /// unread readback slots are only cached copies of older terminal
-    /// frames, and the VT snapshot remains the source of truth. When we
-    /// run out of clean slots we reclaim the oldest unread one instead
-    /// of blocking the UI thread to preserve stale pixels.
+    /// Outputs:
+    /// * `Rendered { frame, needs_followup_prepaint }` — fresh BGRA
+    ///   bytes; caller publishes. The follow-up flag is set only when
+    ///   an older drained slot was presented while a fresher submitted
+    ///   copy remains in flight.
+    /// * `Pending` — GPU work was submitted (or is still in flight)
+    ///   but no frame is presentable on this call. Caller must
+    ///   schedule another prepaint (`cx.notify()`).
+    /// * `Unchanged` — nothing to draw and nothing in flight; caller
+    ///   keeps the previous image.
+    ///
+    /// Decisions, in priority order:
+    ///
+    /// 1. **User-driven fast path.** When `prefer_latest && needs_draw`
+    ///    and `can_block_for_latest` is satisfied, `block_drain` waits
+    ///    for the freshly submitted slot and returns `Rendered` with
+    ///    the freshest possible bytes. This is what makes key echo,
+    ///    paste, and `low_latency_generation_target` deterministic.
+    ///
+    /// 2. **Continuous-output fallback.** When `needs_draw` is true
+    ///    but the user is not waiting on a target, present the prior
+    ///    submit's already-completed readback (gated on
+    ///    `presentation_due`). Without this, TUIs that never let the
+    ///    VT quiesce (codex spinner, watch, top, btop) leave
+    ///    `needs_draw=true` on every prepaint, the just-submitted
+    ///    copy never gets a chance to drain, and the on-screen image
+    ///    freezes until a click flips `prefer_latest=true` (issue
+    ///    #114). Capping the fallback at `MIN_FALLBACK_PRESENT_INTERVAL`
+    ///    preserves the established mailbox snap-to-final behavior
+    ///    for short bursts (`ls`, `dir`, `clear`) — they finish under
+    ///    one cap interval, so the fallback never fires for them.
+    ///
+    /// 3. **Quiet-VT catch-up.** When `!needs_draw` and a prior
+    ///    submit's readback is ready, present it. This is the path
+    ///    that lands the final frame after a burst.
+    ///
+    /// 4. **Pure pending.** When something is still in flight and
+    ///    nothing else is presentable, return `Pending` so the caller
+    ///    schedules another prepaint.
+    ///
+    /// 5. **Idle.** Nothing to do.
+    ///
+    /// # Mailbox semantics
+    ///
+    /// The ring is a mailbox at the *submit* level: when both slots
+    /// are in flight, a fresh submit reuses the oldest, evicting its
+    /// pending readback. The drain side prefers the oldest in-flight
+    /// slot because it is the most likely to be GPU-ready (it has
+    /// had the longest time to complete). The discard step that
+    /// drops the oldest in-flight readback before draining only runs
+    /// when `!needs_draw`; under continuous output the oldest slot
+    /// is the only ready one, and discarding it would force the
+    /// drain onto the in-flight newer slot and re-create the freeze.
     pub fn render(
         &self,
         snapshot: &ScreenSnapshot,
@@ -390,17 +465,30 @@ impl Renderer {
 
         let in_flight_before_submit = ring.in_flight_count();
 
-        // A completed readback is only useful when we have no fresher VT
-        // snapshot to submit. If `needs_draw` is true, mapping the older
-        // slot just burns UI-thread time and cannot be presented because
-        // it would regress the pane to stale pixels. If no new draw is
-        // needed but more than one slot is still in flight, discard the
-        // oldest cache entry first so command bursts present the newest
-        // completed frame instead of replaying intermediate snapshots.
+        // A completed readback from an earlier submit is the freshest
+        // pixels we can currently put on screen. If `needs_draw` is
+        // false, draining is the only way to advance the displayed
+        // image at all. If `needs_draw` is true, the just-submitted
+        // copy is even fresher but isn't ready yet — and refusing to
+        // drain the older slot here strands the on-screen image on
+        // whatever frame was last presented. With continuous-output
+        // TUIs (codex spinner / streaming, watch, top, btop), every
+        // prepaint sees a new VT generation, so `needs_draw` stays
+        // true forever and the screen freezes until a click flips
+        // `prefer_latest=true`. Drain in both cases; the non-blocking
+        // `try_drain` is cheap, and presenting one-frame-old pixels is
+        // strictly better than freezing.
+        //
+        // Discarding the oldest in-flight slot stays gated on
+        // `!needs_draw`. Under `needs_draw` the oldest slot is the
+        // most likely to be GPU-ready, and discarding it would force
+        // the drain onto the newer (less likely ready) slot — on
+        // GPUs where copies take more than one prepaint that re-
+        // creates the freeze this fix is meant to remove.
         if !needs_draw && in_flight_before_submit > 1 {
             ring.discard_oldest_in_flight();
         }
-        let drain_target = (!needs_draw).then(|| ring.oldest_in_flight()).flatten();
+        let drain_target = ring.oldest_in_flight();
 
         let drain_started = perf_trace_enabled().then(Instant::now);
         let drained: Option<Readback> = if let Some(idx) = drain_target {
@@ -486,7 +574,11 @@ impl Renderer {
                 readback.map(|readback| self.frame_from_readback(readback))
             }
         {
-            let outcome = RenderOutcome::Rendered(frame);
+            let outcome = RenderOutcome::Rendered {
+                frame,
+                needs_followup_prepaint: false,
+            };
+            self.mark_presented();
             log_render_profile(
                 prof_started,
                 snapshot,
@@ -508,14 +600,70 @@ impl Renderer {
         }
 
         if needs_draw {
-            // Mailbox semantics: once we've submitted a fresher frame
-            // for the current VT snapshot, do not regress to an older
-            // already-drained readback just because it happens to be
-            // ready first. Returning that stale frame is what makes
-            // bursty command output (`ls`, `dir`, `clear`) feel like a
-            // slideshow of historical snapshots. Keep the previous
-            // on-screen image and let the next prepaint pick up the
-            // freshest completed frame instead.
+            // Continuous-output fallback: if a prior submit's readback
+            // is ready right now AND we haven't presented within the
+            // last `MIN_FALLBACK_PRESENT_INTERVAL`, present it instead
+            // of stalling on `Pending`. Without this, TUIs that never
+            // let the VT quiesce (codex, watch, top) leave
+            // `needs_draw=true` on every prepaint, the just-submitted
+            // copy never gets a chance to drain, and the on-screen
+            // image freezes until a click flips `prefer_latest=true`
+            // (issue #114). The freshly submitted frame is still in
+            // flight and will be picked up by the next prepaint, so
+            // we lag the VT by at most one frame instead of
+            // indefinitely.
+            //
+            // Two gates keep this from regressing the perf work in
+            // postmortem 2026-04-26-windows-command-render-latency:
+            //
+            // - `!prefer_latest`: the user is waiting on a specific
+            //   fresh frame (mouse/key input, paste echo, low-latency
+            //   generation target). The `block_drain` branch above
+            //   already tried; if it didn't fire (backlog or replaced
+            //   slot), returning a stale readback would prematurely
+            //   satisfy `host_view`'s low-latency target tracking and
+            //   clear the target generation without ever presenting
+            //   the targeted frame.
+            //
+            // - `presentation_due()`: caps presentation rate to one
+            //   60 Hz vsync. Short bursts (`ls`, `dir`, `clear`)
+            //   finish under one interval, so the fallback never
+            //   fires for them and the established mailbox snap-to-
+            //   final behavior is preserved exactly. Sustained TUIs
+            //   hit the cap and update at 60 Hz with bounded image-
+            //   handoff cost.
+            if !prefer_latest
+                && self.presentation_due()
+                && let Some(readback) = drained
+            {
+                let outcome = RenderOutcome::Rendered {
+                    frame: self.frame_from_readback(readback),
+                    needs_followup_prepaint: submitted.is_some(),
+                };
+                self.mark_presented();
+                log_render_profile(
+                    prof_started,
+                    snapshot,
+                    prefer_latest,
+                    needs_draw,
+                    in_flight_before_submit,
+                    drain_target,
+                    true,
+                    backlog,
+                    submitted,
+                    draw_ms,
+                    submit_ms,
+                    drain_ms,
+                    block_drain_ms,
+                    "rendered",
+                    "drained_during_submit",
+                );
+                return Ok(outcome);
+            }
+
+            // No prior readback ready yet — wait for the just-submitted
+            // copy. The next prepaint (driven by the `Pending`
+            // `cx.notify()` in `GhosttyView::render`) will pick it up.
             let outcome = RenderOutcome::Pending;
             log_render_profile(
                 prof_started,
@@ -538,7 +686,11 @@ impl Renderer {
         }
 
         if let Some(readback) = drained {
-            let outcome = RenderOutcome::Rendered(self.frame_from_readback(readback));
+            let outcome = RenderOutcome::Rendered {
+                frame: self.frame_from_readback(readback),
+                needs_followup_prepaint: false,
+            };
+            self.mark_presented();
             log_render_profile(
                 prof_started,
                 snapshot,
@@ -644,6 +796,33 @@ impl Renderer {
         } else {
             regions
         }
+    }
+
+    /// Returns true when the continuous-output fallback in `render`
+    /// is allowed to publish a fresh image. Always true on the very
+    /// first frame (no prior present) and otherwise gated on
+    /// `MIN_FALLBACK_PRESENT_INTERVAL` since the last `Rendered`
+    /// outcome.
+    fn presentation_due(&self) -> bool {
+        let last = self
+            .last_presented_at
+            .lock()
+            .expect("last_presented_at mutex poisoned in presentation_due()");
+        match *last {
+            None => true,
+            Some(t) => t.elapsed() >= MIN_FALLBACK_PRESENT_INTERVAL,
+        }
+    }
+
+    /// Stamp the wall-clock time of a fresh present. Called from every
+    /// `Rendered` exit point in `render` so `presentation_due` reflects
+    /// the true on-screen update cadence — including user-driven
+    /// `block_drain` presents — rather than just fallback presents.
+    fn mark_presented(&self) {
+        *self
+            .last_presented_at
+            .lock()
+            .expect("last_presented_at mutex poisoned in mark_presented()") = Some(Instant::now());
     }
 
     fn frame_from_readback(&self, mut readback: Readback) -> FrameBgra {

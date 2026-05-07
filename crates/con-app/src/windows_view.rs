@@ -164,7 +164,7 @@ pub struct GhosttyView {
 
 enum SyncRenderResult {
     Unchanged,
-    Rendered,
+    Rendered { needs_followup_prepaint: bool },
     Pending,
 }
 
@@ -328,7 +328,7 @@ impl GhosttyView {
         }
 
         match self.sync_render(window) {
-            SyncRenderResult::Pending | SyncRenderResult::Rendered => cx.notify(),
+            SyncRenderResult::Pending | SyncRenderResult::Rendered { .. } => cx.notify(),
             SyncRenderResult::Unchanged if bounds_changed => cx.notify(),
             SyncRenderResult::Unchanged => {}
         }
@@ -505,7 +505,10 @@ impl GhosttyView {
         let render_started = perf_trace_enabled().then(Instant::now);
         let outcome = match session.render_frame() {
             Ok(RenderOutcome::Unchanged) => SyncRenderResult::Unchanged,
-            Ok(RenderOutcome::Rendered(frame)) => {
+            Ok(RenderOutcome::Rendered {
+                frame,
+                needs_followup_prepaint,
+            }) => {
                 let render_frame_ms = render_started
                     .map(|started| started.elapsed().as_secs_f64() * 1000.0)
                     .unwrap_or(0.0);
@@ -527,7 +530,11 @@ impl GhosttyView {
                             started.elapsed().as_secs_f64() * 1000.0,
                         );
                     }
-                    SyncRenderResult::Rendered
+                    SyncRenderResult::Rendered {
+                        needs_followup_prepaint,
+                    }
+                } else if needs_followup_prepaint {
+                    SyncRenderResult::Pending
                 } else {
                     SyncRenderResult::Unchanged
                 }
@@ -1397,7 +1404,13 @@ impl Render for GhosttyView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         match self.sync_render(window) {
             SyncRenderResult::Pending => cx.notify(),
-            SyncRenderResult::Rendered | SyncRenderResult::Unchanged => {}
+            SyncRenderResult::Rendered {
+                needs_followup_prepaint: true,
+            } => cx.notify(),
+            SyncRenderResult::Rendered {
+                needs_followup_prepaint: false,
+            }
+            | SyncRenderResult::Unchanged => {}
         }
 
         let placeholder_background = if self.cached_image.is_none() {

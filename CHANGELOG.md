@@ -4,6 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.65` - 2026-05-07
+
+### Fixed
+
+**Windows**
+
+- Fixed continuously updating TUIs such as Codex, `top`, `watch`, and `btop`
+  freezing until the next click or key press. The Windows renderer now drains
+  completed staging frames under sustained output, caps fallback presentation at
+  the display cadence, and schedules the final catch-up frame when output stops.
+  _(PR [#116](https://github.com/nowledge-co/con-terminal/pull/116) by [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.64` - 2026-05-07
 
 ### Added
