@@ -833,15 +833,23 @@ impl SessionSidebar {
             };
 
             let tab_bounds = self.tab_bounds.clone();
-            let active_accent_bg_rail: Option<gpui::Hsla> = session.color.map(|c| {
-                let mut h = crate::tab_colors::tab_accent_color_hsla(c, cx);
-                h.a = 0.35;
-                h
-            });
+            let accent_bg_rail: Option<gpui::Hsla> = session
+                .color
+                .map(|c| crate::tab_colors::tab_accent_color_hsla(c, cx));
             let pill_bg = if is_active {
-                active_accent_bg_rail.unwrap_or(active_bg)
+                accent_bg_rail
+                    .map(|mut h| {
+                        h.a = 0.35;
+                        h
+                    })
+                    .unwrap_or(active_bg)
             } else {
-                gpui::transparent_black()
+                accent_bg_rail
+                    .map(|mut h| {
+                        h.a = 0.15;
+                        h
+                    })
+                    .unwrap_or(gpui::transparent_black())
             };
             let mut pill = div()
                 .id(SharedString::from(format!("rail-tab-{i}")))
@@ -1422,15 +1430,23 @@ impl SessionSidebar {
                 gpui::transparent_black()
             });
 
-        let active_accent_bg_row: Option<gpui::Hsla> = session.color.map(|c| {
-            let mut h = crate::tab_colors::tab_accent_color_hsla(c, cx);
-            h.a = 0.35;
-            h
-        });
+        let accent_bg_row: Option<gpui::Hsla> = session
+            .color
+            .map(|c| crate::tab_colors::tab_accent_color_hsla(c, cx));
         let row_bg = if is_active {
-            active_accent_bg_row.unwrap_or_else(|| elevated_surface(theme, self.ui_opacity))
+            accent_bg_row
+                .map(|mut h| {
+                    h.a = 0.35;
+                    h
+                })
+                .unwrap_or_else(|| elevated_surface(theme, self.ui_opacity))
         } else {
-            gpui::transparent_black()
+            accent_bg_row
+                .map(|mut h| {
+                    h.a = 0.15;
+                    h
+                })
+                .unwrap_or(gpui::transparent_black())
         };
         let hover_bg = sidebar_surface(theme, self.ui_opacity, 0.075);
 

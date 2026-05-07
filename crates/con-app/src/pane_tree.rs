@@ -681,7 +681,16 @@ impl PaneTree {
     }
 
     fn terminal_title_or_default(terminal: &TerminalPane, cx: &App) -> String {
-        terminal.title(cx).unwrap_or_else(|| "Terminal".to_string())
+        let title = terminal.title(cx).unwrap_or_else(|| "Terminal".to_string());
+        // Show only the last path component so narrow panes don't truncate to "..."
+        // e.g. "~/work/con-terminal" → "con-terminal", "~" → "~"
+        title
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&title)
+            .to_string()
     }
 
     pub fn pane_title(&self, pane_id: PaneId, cx: &App) -> Option<String> {
@@ -1847,6 +1856,10 @@ impl PaneTree {
             } else {
                 theme.tab_bar_segmented
             }
+        } else if let Some(color) = tab_accent_color {
+            let mut h = crate::tab_colors::tab_accent_color_hsla(color, cx);
+            h.a = 0.15;
+            h
         } else {
             theme.tab_bar_segmented.opacity(0.78)
         };
@@ -1926,20 +1939,15 @@ impl PaneTree {
 
         let title_el = div()
             .flex_1()
-            .flex()
-            .justify_center()
-            .items_center()
-            .overflow_hidden()
-            .child(
-                div()
-                    .truncate()
-                    .text_size(px(12.0))
-                    .line_height(px(16.0))
-                    .font_family(theme.font_family.clone())
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(title_color)
-                    .child(SharedString::from(title)),
-            );
+            .min_w_0()
+            .truncate()
+            .text_size(px(12.0))
+            .line_height(px(16.0))
+            .font_family(theme.font_family.clone())
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(title_color)
+            .text_center()
+            .child(SharedString::from(title));
         let dragged = DraggedTab {
             session_id,
             label: drag_label,
