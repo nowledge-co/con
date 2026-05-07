@@ -12,7 +12,7 @@
 </p>
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue?style=flat"></a>
-  <a href="https://github.com/nowledge-co/con-terminal/releases/latest"><img alt="Latest GitHub release" src="https://img.shields.io/github/v/release/nowledge-co/con-terminal?sort=semver&logo=github&style=flat"></a>
+  <a href="https://github.com/nowledge-co/con-terminal/releases/latest"><img alt="Latest GitHub release" src="https://img.shields.io/github/v/release/nowledge-co/con-terminal?logo=github&style=flat"></a>
   <a href="https://developer.apple.com/macos/"><img alt="Native on macOS (Metal)" src="https://img.shields.io/badge/macOS-beta-3D3D3D?logo=apple&logoColor=white&style=flat"></a>
   <a href="https://github.com/nowledge-co/con-terminal/issues/34"><img alt="Windows preview (tracker)" src="https://custom-icon-badges.demolab.com/badge/Windows-preview-0078D6?logo=windows11&logoColor=white"></a>
   <a href="https://github.com/nowledge-co/con-terminal/issues/18"><img alt="Linux preview (tracker)" src="https://img.shields.io/badge/Linux-preview-1D4ED8?logo=linux&logoColor=white&style=flat"></a>
