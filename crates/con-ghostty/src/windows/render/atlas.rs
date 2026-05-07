@@ -33,10 +33,10 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_METRICS, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC,
     DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
-    DWRITE_GLYPH_METRICS, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PIXEL_GEOMETRY_FLAT,
-    DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC, IDWriteFactory, IDWriteFontCollection,
-    IDWriteFontFace, IDWriteFontFallback, IDWriteRenderingParams, IDWriteTextFormat,
-    IDWriteTextFormat1,
+    DWRITE_GLYPH_METRICS, DWRITE_LINE_METRICS, DWRITE_MEASURING_MODE_NATURAL,
+    DWRITE_PIXEL_GEOMETRY_FLAT, DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC, IDWriteFactory,
+    IDWriteFontCollection, IDWriteFontFace, IDWriteFontFallback, IDWriteRenderingParams,
+    IDWriteTextFormat, IDWriteTextFormat1,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
@@ -311,9 +311,9 @@ impl GlyphCache {
         let custom_params: Option<IDWriteRenderingParams> = unsafe {
             dwrite
                 .CreateCustomRenderingParams(
-                    1.8, // gamma
-                    0.8, // enhanced contrast
-                    0.0, // ClearType level; zero means no RGB subpixel coverage
+                    1.8,  // gamma
+                    1.15, // enhanced contrast; offsets grayscale/ClearType weight loss
+                    0.0,  // ClearType level; zero means no RGB subpixel coverage
                     DWRITE_PIXEL_GEOMETRY_FLAT,
                     DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
                 )
@@ -612,10 +612,18 @@ impl GlyphCache {
                 // clips or visually narrows the fallback font, then the
                 // second spacer cell makes the text look like it has
                 // inserted spaces.
+                //
+                // DrawText lays this one codepoint as an isolated line.
+                // Fallback CJK fonts do not necessarily share the primary
+                // terminal face's baseline, so top-aligning the layout rect
+                // lets glyphs drift vertically between characters and
+                // fallback faces. Anchor the isolated layout's baseline back
+                // to the terminal cell baseline before clipping to the slot.
+                let layout = self.baseline_aligned_layout_rect(slot_rect, format, utf16_slice);
                 self.d2d_rt.DrawText(
                     utf16_slice,
                     format,
-                    &slot_rect,
+                    &layout,
                     &self.white_brush,
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
@@ -644,6 +652,49 @@ impl GlyphCache {
         };
         self.entries.insert(key, (alloc.id, glyph_rect));
         Some(glyph_rect)
+    }
+
+    fn baseline_aligned_layout_rect(
+        &self,
+        slot_rect: D2D_RECT_F,
+        format: &IDWriteTextFormat,
+        utf16: &[u16],
+    ) -> D2D_RECT_F {
+        let Some(layout_baseline) = self.text_layout_baseline(format, utf16) else {
+            return slot_rect;
+        };
+        let target_baseline = self.metrics.baseline_px as f32;
+        let shift = target_baseline - layout_baseline;
+        D2D_RECT_F {
+            left: slot_rect.left,
+            top: slot_rect.top + shift,
+            right: slot_rect.right,
+            bottom: slot_rect.bottom + shift,
+        }
+    }
+
+    fn text_layout_baseline(&self, format: &IDWriteTextFormat, utf16: &[u16]) -> Option<f32> {
+        if utf16.is_empty() {
+            return None;
+        }
+        // SAFETY: `utf16` lives for the call; DirectWrite copies the text into
+        // the layout object. Infinite bounds mirror GPUI/Zed's Windows text
+        // layout path and avoid wrapping a single glyph.
+        let layout = unsafe {
+            self.dwrite
+                .CreateTextLayout(utf16, format, f32::INFINITY, f32::INFINITY)
+                .ok()?
+        };
+        let mut line_metrics = [DWRITE_LINE_METRICS::default(); 1];
+        let mut line_count = 0u32;
+        // SAFETY: output buffer contains one slot; a one-glyph layout has at
+        // most one line. If DirectWrite reports no line, leave the old rect.
+        unsafe {
+            layout
+                .GetLineMetrics(Some(&mut line_metrics), &mut line_count)
+                .ok()?;
+        }
+        (line_count > 0).then_some(line_metrics[0].baseline)
     }
 
     /// Glyph metrics in physical pixels for `codepoint` in the primary

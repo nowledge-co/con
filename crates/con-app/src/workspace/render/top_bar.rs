@@ -31,13 +31,18 @@ impl ConWorkspace {
         // still work) and still lets macOS react to
         // `titlebar_double_click`.
         let leading_pad = if cfg!(target_os = "macos") { 78.0 } else { 8.0 };
+        let trailing_pad = if cfg!(target_os = "windows") {
+            0.0
+        } else {
+            6.0
+        };
         let mut top_bar = div()
             .id("tab-bar")
             .flex()
             .h(px(top_bar_height))
             .items_end()
             .pl(px(leading_pad))
-            .pr(px(6.0))
+            .pr(px(trailing_pad))
             .bg(top_bar_surface_color);
 
         #[cfg(target_os = "macos")]

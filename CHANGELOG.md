@@ -90,6 +90,14 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Changed
 
+**Windows**
+
+- Improved the default Windows terminal pane presentation with a small content
+  inset and native-edge caption alignment, so the prompt no longer sits flush
+  against the window edge and the close button reaches the right edge of the
+  titlebar. _(Issues [#131](https://github.com/nowledge-co/con-terminal/issues/131)
+  and [#34](https://github.com/nowledge-co/con-terminal/issues/34))_
+
 **Settings**
 
 - Matched the standalone Settings window titlebar to Con's main macOS window
@@ -117,6 +125,18 @@ con is still pre-release, so entries may group related beta work while the produ
   titles to the final path component on Unix and Windows-style paths. _(PR
   [#168](https://github.com/nowledge-co/con-terminal/pull/168) by
   [@sundy-li](https://github.com/sundy-li))_
+
+### Fixed
+
+**Windows**
+
+- Improved Windows CJK rendering by anchoring fallback CJK glyphs to the
+  terminal cell baseline and slightly increasing grayscale glyph contrast,
+  reducing the vertical drift and too-thin strokes reported in Windows font
+  rendering feedback. _(Issues
+  [#124](https://github.com/nowledge-co/con-terminal/issues/124),
+  [#78](https://github.com/nowledge-co/con-terminal/issues/78), and
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34))_
 
 ## `v0.1.0-beta.65` - 2026-05-07
 
