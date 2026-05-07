@@ -354,6 +354,13 @@ Phase 3c details now covered by the beta baseline:
   reserved for app tab switching on Windows.
 - Wheel and touchpad input scroll libghostty-vt viewport state when mouse tracking is inactive. Alternate-screen mode-1007 wheel gestures translate into cursor keys with the same fractional row accumulator used by primary scrollback.
 - The Windows pane has a visible GPUI scrollback scrollbar backed by cached libghostty-vt scrollbar state, so render no longer polls the expensive scrollbar query on every paint.
+- The Windows terminal view insets the measured renderer surface from the pane
+  edge. Mouse hit testing, IME candidate bounds, link hover, scrollbar, and
+  render dimensions all use the inset content bounds, so the visual padding is
+  not a cosmetic overlay that desynchronizes terminal coordinates.
+- CJK fallback glyphs are baseline-aligned inside the glyph atlas instead of
+  being top-aligned as one-character `DrawText` lines. This keeps fallback
+  CJK runs anchored to the same terminal-cell baseline as the primary face.
 - OSC 52 and ordinary clipboard operations are wired through the Win32 clipboard.
 - CJK IME commit/preedit input is wired through GPUI's platform
   `InputHandler`. The terminal still owns control, alt/meta, and
@@ -439,9 +446,10 @@ right column, Tab / Shift+Tab reach shells and TUIs, wheel gestures
 respect the platform scroll intent, and normal-shell scrollback is
 reachable through both the mouse wheel and the visible scrollbar.
 Resize works. Window close kills the shell. The remaining Windows work
-is now direct-composition presentation, IME edge-case validation /
-resize / advanced selection polish, and distribution hardening rather than basic
-input/selection bring-up.
+is now direct-composition presentation, IME edge-case validation,
+maximize/resize feel (#125), CJK font-weight polish, advanced selection
+polish, and distribution hardening rather than basic input/selection
+bring-up.
 
 Caveats:
 - You must have **Zig 0.15.2 exactly** on `PATH` for `cargo build` to
@@ -476,8 +484,8 @@ remaining decisions are narrower:
    per-platform shell adapters.
 3. **Windows hardening.** Broaden IME/dead-key/international-keyboard
    validation, drag-to-scroll selection polish, column selection,
-   extreme resize behavior, ligatures, and remaining multi-monitor/GPU
-   edge cases.
+   CJK font-weight tuning, extreme resize behavior, ligatures, and
+   remaining multi-monitor/GPU edge cases.
 4. **Distribution.** Choose the installer/signing path (MSIX/MSI/cargo
    dist/winget), code-sign the binary, and harden the existing beta
    in-place update flow with artifact signature verification.

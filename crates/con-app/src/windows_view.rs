@@ -63,6 +63,8 @@ use con_ghostty::windows::render::{FrameBgra, RenderOutcome};
 const SCROLLBAR_INSET_PX: f32 = 4.0;
 const SCROLLBAR_WIDTH_PX: f32 = 6.0;
 const SCROLLBAR_MIN_THUMB_PX: f32 = 28.0;
+const TERMINAL_PADDING_X_PX: f32 = 10.0;
+const TERMINAL_PADDING_Y_PX: f32 = 8.0;
 
 #[derive(Debug, Clone, Copy)]
 struct ScrollbarDrag {
@@ -1634,8 +1636,7 @@ impl Render for GhosttyView {
             }))
             .child(
                 div()
-                    .flex()
-                    .flex_col()
+                    .relative()
                     .size_full()
                     .min_w_0()
                     .min_h_0()
@@ -1654,12 +1655,15 @@ impl Render for GhosttyView {
                         }
                     })
                     // Measure a dedicated full-size wrapper child so the
-                    // prepaint callback always sees pane bounds rather than
+                    // prepaint callback always sees content bounds rather than
                     // whichever image/layout child happens to be present.
                     .child(
                         div()
-                            .relative()
-                            .size_full()
+                            .absolute()
+                            .left(px(TERMINAL_PADDING_X_PX))
+                            .right(px(TERMINAL_PADDING_X_PX))
+                            .top(px(TERMINAL_PADDING_Y_PX))
+                            .bottom(px(TERMINAL_PADDING_Y_PX))
                             .overflow_hidden()
                             .children(terminal_children)
                             .child(
