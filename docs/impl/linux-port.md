@@ -56,9 +56,10 @@ What that gives you:
   focus/navigation keys reach the Linux pane instead of being swallowed
   by GPUI focus traversal
 - terminal C0 control chords for both letters and defined ASCII punctuation,
-  including `Ctrl+]` -> GS (`0x1d`), `Ctrl+/` -> US (`0x1f`), and the
-  legacy `Ctrl+2..8` aliases for tmux prefix configs such as
-  `set -g prefix C-]`
+  including `Ctrl+]` -> GS (`0x1d`), `Ctrl+/` -> US (`0x1f`), and
+  `Ctrl+@` / `Ctrl+Space` -> NUL (`0x00`). Interactive `Ctrl+1..9` stays
+  reserved for tab switching on Linux; the surface-control parser still accepts
+  legacy `ctrl-2..8` aliases for automation.
 - IoskeleyMono shaping (the user-facing display name `"Ioskeley
   Mono"` is normalized to the registered TTF family `"IoskeleyMono"`
   before lookup so GPUI's CosmicTextSystem resolves the embedded

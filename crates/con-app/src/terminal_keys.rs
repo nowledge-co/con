@@ -30,6 +30,8 @@ pub fn ctrl_key_to_c0(key: &str) -> Option<u8> {
         '^' => Some(0x1e),
         '_' => Some(0x1f),
         '/' => Some(0x1f),
+        // Mirrors Ghostty / Kitty ctrlSeq for Ctrl+~ rather than treating it
+        // as Ctrl+`'s physical-key NUL alias.
         '~' => Some(0x1e),
         '?' => Some(0x7f),
         ch if ch.is_ascii_alphabetic() => Some(ch.to_ascii_uppercase() as u8 - b'@'),
@@ -49,18 +51,28 @@ pub fn ctrl_chord_to_c0(key: &str) -> Option<u8> {
 }
 
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
+fn ctrl_keystroke_key_to_c0(key: &str) -> Option<u8> {
+    let trimmed = key.trim();
+    if trimmed.len() == 1 && trimmed.as_bytes()[0].is_ascii_digit() {
+        return None;
+    }
+
+    ctrl_key_to_c0(trimmed)
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 pub fn ctrl_keystroke_to_c0(key: &str, key_char: Option<&str>, shift: bool) -> Option<u8> {
     if shift {
         return key_char
             .filter(|text| !text.chars().all(|ch| ch.is_ascii_alphabetic()))
             .and_then(ctrl_key_to_c0)
             .or_else(|| match key {
-                "@" | "^" | "_" | "?" => ctrl_key_to_c0(key),
+                "@" | "^" | "_" | "?" | "~" => ctrl_key_to_c0(key),
                 _ => None,
             });
     }
 
-    ctrl_key_to_c0(key).or_else(|| key_char.and_then(ctrl_key_to_c0))
+    ctrl_keystroke_key_to_c0(key).or_else(|| key_char.and_then(ctrl_keystroke_key_to_c0))
 }
 
 #[cfg(test)]
@@ -110,13 +122,19 @@ mod tests {
         assert_eq!(ctrl_chord_to_c0("C-\\"), Some(0x1c));
         assert_eq!(ctrl_chord_to_c0("C-/"), Some(0x1f));
         assert_eq!(ctrl_chord_to_c0("ctrl-2"), Some(0x00));
+        assert_eq!(ctrl_chord_to_c0("ctrl-~"), Some(0x1e));
     }
 
     #[test]
-    fn ctrl_keystroke_uses_shifted_key_char_without_breaking_tab_shortcuts() {
+    fn ctrl_keystroke_uses_shifted_punctuation_without_breaking_tab_shortcuts() {
+        assert_eq!(ctrl_keystroke_to_c0("2", Some("2"), false), None);
+        assert_eq!(ctrl_keystroke_to_c0("3", Some("3"), false), None);
+        assert_eq!(ctrl_keystroke_to_c0("8", Some("8"), false), None);
+        assert_eq!(ctrl_keystroke_to_c0("2", Some("@"), true), Some(0x00));
         assert_eq!(ctrl_keystroke_to_c0("6", Some("^"), true), Some(0x1e));
         assert_eq!(ctrl_keystroke_to_c0("-", Some("_"), true), Some(0x1f));
         assert_eq!(ctrl_keystroke_to_c0("`", Some("~"), true), Some(0x1e));
+        assert_eq!(ctrl_keystroke_to_c0("~", None, true), Some(0x1e));
         assert_eq!(ctrl_keystroke_to_c0("a", Some("A"), true), None);
         assert_eq!(ctrl_keystroke_to_c0("]", Some("}"), true), None);
         assert_eq!(ctrl_keystroke_to_c0("]", None, false), Some(0x1d));

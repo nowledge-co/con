@@ -20,13 +20,6 @@ terminal bytes themselves. That translation handled `Ctrl+A` through `Ctrl+Z`,
 but it did not handle the defined ASCII control punctuation chords:
 
 - `Ctrl+@` / `Ctrl+Space` -> NUL (`0x00`)
-- `Ctrl+2` -> NUL (`0x00`)
-- `Ctrl+3` -> ESC (`0x1b`)
-- `Ctrl+4` -> FS (`0x1c`)
-- `Ctrl+5` -> GS (`0x1d`)
-- `Ctrl+6` -> RS (`0x1e`)
-- `Ctrl+7` / `Ctrl+/` -> US (`0x1f`)
-- `Ctrl+8` -> DEL (`0x7f`)
 - `Ctrl+[` -> ESC (`0x1b`)
 - `Ctrl+\` -> FS (`0x1c`)
 - `Ctrl+]` -> GS (`0x1d`)
@@ -34,6 +27,12 @@ but it did not handle the defined ASCII control punctuation chords:
 - `Ctrl+_` -> US (`0x1f`)
 - `Ctrl+~` -> RS (`0x1e`)
 - `Ctrl+?` -> DEL (`0x7f`)
+
+The surface control API also accepts the legacy `ctrl-2..8` aliases because an
+orchestrator has no conflict with app navigation. Interactive Windows/Linux
+keyboard input intentionally keeps unshifted `Ctrl+1..9` reserved for tab
+selection; users can still send NUL through `Ctrl+Space` or shifted
+punctuation such as `Ctrl+Shift+2` (`Ctrl+@`).
 
 tmux treats `C-]` as `0x1d`, so Con's letter-only mapper meant the prefix never
 reached tmux.
@@ -53,6 +52,11 @@ That keeps physical user input and orchestrator-driven surface input aligned.
 The helper intentionally does not map shifted bracket variants like `Ctrl+}` or
 `Ctrl+{`, so Windows/Linux app shortcuts such as `Ctrl+Shift+]` for tab
 switching stay app-level.
+
+One deliberate product boundary remains: the keyboard path does not map
+unshifted `Ctrl+2..8` because `Ctrl+1..9` is Con's Windows/Linux tab-selection
+gesture. The surface control API supports those aliases because automation can
+target terminal bytes directly without stealing a human navigation shortcut.
 
 This is the complete legacy C0 control-byte layer, not the complete modern
 keyboard-protocol layer. Full parity with Ghostty on Windows and Linux should
