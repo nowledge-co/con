@@ -63,6 +63,17 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    pub(super) fn activate_tab_by_id(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.tab_index_for_summary_id(tab_id) {
+            self.activate_tab(index, window, cx);
+        }
+    }
+
     pub(super) fn next_tab(&mut self, _: &NextTab, window: &mut Window, cx: &mut Context<Self>) {
         if self.tabs.len() <= 1 {
             return;
@@ -549,8 +560,18 @@ impl ConWorkspace {
             self.arm_top_chrome_snap_guard(cx);
         }
         self.activate_tab(insert_at, window, cx);
-        self.save_session(cx);
         cx.notify();
+    }
+
+    pub(super) fn duplicate_tab_by_id(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.tab_index_for_summary_id(tab_id) {
+            self.duplicate_tab(index, window, cx);
+        }
     }
 
     /// Close all tabs except the one at `index`.
@@ -569,8 +590,18 @@ impl ConWorkspace {
                 self.close_tab_by_index(i, window, cx);
             }
         }
-        self.save_session(cx);
         cx.notify();
+    }
+
+    pub(super) fn close_other_tabs_by_id(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.tab_index_for_summary_id(tab_id) {
+            self.close_other_tabs(index, window, cx);
+        }
     }
 
     /// Close all tabs to the right of `index` (exclusive).
@@ -588,8 +619,18 @@ impl ConWorkspace {
         for i in (index + 1..=last).rev() {
             self.close_tab_by_index(i, window, cx);
         }
-        self.save_session(cx);
         cx.notify();
+    }
+
+    pub(super) fn close_tabs_to_right_by_id(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.tab_index_for_summary_id(tab_id) {
+            self.close_tabs_to_right(index, window, cx);
+        }
     }
 
     /// Set (or clear) the accent color for a tab by index.
@@ -606,5 +647,16 @@ impl ConWorkspace {
         self.save_session(cx);
         self.sync_sidebar(cx);
         cx.notify();
+    }
+
+    pub(super) fn set_tab_color_by_id(
+        &mut self,
+        tab_id: u64,
+        color: Option<con_core::session::TabAccentColor>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.tab_index_for_summary_id(tab_id) {
+            self.set_tab_color(index, color, cx);
+        }
     }
 }

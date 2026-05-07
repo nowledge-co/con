@@ -85,6 +85,18 @@ crates/con-app/src/tab_context_menu.rs
 | Close Tabs to the Right | when not last tab | — |
 | Tab Color | ✓ | ✓ |
 
+### Stable target resolution
+
+Menu actions must not retain a tab index as their authority. A context menu can
+stay open while another tab before it closes, for example when a shell exits and
+the workspace removes that tab. If callbacks keep the old index, destructive
+actions such as Close Tab, Close Other Tabs, or Set Color can hit the tab that
+shifted into that slot.
+
+Both horizontal and vertical tab menus therefore capture the tab's stable
+`summary_id` and resolve it back to the current index at click time. If the tab
+has already been closed, the action is a no-op.
+
 ### Color swatch row
 
 The color picker is a single `PopupMenuItem::element` that renders all 9 swatches (No Color + 8 accent colors) in a horizontal `h_flex` row. Each swatch is a `div` with `.id(ElementId::Integer(idx))` and an `on_mouse_down` handler that writes the chosen index into a shared `Rc<Cell<u8>>`. The `ElementItem`'s `on_click` reads the cell and calls `set_color`. The sentinel value `u8::MAX` means "nothing pressed yet".
@@ -199,9 +211,17 @@ crates/con-app/src/tab_context_menu.rs    (new file)
 
 crates/con-app/src/workspace/tab_actions.rs
   + duplicate_tab()     — full pane tree copy
+  + duplicate_tab_by_id(), close_*_by_id(), set_tab_color_by_id()
+    stable-id wrappers for menu actions
   + close_other_tabs()  — with index bounds guard
   + close_tabs_to_right()
   + set_tab_color()     — calls sync_sidebar before save
+
+crates/con-app/src/workspace/window_actions.rs
+  + close_tab_by_id() — stable-id wrapper for menu actions
+
+crates/con-app/src/workspace/sidebar_settings.rs
+  + begin_tab_rename_by_id() — stable-id wrapper for menu actions
 
 crates/con-app/src/workspace/helpers.rs
   + horizontal_tab_slot_from_bounds()

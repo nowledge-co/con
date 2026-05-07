@@ -6,6 +6,22 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.65` - 2026-05-07
 
+### Added
+
+**Tabs**
+
+- Added tab context actions for Rename, Duplicate Tab, Close Tab, Close Other
+  Tabs, Close Tabs to the Right, and per-tab accent colors across the horizontal
+  tab strip and vertical sidebar. Duplicate Tab now preserves the full pane
+  layout and each pane's working directory. _(PR
+  [#162](https://github.com/nowledge-co/con-terminal/pull/162) by
+  [@sundy-li](https://github.com/sundy-li))_
+- Improved horizontal and vertical tab drag reordering with live drop previews
+  and safer bounds handling, so fast drags clear stale drop targets instead of
+  accidentally reordering after the cursor leaves the tab area. _(PR
+  [#162](https://github.com/nowledge-co/con-terminal/pull/162) by
+  [@sundy-li](https://github.com/sundy-li))_
+
 ### Fixed
 
 **macOS**

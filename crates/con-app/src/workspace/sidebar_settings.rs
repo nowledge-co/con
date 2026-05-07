@@ -393,6 +393,17 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    pub(super) fn begin_tab_rename_by_id(
+        &mut self,
+        tab_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(index) = self.tab_index_for_summary_id(tab_id) {
+            self.begin_tab_rename(index, window, cx);
+        }
+    }
+
     pub(super) fn commit_tab_rename(
         &mut self,
         tab_id: u64,

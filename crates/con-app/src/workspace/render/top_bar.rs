@@ -297,6 +297,7 @@ impl ConWorkspace {
                 let needs_attention = tab.needs_attention && !is_active;
                 let terminal = tab.pane_tree.focused_terminal();
                 let session_id = tab.summary_id;
+                let tab_id = session_id;
                 let tab_color = tab.color;
                 let is_dragged_source = is_dragged_tab_source(dragged_source_id, session_id);
                 let hostname_for_tab = self.effective_remote_host_for_tab(index, terminal, cx);
@@ -345,7 +346,7 @@ impl ConWorkspace {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, window, cx| {
-                            this.close_tab_by_index(index, window, cx);
+                            this.close_tab_by_id(tab_id, window, cx);
                         }),
                     )
                     .child(
@@ -430,16 +431,16 @@ impl ConWorkspace {
                     .on_click(
                         cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
                             if event.click_count() == 2 {
-                                this.begin_tab_rename(index, window, cx);
+                                this.begin_tab_rename_by_id(tab_id, window, cx);
                             } else {
-                                this.activate_tab(index, window, cx);
+                                this.activate_tab_by_id(tab_id, window, cx);
                             }
                         }),
                     )
                     .on_mouse_down(
                         MouseButton::Middle,
                         cx.listener(move |this, _, window, cx| {
-                            this.close_tab_by_index(index, window, cx);
+                            this.close_tab_by_id(tab_id, window, cx);
                         }),
                     )
                     .on_drag(
@@ -783,6 +784,7 @@ impl ConWorkspace {
                     let weak = cx.weak_entity();
                     let has_right = index + 1 < tab_count;
                     let has_others = tab_count > 1;
+                    let tab_id = session_id;
                     tab_el.child(tab_content).context_menu(
                         move |menu: gpui_component::menu::PopupMenu, _window, _cx| {
                             use crate::tab_context_menu::{TabMenuOptions, build_tab_context_menu};
@@ -795,7 +797,7 @@ impl ConWorkspace {
                                         Box::new(move |window, cx| {
                                             if let Some(e) = w.upgrade() {
                                                 e.update(cx, |this, cx| {
-                                                    this.begin_tab_rename(index, window, cx)
+                                                    this.begin_tab_rename_by_id(tab_id, window, cx)
                                                 });
                                             }
                                         })
@@ -805,7 +807,7 @@ impl ConWorkspace {
                                         Box::new(move |window, cx| {
                                             if let Some(e) = w.upgrade() {
                                                 e.update(cx, |this, cx| {
-                                                    this.duplicate_tab(index, window, cx)
+                                                    this.duplicate_tab_by_id(tab_id, window, cx)
                                                 });
                                             }
                                         })
@@ -818,7 +820,9 @@ impl ConWorkspace {
                                         Some(Box::new(move |window, cx| {
                                             if let Some(e) = w.upgrade() {
                                                 e.update(cx, |this, cx| {
-                                                    this.close_tabs_to_right(index, window, cx)
+                                                    this.close_tabs_to_right_by_id(
+                                                        tab_id, window, cx,
+                                                    )
                                                 });
                                             }
                                         }))
@@ -830,7 +834,7 @@ impl ConWorkspace {
                                         Box::new(move |window, cx| {
                                             if let Some(e) = w.upgrade() {
                                                 e.update(cx, |this, cx| {
-                                                    this.close_tab_by_index(index, window, cx)
+                                                    this.close_tab_by_id(tab_id, window, cx)
                                                 });
                                             }
                                         })
@@ -840,7 +844,7 @@ impl ConWorkspace {
                                         Some(Box::new(move |window, cx| {
                                             if let Some(e) = w.upgrade() {
                                                 e.update(cx, |this, cx| {
-                                                    this.close_other_tabs(index, window, cx)
+                                                    this.close_other_tabs_by_id(tab_id, window, cx)
                                                 });
                                             }
                                         }))
@@ -852,7 +856,7 @@ impl ConWorkspace {
                                         Box::new(move |color, _window, cx| {
                                             if let Some(e) = w.upgrade() {
                                                 e.update(cx, |this, cx| {
-                                                    this.set_tab_color(index, color, cx)
+                                                    this.set_tab_color_by_id(tab_id, color, cx)
                                                 });
                                             }
                                         })
