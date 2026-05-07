@@ -6,6 +6,14 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.65`
 
+### Added
+
+**macOS**
+
+- Enabled Ghostty SSH shell-integration features for macOS terminal sessions,
+  so remote SSH hosts can receive `xterm-ghostty` terminfo and terminal
+  environment hints while Con still preserves its own cursor-style setting.
+
 ### Fixed
 
 **Windows, Linux**
