@@ -17,8 +17,9 @@ con is still pre-release, so entries may group related beta work while the produ
 **Docs**
 
 - Added the Quick Terminal screenshot to the user guide and screenshot gallery,
-  and credited its original contributor. _(Quick Terminal was introduced in PR
-  [#135](https://github.com/nowledge-co/con-terminal/pull/135) by
+  credited its original contributor, and linked the hosted docs, changelog, and
+  `llms.txt` agent index from the README. _(Quick Terminal was introduced in
+  PR [#135](https://github.com/nowledge-co/con-terminal/pull/135) by
   [@sundy-li](https://github.com/sundy-li))_
 
 ## `v0.1.0-beta.65` - 2026-05-07
