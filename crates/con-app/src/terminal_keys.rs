@@ -53,6 +53,8 @@ pub fn ctrl_chord_to_c0(key: &str) -> Option<u8> {
 #[cfg(any(target_os = "windows", target_os = "linux", test))]
 fn ctrl_keystroke_key_to_c0(key: &str) -> Option<u8> {
     let trimmed = key.trim();
+    // The surface API accepts legacy ctrl-2..8 byte aliases, but human
+    // Windows/Linux keyboard input reserves Ctrl+1..9 for app tab selection.
     if trimmed.len() == 1 && trimmed.as_bytes()[0].is_ascii_digit() {
         return None;
     }
