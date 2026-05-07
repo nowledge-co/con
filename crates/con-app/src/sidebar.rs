@@ -833,20 +833,15 @@ impl SessionSidebar {
             };
 
             let tab_bounds = self.tab_bounds.clone();
-            let accent_bg_rail: Option<gpui::Hsla> = session.color.map(|c| {
+            let active_accent_bg_rail: Option<gpui::Hsla> = session.color.map(|c| {
                 let mut h = crate::tab_colors::tab_accent_color_hsla(c, cx);
-                h.a = if is_active { 0.35 } else { 0.12 };
-                h
-            });
-            let accent_hover_rail: Option<gpui::Hsla> = session.color.map(|c| {
-                let mut h = crate::tab_colors::tab_accent_color_hsla(c, cx);
-                h.a = 0.20;
+                h.a = 0.35;
                 h
             });
             let pill_bg = if is_active {
-                accent_bg_rail.unwrap_or(active_bg)
+                active_accent_bg_rail.unwrap_or(active_bg)
             } else {
-                accent_bg_rail.unwrap_or(gpui::transparent_black())
+                gpui::transparent_black()
             };
             let mut pill = div()
                 .id(SharedString::from(format!("rail-tab-{i}")))
@@ -858,13 +853,7 @@ impl SessionSidebar {
                 .rounded(px(8.0))
                 .cursor_pointer()
                 .bg(pill_bg)
-                .hover(move |s| {
-                    if is_active {
-                        s
-                    } else {
-                        s.bg(accent_hover_rail.unwrap_or(hover_bg))
-                    }
-                })
+                .hover(move |s| if is_active { s } else { s.bg(hover_bg) })
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |_this, _, _, cx| {
@@ -1433,23 +1422,17 @@ impl SessionSidebar {
                 gpui::transparent_black()
             });
 
-        let accent_bg_row: Option<gpui::Hsla> = session.color.map(|c| {
+        let active_accent_bg_row: Option<gpui::Hsla> = session.color.map(|c| {
             let mut h = crate::tab_colors::tab_accent_color_hsla(c, cx);
-            h.a = if is_active { 0.35 } else { 0.12 };
-            h
-        });
-        let accent_hover_row: Option<gpui::Hsla> = session.color.map(|c| {
-            let mut h = crate::tab_colors::tab_accent_color_hsla(c, cx);
-            h.a = 0.20;
+            h.a = 0.35;
             h
         });
         let row_bg = if is_active {
-            accent_bg_row.unwrap_or_else(|| elevated_surface(theme, self.ui_opacity))
+            active_accent_bg_row.unwrap_or_else(|| elevated_surface(theme, self.ui_opacity))
         } else {
-            accent_bg_row.unwrap_or(gpui::transparent_black())
+            gpui::transparent_black()
         };
-        let hover_bg =
-            accent_hover_row.unwrap_or_else(|| sidebar_surface(theme, self.ui_opacity, 0.075));
+        let hover_bg = sidebar_surface(theme, self.ui_opacity, 0.075);
 
         let dragged = DraggedTab {
             session_id,

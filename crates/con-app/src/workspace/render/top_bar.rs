@@ -548,39 +548,29 @@ impl ConWorkspace {
                         cx.notify();
                     }));
 
-                // Compute tab background — accent color overrides the default.
-                let accent_bg: Option<Hsla> = tab_color.map(|c| {
+                // Accent color is reserved for the active tab surface.
+                let active_accent_bg: Option<Hsla> = tab_color.map(|c| {
                     let mut h = crate::tab_colors::tab_accent_color_hsla(c, cx);
-                    h.a = if is_active { 0.35 } else { 0.12 };
+                    h.a = 0.35;
                     h
                 });
                 if is_active {
                     tab_el = tab_el
                         .rounded_t(px(7.0))
-                        .map(|el| match accent_bg {
+                        .map(|el| match active_accent_bg {
                             Some(bg) => el.bg(bg),
                             None => el.bg(theme.background.opacity(elevated_ui_surface_opacity)),
                         })
                         .text_color(theme.foreground)
                         .font_weight(FontWeight::MEDIUM);
                 } else {
-                    let accent_hover: Option<Hsla> = tab_color.map(|c| {
-                        let mut h = crate::tab_colors::tab_accent_color_hsla(c, cx);
-                        h.a = 0.18;
-                        h
-                    });
                     tab_el = tab_el
                         .rounded_t(px(6.0))
-                        .map(|el| match accent_bg {
-                            Some(bg) => el.bg(bg),
-                            None => el.bg(theme.background.opacity(0.14)),
-                        })
+                        .bg(theme.background.opacity(0.14))
                         .text_color(theme.muted_foreground.opacity(0.72))
-                        .hover(move |s: gpui::StyleRefinement| match accent_hover {
-                            Some(bg) => s.bg(bg).text_color(theme.foreground.opacity(0.82)),
-                            None => s
-                                .bg(theme.background.opacity(0.20))
-                                .text_color(theme.foreground.opacity(0.82)),
+                        .hover(move |s: gpui::StyleRefinement| {
+                            s.bg(theme.background.opacity(0.20))
+                                .text_color(theme.foreground.opacity(0.82))
                         });
                 }
 
