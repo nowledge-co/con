@@ -6,6 +6,14 @@
     <description>Most recent changes</description>
     <language>en</language>
     <item>
+      <title>Version 0.1.0-beta.66</title>
+      <pubDate/>
+      <sparkle:version>36</sparkle:version>
+      <sparkle:shortVersionString>0.1.0-beta.66</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>0.0.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.66/con-0.1.0-beta.66-linux-x86_64.tar.gz" length="45118107" type="application/octet-stream" sparkle:edSignature="y4V/KA8Bkbc7kIQvlYBB8gU4wk59Tawfp1aCgtTsn6Mr9+nEcwW5Rm3D7KFcfjyFcXkY0a7kicK5mOMN5qC1Cw=="/>
+    </item>
+    <item>
       <title>Version 0.1.0-beta.65</title>
       <pubDate/>
       <sparkle:version>35</sparkle:version>
@@ -156,14 +164,6 @@
       <sparkle:shortVersionString>0.1.0-beta.46</sparkle:shortVersionString>
       <sparkle:minimumSystemVersion>0.0.0</sparkle:minimumSystemVersion>
       <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.46/con-0.1.0-beta.46-linux-x86_64.tar.gz" length="44198891" type="application/octet-stream" sparkle:edSignature="b376ESMR5X7EDj8zKN03NnQR5jafrdiSTRgd8hJ2cbdK5/gaQHtCm2AUeqtkBxSC+7/Kvg+bK4/50OTZS4hGBw=="/>
-    </item>
-    <item>
-      <title>Version 0.1.0-beta.45</title>
-      <pubDate/>
-      <sparkle:version>12</sparkle:version>
-      <sparkle:shortVersionString>0.1.0-beta.45</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>0.0.0</sparkle:minimumSystemVersion>
-      <enclosure url="https://github.com/nowledge-co/con-terminal/releases/download/v0.1.0-beta.45/con-0.1.0-beta.45-linux-x86_64.tar.gz" length="44219369" type="application/octet-stream" sparkle:edSignature="tubPm/YIECUupFEYNUOVMBCQuUY88fd7UR5H5sAUtT10DPKyAfpecT10IxtQSg78wIPP1+7VKOTIczxnaA0sAA=="/>
     </item>
   </channel>
 </rss>
