@@ -3,6 +3,8 @@
 Quick Terminal is a macOS-only drop-down Con window for short terminal work
 from anywhere on the system.
 
+<img alt="Quick Terminal open over the desktop on macOS" src="https://github.com/user-attachments/assets/a668bca2-eb75-4fcc-a579-719f2babde45" />
+
 It is off by default. Turn it on only if you want a global shortcut that can
 open a terminal over the app you are using.
 
@@ -83,6 +85,12 @@ window managers, and other terminal apps.
   <kbd>⌘</kbd> <kbd>Backslash</kbd>.
 - If you are recording a shortcut in Settings, Con temporarily suspends its
   global hotkeys so the shortcut can be captured instead of triggered.
+
+## Credit
+
+Quick Terminal was introduced by
+[`sundy-li`](https://github.com/sundy-li) in
+[PR #135](https://github.com/nowledge-co/con-terminal/pull/135).
 
 ## Platform Support
 
