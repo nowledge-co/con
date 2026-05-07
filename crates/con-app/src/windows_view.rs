@@ -715,6 +715,13 @@ impl GhosttyView {
     /// session / bounds to project into.
     fn cell_from_event_position(&self, pos: Point<Pixels>) -> Option<(u16, u16)> {
         let bounds = self.pane_bounds?;
+        if pos.x < bounds.origin.x
+            || pos.y < bounds.origin.y
+            || pos.x >= bounds.origin.x + bounds.size.width
+            || pos.y >= bounds.origin.y + bounds.size.height
+        {
+            return None;
+        }
         let terminal = self.terminal.as_ref()?;
         let inner = terminal.inner();
         let guard = inner.lock();
@@ -723,8 +730,8 @@ impl GhosttyView {
         if metrics.cell_width_px == 0 || metrics.cell_height_px == 0 {
             return None;
         }
-        let local_x = (f32::from(pos.x) - f32::from(bounds.origin.x)).max(0.0);
-        let local_y = (f32::from(pos.y) - f32::from(bounds.origin.y)).max(0.0);
+        let local_x = f32::from(pos.x) - f32::from(bounds.origin.x);
+        let local_y = f32::from(pos.y) - f32::from(bounds.origin.y);
         let phys_x = (local_x * self.scale_factor) as u32;
         let phys_y = (local_y * self.scale_factor) as u32;
         let col = (phys_x / metrics.cell_width_px.max(1)) as u16;
