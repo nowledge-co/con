@@ -161,7 +161,9 @@ impl ConWorkspace {
             window_bounds: Some(WindowBounds::centered(size(px(920.0), px(680.0)), cx)),
             titlebar: Some(TitlebarOptions {
                 title: Some("Settings".into()),
-                appears_transparent: false,
+                // Match the main macOS window: the system owns the traffic
+                // lights, while Con paints the titlebar surface itself.
+                appears_transparent: cfg!(target_os = "macos"),
                 ..Default::default()
             }),
             window_background: WindowBackgroundAppearance::Opaque,

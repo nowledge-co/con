@@ -5057,6 +5057,36 @@ impl Render for SettingsPanel {
             .opacity(if theme.is_dark() { 0.84 } else { 0.78 });
         let save_button_style = ButtonCustomVariant::new(cx).color(save_button_tint);
         let surface_rounding = if self.standalone { px(0.0) } else { px(12.0) };
+        let header_left_padding = if self.standalone && cfg!(target_os = "macos") {
+            px(78.0)
+        } else {
+            px(20.0)
+        };
+        let mut header_title_area = div()
+            .id("settings-titlebar-drag-area")
+            .flex()
+            .items_center()
+            .h_full()
+            .flex_1()
+            .min_w_0()
+            .pl(header_left_padding)
+            .pr(px(12.0))
+            .child(
+                div()
+                    .text_size(px(13.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.foreground)
+                    .child("Settings"),
+            );
+        if self.standalone {
+            header_title_area = header_title_area
+                .window_control_area(WindowControlArea::Drag)
+                .on_click(|event, window, _cx| {
+                    if event.click_count() == 2 {
+                        window.titlebar_double_click();
+                    }
+                });
+        }
         let surface = div()
             .id("settings-card")
             .w(if self.standalone {
@@ -5120,19 +5150,14 @@ impl Render for SettingsPanel {
                             .items_center()
                             .justify_between()
                             .h(px(44.0))
-                            .px(px(20.0))
-                            .child(
-                                div()
-                                    .text_size(px(13.0))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(theme.foreground)
-                                    .child("Settings"),
-                            )
+                            .child(header_title_area)
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
                                     .gap(px(8.0))
+                                    .flex_shrink_0()
+                                    .pr(px(20.0))
                                     .child(
                                         div()
                                             .id("open-config-file")
