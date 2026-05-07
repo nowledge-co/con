@@ -150,6 +150,7 @@ pub struct GhosttyView {
     /// `Window::drop_image` to evict sprite-atlas tiles.
     images_to_drop: Vec<Arc<RenderImage>>,
     scrollbar_drag: Option<ScrollbarDrag>,
+    terminal_mouse_sequence_active: bool,
     mouse_down_link: Option<TerminalLink>,
     suppress_link_mouse_up: bool,
     hovered_link: Option<TerminalLink>,
@@ -230,6 +231,7 @@ impl GhosttyView {
             scrollbar_cache: None,
             images_to_drop: Vec::new(),
             scrollbar_drag: None,
+            terminal_mouse_sequence_active: false,
             mouse_down_link: None,
             suppress_link_mouse_up: false,
             hovered_link: None,
@@ -290,6 +292,7 @@ impl GhosttyView {
         self.cached_frame_size = None;
         self.scrollbar_cache = None;
         self.scrollbar_drag = None;
+        self.terminal_mouse_sequence_active = false;
         self.ime_marked_text = None;
         self.ime_selected_range = None;
         self.mouse_down_link = None;
@@ -714,14 +717,19 @@ impl GhosttyView {
     /// (col, row) cell address. Returns `None` when we don't yet have a
     /// session / bounds to project into.
     fn cell_from_event_position(&self, pos: Point<Pixels>) -> Option<(u16, u16)> {
+        self.cell_from_event_position_impl(pos, false)
+    }
+
+    fn clamped_cell_from_event_position(&self, pos: Point<Pixels>) -> Option<(u16, u16)> {
+        self.cell_from_event_position_impl(pos, true)
+    }
+
+    fn cell_from_event_position_impl(
+        &self,
+        pos: Point<Pixels>,
+        clamp_to_grid: bool,
+    ) -> Option<(u16, u16)> {
         let bounds = self.pane_bounds?;
-        if pos.x < bounds.origin.x
-            || pos.y < bounds.origin.y
-            || pos.x >= bounds.origin.x + bounds.size.width
-            || pos.y >= bounds.origin.y + bounds.size.height
-        {
-            return None;
-        }
         let terminal = self.terminal.as_ref()?;
         let inner = terminal.inner();
         let guard = inner.lock();
@@ -730,12 +738,31 @@ impl GhosttyView {
         if metrics.cell_width_px == 0 || metrics.cell_height_px == 0 {
             return None;
         }
+        let scale = self.scale_factor.max(f32::EPSILON);
+        let width_px = ((f32::from(bounds.size.width) * scale).ceil() as u32).max(1);
+        let height_px = ((f32::from(bounds.size.height) * scale).ceil() as u32).max(1);
+        let cols = (width_px / metrics.cell_width_px.max(1)).max(1);
+        let rows = (height_px / metrics.cell_height_px.max(1)).max(1);
+        let grid_width_px = (cols * metrics.cell_width_px.max(1)) as f32;
+        let grid_height_px = (rows * metrics.cell_height_px.max(1)) as f32;
         let local_x = f32::from(pos.x) - f32::from(bounds.origin.x);
         let local_y = f32::from(pos.y) - f32::from(bounds.origin.y);
-        let phys_x = (local_x * self.scale_factor) as u32;
-        let phys_y = (local_y * self.scale_factor) as u32;
-        let col = (phys_x / metrics.cell_width_px.max(1)) as u16;
-        let row = (phys_y / metrics.cell_height_px.max(1)) as u16;
+        let mut phys_x = local_x * scale;
+        let mut phys_y = local_y * scale;
+        if clamp_to_grid {
+            phys_x = phys_x.clamp(0.0, (grid_width_px - f32::EPSILON).max(0.0));
+            phys_y = phys_y.clamp(0.0, (grid_height_px - f32::EPSILON).max(0.0));
+        } else if phys_x < 0.0
+            || phys_y < 0.0
+            || phys_x >= width_px as f32
+            || phys_y >= height_px as f32
+            || phys_x >= grid_width_px
+            || phys_y >= grid_height_px
+        {
+            return None;
+        }
+        let col = ((phys_x as u32) / metrics.cell_width_px.max(1)).min(cols - 1) as u16;
+        let row = ((phys_y as u32) / metrics.cell_height_px.max(1)).min(rows - 1) as u16;
         Some((col, row))
     }
 
@@ -794,19 +821,26 @@ impl GhosttyView {
         )
     }
 
-    fn forward_mouse_down(&self, pos: Point<Pixels>, mods: MouseEventMods) {
+    fn forward_mouse_down(&self, pos: Point<Pixels>, mods: MouseEventMods) -> bool {
         if let Some((col, row)) = self.cell_from_event_position(pos) {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
                     session.mouse_down(col, row, mods);
+                    return true;
                 }
             }
         }
+        false
     }
 
-    fn forward_mouse_drag(&self, pos: Point<Pixels>, mods: MouseEventMods) {
-        if let Some((col, row)) = self.cell_from_event_position(pos) {
+    fn forward_mouse_drag(&self, pos: Point<Pixels>, mods: MouseEventMods, clamp: bool) {
+        let cell = if clamp {
+            self.clamped_cell_from_event_position(pos)
+        } else {
+            self.cell_from_event_position(pos)
+        };
+        if let Some((col, row)) = cell {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
@@ -816,8 +850,13 @@ impl GhosttyView {
         }
     }
 
-    fn forward_mouse_up(&self, pos: Point<Pixels>, mods: MouseEventMods) {
-        if let Some((col, row)) = self.cell_from_event_position(pos) {
+    fn forward_mouse_up(&self, pos: Point<Pixels>, mods: MouseEventMods, clamp: bool) {
+        let cell = if clamp {
+            self.clamped_cell_from_event_position(pos)
+        } else {
+            self.cell_from_event_position(pos)
+        };
+        if let Some((col, row)) = cell {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
@@ -1532,6 +1571,7 @@ impl Render for GhosttyView {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&context_focus, cx);
                     this.last_mouse_position = Some(event.position);
+                    this.terminal_mouse_sequence_active = false;
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
@@ -1544,6 +1584,7 @@ impl Render for GhosttyView {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
                     this.last_mouse_position = Some(event.position);
+                    this.terminal_mouse_sequence_active = false;
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
@@ -1558,7 +1599,8 @@ impl Render for GhosttyView {
                         cx.notify();
                         return;
                     }
-                    this.forward_mouse_down(event.position, mouse_mods_from(&event.modifiers));
+                    this.terminal_mouse_sequence_active =
+                        this.forward_mouse_down(event.position, mouse_mods_from(&event.modifiers));
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
@@ -1597,7 +1639,15 @@ impl Render for GhosttyView {
                 }
                 let hover_changed = this.update_hovered_link(&event.modifiers);
                 if event.pressed_button == Some(MouseButton::Left) {
-                    this.forward_mouse_drag(event.position, mouse_mods_from(&event.modifiers));
+                    this.forward_mouse_drag(
+                        event.position,
+                        mouse_mods_from(&event.modifiers),
+                        this.terminal_mouse_sequence_active,
+                    );
+                    cx.notify();
+                } else if this.terminal_mouse_sequence_active {
+                    this.forward_mouse_up(event.position, mouse_mods_from(&event.modifiers), true);
+                    this.terminal_mouse_sequence_active = false;
                     cx.notify();
                 } else if hover_changed {
                     cx.notify();
@@ -1612,6 +1662,7 @@ impl Render for GhosttyView {
                         cx.notify();
                         return;
                     }
+                    let had_terminal_mouse_sequence = this.terminal_mouse_sequence_active;
                     if this.suppress_link_mouse_up {
                         let down_link = this.mouse_down_link.take();
                         this.suppress_link_mouse_up = false;
@@ -1626,7 +1677,12 @@ impl Render for GhosttyView {
                         cx.notify();
                         return;
                     }
-                    this.forward_mouse_up(event.position, mouse_mods_from(&event.modifiers));
+                    this.forward_mouse_up(
+                        event.position,
+                        mouse_mods_from(&event.modifiers),
+                        had_terminal_mouse_sequence,
+                    );
+                    this.terminal_mouse_sequence_active = false;
                     let _ = this.update_hovered_link(&event.modifiers);
                     cx.notify();
                 }),

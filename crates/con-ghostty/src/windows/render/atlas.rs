@@ -84,6 +84,44 @@ pub struct CellMetrics {
     pub baseline_px: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct TextFormatBaselines {
+    regular: f32,
+    bold: f32,
+    italic: f32,
+    bold_italic: f32,
+}
+
+impl TextFormatBaselines {
+    fn measure(
+        dwrite: &IDWriteFactory,
+        fallback_baseline: f32,
+        regular: &IDWriteTextFormat,
+        bold: &IDWriteTextFormat,
+        italic: &IDWriteTextFormat,
+        bold_italic: &IDWriteTextFormat,
+    ) -> Self {
+        let baseline = |format: &IDWriteTextFormat| {
+            text_layout_baseline(dwrite, format, &[b'M' as u16]).unwrap_or(fallback_baseline)
+        };
+        Self {
+            regular: baseline(regular),
+            bold: baseline(bold),
+            italic: baseline(italic),
+            bold_italic: baseline(bold_italic),
+        }
+    }
+
+    fn for_style(self, bold: bool, italic: bool) -> f32 {
+        match (bold, italic) {
+            (true, true) => self.bold_italic,
+            (true, false) => self.bold,
+            (false, true) => self.italic,
+            (false, false) => self.regular,
+        }
+    }
+}
+
 pub struct GlyphCache {
     device: ID3D11Device,
     _context: ID3D11DeviceContext,
@@ -132,6 +170,7 @@ pub struct GlyphCache {
     primary_upm: f32,
 
     metrics: CellMetrics,
+    layout_baselines: TextFormatBaselines,
     font_size_px: f32,
     font_family: String,
 }
@@ -200,6 +239,14 @@ impl GlyphCache {
         )?;
 
         let metrics = measure_cell(dwrite, text_collection, &resolved_family, font_size_px)?;
+        let layout_baselines = TextFormatBaselines::measure(
+            dwrite,
+            metrics.baseline_px as f32,
+            &text_format_regular,
+            &text_format_bold,
+            &text_format_italic,
+            &text_format_bold_italic,
+        );
 
         // Resolve a face for per-glyph design-metrics lookups. The face
         // comes from the same collection `measure_cell` walked, so
@@ -391,6 +438,7 @@ impl GlyphCache {
             primary_face,
             primary_upm,
             metrics,
+            layout_baselines,
             font_size_px,
             // Store the RESOLVED family and collection — downstream
             // rebuilds must use the same source to keep metrics and
@@ -501,6 +549,7 @@ impl GlyphCache {
             (false, true) => &self.text_format_italic,
             (false, false) => &self.text_format_regular,
         };
+        let target_baseline = self.layout_baselines.for_style(key.bold, key.italic);
 
         let slot_rect = D2D_RECT_F {
             left: rect.min.x as f32,
@@ -619,7 +668,12 @@ impl GlyphCache {
                 // lets glyphs drift vertically between characters and
                 // fallback faces. Anchor the isolated layout's baseline back
                 // to the terminal cell baseline before clipping to the slot.
-                let layout = self.baseline_aligned_layout_rect(slot_rect, format, utf16_slice);
+                let layout = self.baseline_aligned_layout_rect(
+                    slot_rect,
+                    format,
+                    utf16_slice,
+                    target_baseline,
+                );
                 self.d2d_rt.DrawText(
                     utf16_slice,
                     format,
@@ -659,11 +713,11 @@ impl GlyphCache {
         slot_rect: D2D_RECT_F,
         format: &IDWriteTextFormat,
         utf16: &[u16],
+        target_baseline: f32,
     ) -> D2D_RECT_F {
-        let Some(layout_baseline) = self.text_layout_baseline(format, utf16) else {
+        let Some(layout_baseline) = text_layout_baseline(&self.dwrite, format, utf16) else {
             return slot_rect;
         };
-        let target_baseline = self.metrics.baseline_px as f32;
         let shift = target_baseline - layout_baseline;
         D2D_RECT_F {
             left: slot_rect.left,
@@ -671,30 +725,6 @@ impl GlyphCache {
             right: slot_rect.right,
             bottom: slot_rect.bottom + shift,
         }
-    }
-
-    fn text_layout_baseline(&self, format: &IDWriteTextFormat, utf16: &[u16]) -> Option<f32> {
-        if utf16.is_empty() {
-            return None;
-        }
-        // SAFETY: `utf16` lives for the call; DirectWrite copies the text into
-        // the layout object. Infinite bounds mirror GPUI/Zed's Windows text
-        // layout path and avoid wrapping a single glyph.
-        let layout = unsafe {
-            self.dwrite
-                .CreateTextLayout(utf16, format, f32::INFINITY, f32::INFINITY)
-                .ok()?
-        };
-        let mut line_metrics = [DWRITE_LINE_METRICS::default(); 1];
-        let mut line_count = 0u32;
-        // SAFETY: output buffer contains one slot; a one-glyph layout has at
-        // most one line. If DirectWrite reports no line, leave the old rect.
-        unsafe {
-            layout
-                .GetLineMetrics(Some(&mut line_metrics), &mut line_count)
-                .ok()?;
-        }
-        (line_count > 0).then_some(line_metrics[0].baseline)
     }
 
     /// Glyph metrics in physical pixels for `codepoint` in the primary
@@ -804,6 +834,14 @@ impl GlyphCache {
             &self.font_family,
             font_size_px,
         )?;
+        self.layout_baselines = TextFormatBaselines::measure(
+            &self.dwrite,
+            self.metrics.baseline_px as f32,
+            &self.text_format_regular,
+            &self.text_format_bold,
+            &self.text_format_italic,
+            &self.text_format_bold_italic,
+        );
         // Refresh the primary face + upm so per-glyph scale-to-fit
         // works after a font-size change (the face itself doesn't
         // depend on size, but re-resolving keeps the field in lockstep
@@ -914,6 +952,34 @@ fn make_text_format(
     }
 
     Ok(format)
+}
+
+fn text_layout_baseline(
+    dwrite: &IDWriteFactory,
+    format: &IDWriteTextFormat,
+    utf16: &[u16],
+) -> Option<f32> {
+    if utf16.is_empty() {
+        return None;
+    }
+    // SAFETY: `utf16` lives for the call; DirectWrite copies the text into
+    // the layout object. Infinite bounds mirror GPUI/Zed's Windows text
+    // layout path and avoid wrapping a single glyph.
+    let layout = unsafe {
+        dwrite
+            .CreateTextLayout(utf16, format, f32::INFINITY, f32::INFINITY)
+            .ok()?
+    };
+    let mut line_metrics = [DWRITE_LINE_METRICS::default(); 1];
+    let mut line_count = 0u32;
+    // SAFETY: output buffer contains one slot; a one-glyph layout has at
+    // most one line. If DirectWrite reports no line, caller falls back.
+    unsafe {
+        layout
+            .GetLineMetrics(Some(&mut line_metrics), &mut line_count)
+            .ok()?;
+    }
+    (line_count > 0).then_some(line_metrics[0].baseline)
 }
 
 fn measure_cell(
