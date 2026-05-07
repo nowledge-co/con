@@ -61,7 +61,12 @@ out of one rule rather than two competing modes.
    `prefer_latest` is false AND `presentation_due()` returns true,
    return `RenderOutcome::Rendered(...)` from that prior readback
    instead of `Pending`.
-3. Every `Rendered` exit point stamps `last_presented_at = Some(now)`.
+3. Mark that fallback `Rendered` outcome as needing a follow-up
+   prepaint. The older frame should paint immediately, but the fresh
+   copy is still in flight; if VT output stops right after the fallback,
+   the caller still needs one more prepaint to drain and present the
+   final frame.
+4. Every `Rendered` exit point stamps `last_presented_at = Some(now)`.
    `presentation_due()` is gated on `MIN_FALLBACK_PRESENT_INTERVAL`
    (one 60 Hz vsync = 16 ms).
 
@@ -96,7 +101,9 @@ Effect:
 
 - Continuous-output TUIs (codex, top, watch, btop): screen updates
   at 60 Hz with bounded image-handoff cost — no freeze, no churn
-  beyond what GPUI would composite anyway.
+  beyond what GPUI would composite anyway. When a stream stops just
+  after a fallback frame, the explicit follow-up prepaint drains the
+  final submitted copy instead of leaving the pane one frame stale.
 - Burst commands (`ls`, `dir`, `clear`): unchanged from the
   04-26 mailbox tuning — snap-to-final, no slideshow.
 - User-driven echo / paste / click: unchanged — `block_drain`

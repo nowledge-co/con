@@ -169,7 +169,15 @@ pub enum RenderOutcome {
     /// No change since the previous call — reuse the prior image.
     Unchanged,
     /// Fresh BGRA bytes, ready to hand to GPUI as an `ImageSource`.
-    Rendered(FrameBgra),
+    Rendered {
+        frame: FrameBgra,
+        /// A newer copy was submitted while this frame was drained from
+        /// an older staging slot. The caller should publish this frame
+        /// now, then schedule one more prepaint so the fresher in-flight
+        /// copy can be drained even if VT output stops immediately after
+        /// the fallback present.
+        needs_followup_prepaint: bool,
+    },
     /// GPU work was submitted but the staging ring has nothing older
     /// ready to drain without waiting. Caller should keep the previous
     /// image and schedule another prepaint unless this frame was marked
@@ -367,9 +375,10 @@ impl Renderer {
     ///   `low_latency_generation_target`).
     ///
     /// Outputs:
-    /// * `Rendered(frame)` — fresh BGRA bytes; caller publishes.
-    ///   Stamps `last_presented_at` so `presentation_due` reflects the
-    ///   actual on-screen update cadence.
+    /// * `Rendered { frame, needs_followup_prepaint }` — fresh BGRA
+    ///   bytes; caller publishes. The follow-up flag is set only when
+    ///   an older drained slot was presented while a fresher submitted
+    ///   copy remains in flight.
     /// * `Pending` — GPU work was submitted (or is still in flight)
     ///   but no frame is presentable on this call. Caller must
     ///   schedule another prepaint (`cx.notify()`).
@@ -565,7 +574,10 @@ impl Renderer {
                 readback.map(|readback| self.frame_from_readback(readback))
             }
         {
-            let outcome = RenderOutcome::Rendered(frame);
+            let outcome = RenderOutcome::Rendered {
+                frame,
+                needs_followup_prepaint: false,
+            };
             self.mark_presented();
             log_render_profile(
                 prof_started,
@@ -624,7 +636,10 @@ impl Renderer {
                 && self.presentation_due()
                 && let Some(readback) = drained
             {
-                let outcome = RenderOutcome::Rendered(self.frame_from_readback(readback));
+                let outcome = RenderOutcome::Rendered {
+                    frame: self.frame_from_readback(readback),
+                    needs_followup_prepaint: submitted.is_some(),
+                };
                 self.mark_presented();
                 log_render_profile(
                     prof_started,
@@ -671,7 +686,10 @@ impl Renderer {
         }
 
         if let Some(readback) = drained {
-            let outcome = RenderOutcome::Rendered(self.frame_from_readback(readback));
+            let outcome = RenderOutcome::Rendered {
+                frame: self.frame_from_readback(readback),
+                needs_followup_prepaint: false,
+            };
             self.mark_presented();
             log_render_profile(
                 prof_started,

@@ -241,7 +241,7 @@ impl RenderSession {
         if let Some(started) = prof_started {
             let total_ms = started.elapsed().as_secs_f64() * 1000.0;
             let outcome_name = match &outcome {
-                RenderOutcome::Rendered(_) => "rendered",
+                RenderOutcome::Rendered { .. } => "rendered",
                 RenderOutcome::Pending => "pending",
                 RenderOutcome::Unchanged => "unchanged",
             };
