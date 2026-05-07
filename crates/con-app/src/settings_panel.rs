@@ -5078,7 +5078,7 @@ impl Render for SettingsPanel {
                     .text_color(theme.foreground)
                     .child("Settings"),
             );
-        if self.standalone {
+        if self.standalone && cfg!(target_os = "macos") {
             header_title_area = header_title_area
                 .window_control_area(WindowControlArea::Drag)
                 .on_click(|event, window, _cx| {
