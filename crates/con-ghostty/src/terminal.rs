@@ -158,7 +158,9 @@ impl GhosttyConfigPatch {
         // Disable ghostty shell-integration cursor override so con's
         // cursor-style setting is respected. Ghostty's integration
         // unconditionally forces a bar cursor at prompts otherwise.
-        s.push_str("shell-integration-features = no-cursor\n");
+        // Enable ssh-env and ssh-terminfo so Ghostty's shell integration
+        // auto-installs xterm-ghostty terminfo on remote SSH hosts.
+        s.push_str("shell-integration-features = no-cursor,ssh-env,ssh-terminfo\n");
         if let Some(background_image) = &self.background_image {
             s.push_str(&format!("background-image = {:?}\n", background_image));
             if let Some(background_image_opacity) = self.background_image_opacity {
