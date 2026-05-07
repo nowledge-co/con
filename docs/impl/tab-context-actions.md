@@ -29,7 +29,7 @@ The drag preview (ghost tab) is locked to the tab bar's y-axis. The preview x po
 
 ### Key helpers
 
-```
+```text
 crates/con-app/src/workspace/helpers.rs
   horizontal_tab_slot_from_bounds(cursor, tab_bounds, tab_count) -> Option<usize>
     Position-based slot from full bounds array. Returns None when bounds is empty
@@ -63,7 +63,7 @@ The preview is cleared on `on_drop`, on `on_mouse_up` (mouseup outside any drop 
 
 Both the horizontal tab strip and the vertical sidebar panel rows share a single context menu builder. Orientation-specific items are passed as `Option<WinCb>` fields so the builder stays generic.
 
-```
+```text
 crates/con-app/src/tab_context_menu.rs
   TabMenuOptions { rename, duplicate, reset_name, move_up, move_down,
                    close_to_right, close_tab, close_others,
@@ -109,7 +109,7 @@ Selected swatch is indicated by an opacity-based background on the wrapper div (
 
 ### Data model
 
-```
+```text
 crates/con-core/src/session.rs
   pub enum TabAccentColor {
       Red, Orange, Yellow, Green, Teal, Blue, Purple, Pink,
@@ -125,7 +125,7 @@ crates/con-core/src/session.rs
 
 ### Color helpers
 
-```
+```text
 crates/con-app/src/tab_colors.rs
   tab_accent_color_hsla(color, cx) -> Hsla
     Maps TabAccentColor to an Hsla. Light/dark variants are separate
@@ -196,7 +196,7 @@ The new tab is inserted at `index + 1` and immediately activated.
 
 ## Code map
 
-```
+```text
 crates/con-core/src/session.rs
   + TabAccentColor enum with #[serde(other)] Unknown variant
   + TabState.color: Option<TabAccentColor>

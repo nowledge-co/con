@@ -1203,11 +1203,18 @@ impl SessionSidebar {
                     let approx_row_h = ROW_HEIGHT;
                     let last_row_bottom_estimate =
                         f32::from(event.bounds.origin.y) + (total as f32) * (approx_row_h + 2.0);
-                    if f32::from(event.event.position.y) >= last_row_bottom_estimate
-                        && this.drop_slot != Some(total)
-                    {
-                        this.drop_slot = Some(total);
-                        cx.notify();
+                    if f32::from(event.event.position.y) >= last_row_bottom_estimate {
+                        let preview_missing = this.drag_preview.borrow().is_none();
+                        let preview_size = vertical_drag_preview_size(this.is_pinned());
+                        this.ensure_drag_preview(
+                            event.drag(cx),
+                            event.bounds.origin.x,
+                            preview_size.height / 2.0,
+                        );
+                        if this.drop_slot != Some(total) || preview_missing {
+                            this.drop_slot = Some(total);
+                            cx.notify();
+                        }
                     }
                 },
             ))
