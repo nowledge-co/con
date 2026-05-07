@@ -627,6 +627,7 @@ impl GhosttyView {
         }
 
         if event.prefer_character_input
+            && !keystroke.modifiers.control
             && keystroke
                 .key_char
                 .as_deref()
@@ -649,10 +650,10 @@ impl GhosttyView {
                 keystroke.modifiers.shift,
             ) {
                 let control = [code];
-                if let Ok(text) = std::str::from_utf8(&control) {
-                    terminal.send_text(text);
-                    return true;
-                }
+                let text = std::str::from_utf8(&control)
+                    .expect("terminal C0 control bytes are always valid UTF-8");
+                terminal.send_text(text);
+                return true;
             }
         }
 
