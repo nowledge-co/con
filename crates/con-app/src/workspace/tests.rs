@@ -955,6 +955,11 @@ fn surface_key_bytes_matches_named_keys_case_insensitively() {
         ConWorkspace::surface_key_bytes("control-\\").unwrap(),
         vec![0x1c]
     );
+    assert_eq!(ConWorkspace::surface_key_bytes("C-/").unwrap(), vec![0x1f]);
+    assert_eq!(
+        ConWorkspace::surface_key_bytes("ctrl-2").unwrap(),
+        vec![0x00]
+    );
     assert_eq!(ConWorkspace::surface_key_bytes("C-?").unwrap(), vec![0x7f]);
 }
 

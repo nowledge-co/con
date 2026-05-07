@@ -1,3 +1,8 @@
+/// Map legacy terminal Ctrl-key aliases to the C0/DEL byte they emit.
+///
+/// This intentionally covers the classic byte layer only. Modern protocols
+/// such as Kitty keyboard / modifyOtherKeys belong in libghostty-vt's key
+/// encoder, not in a growing Rust-side terminal keyboard table.
 pub fn ctrl_key_to_c0(key: &str) -> Option<u8> {
     let key = key.trim();
     if key.eq_ignore_ascii_case("space") {
@@ -12,11 +17,20 @@ pub fn ctrl_key_to_c0(key: &str) -> Option<u8> {
 
     match ch {
         '@' => Some(0x00),
+        '2' => Some(0x00),
+        '3' => Some(0x1b),
+        '4' => Some(0x1c),
+        '5' => Some(0x1d),
+        '6' => Some(0x1e),
+        '7' => Some(0x1f),
+        '8' => Some(0x7f),
         '[' => Some(0x1b),
         '\\' => Some(0x1c),
         ']' => Some(0x1d),
         '^' => Some(0x1e),
         '_' => Some(0x1f),
+        '/' => Some(0x1f),
+        '~' => Some(0x1e),
         '?' => Some(0x7f),
         ch if ch.is_ascii_alphabetic() => Some(ch.to_ascii_uppercase() as u8 - b'@'),
         _ => None,
@@ -63,11 +77,20 @@ mod tests {
     fn ctrl_key_maps_defined_ascii_punctuation_to_c0() {
         assert_eq!(ctrl_key_to_c0("space"), Some(0x00));
         assert_eq!(ctrl_key_to_c0("@"), Some(0x00));
+        assert_eq!(ctrl_key_to_c0("2"), Some(0x00));
+        assert_eq!(ctrl_key_to_c0("3"), Some(0x1b));
+        assert_eq!(ctrl_key_to_c0("4"), Some(0x1c));
+        assert_eq!(ctrl_key_to_c0("5"), Some(0x1d));
+        assert_eq!(ctrl_key_to_c0("6"), Some(0x1e));
+        assert_eq!(ctrl_key_to_c0("7"), Some(0x1f));
+        assert_eq!(ctrl_key_to_c0("8"), Some(0x7f));
         assert_eq!(ctrl_key_to_c0("["), Some(0x1b));
         assert_eq!(ctrl_key_to_c0("\\"), Some(0x1c));
         assert_eq!(ctrl_key_to_c0("]"), Some(0x1d));
         assert_eq!(ctrl_key_to_c0("^"), Some(0x1e));
         assert_eq!(ctrl_key_to_c0("_"), Some(0x1f));
+        assert_eq!(ctrl_key_to_c0("/"), Some(0x1f));
+        assert_eq!(ctrl_key_to_c0("~"), Some(0x1e));
         assert_eq!(ctrl_key_to_c0("?"), Some(0x7f));
     }
 
@@ -75,6 +98,8 @@ mod tests {
     fn ctrl_key_rejects_undefined_ascii_punctuation() {
         assert_eq!(ctrl_key_to_c0("}"), None);
         assert_eq!(ctrl_key_to_c0("1"), None);
+        assert_eq!(ctrl_key_to_c0("0"), None);
+        assert_eq!(ctrl_key_to_c0("9"), None);
         assert_eq!(ctrl_key_to_c0("enter"), None);
     }
 
@@ -83,14 +108,18 @@ mod tests {
         assert_eq!(ctrl_chord_to_c0("Ctrl-C"), Some(0x03));
         assert_eq!(ctrl_chord_to_c0("control-]"), Some(0x1d));
         assert_eq!(ctrl_chord_to_c0("C-\\"), Some(0x1c));
+        assert_eq!(ctrl_chord_to_c0("C-/"), Some(0x1f));
+        assert_eq!(ctrl_chord_to_c0("ctrl-2"), Some(0x00));
     }
 
     #[test]
     fn ctrl_keystroke_uses_shifted_key_char_without_breaking_tab_shortcuts() {
         assert_eq!(ctrl_keystroke_to_c0("6", Some("^"), true), Some(0x1e));
         assert_eq!(ctrl_keystroke_to_c0("-", Some("_"), true), Some(0x1f));
+        assert_eq!(ctrl_keystroke_to_c0("`", Some("~"), true), Some(0x1e));
         assert_eq!(ctrl_keystroke_to_c0("a", Some("A"), true), None);
         assert_eq!(ctrl_keystroke_to_c0("]", Some("}"), true), None);
         assert_eq!(ctrl_keystroke_to_c0("]", None, false), Some(0x1d));
+        assert_eq!(ctrl_keystroke_to_c0("/", Some("/"), false), Some(0x1f));
     }
 }

@@ -10,9 +10,10 @@ con is still pre-release, so entries may group related beta work while the produ
 
 **Windows, Linux**
 
-- Fixed terminal `Ctrl+<punctuation>` chords such as `Ctrl+]`, so tmux prefixes
-  like `set -g prefix C-]` now send the expected C0 control byte instead of
-  being dropped or typed literally.
+- Fixed terminal `Ctrl+<punctuation>` C0 chords such as `Ctrl+]`, `Ctrl+/`,
+  and their `Ctrl+2..8` aliases, so tmux prefixes like `set -g prefix C-]`
+  now send the expected control byte instead of being dropped or typed
+  literally.
 
 ## `v0.1.0-beta.64`
 
