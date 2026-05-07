@@ -991,15 +991,17 @@ impl GhosttyView {
 
         self.scale_factor = scale_y.max(f64::EPSILON) as f32;
 
+        let scale_changed = (previous_scale - self.scale_factor).abs() > 0.001;
+        let size_changed = before_size.width_px != width_px || before_size.height_px != height_px;
         let result = NativeBackingSync {
             width_px,
             height_px,
         };
-        let scale_changed = (previous_scale - self.scale_factor).abs() > 0.001;
-        let size_changed = before_size.width_px != width_px || before_size.height_px != height_px;
-        if scale_changed || size_changed {
-            terminal.draw();
-        }
+
+        // Do not force a draw from this pre-frame sync path. Ghostty's Metal
+        // renderer reads the hosted CALayer bounds at draw time; during live
+        // resize those bounds are only final after `sync_native_scroll_view()`
+        // commits the AppKit host/document/surface frames below.
 
         if perf_trace_enabled() && (scale_changed || size_changed) {
             let after_size = terminal.size();
@@ -1044,12 +1046,10 @@ impl GhosttyView {
         self.last_bounds = Some(bounds);
         self.sync_native_backing_background();
 
-        // Keep libghostty's framebuffer/PTY size ahead of every AppKit frame
-        // commit. Moving the host/document/surface hierarchy before the backing
-        // size is updated creates one live-resize frame where AppKit can
-        // present a Metal surface at the new pane bounds while Ghostty is still
-        // drawing the previous size. Intel macOS compositors expose that
-        // transient mismatch as a resize flash.
+        // Keep libghostty's framebuffer/PTY metadata ahead of every AppKit
+        // frame commit, but do not draw yet. Ghostty's Metal renderer uses the
+        // current IOSurface CALayer bounds at draw time, so the synchronous
+        // draw must happen after the host/document/surface frames are final.
         self.sync_native_backing_properties(bounds, window);
 
         if let Some(host_view) = self.host_view {

@@ -37,10 +37,21 @@ systems commit independently, and a temporary mismatch becomes visible through
 the transparent window. The correct fix is not a matte or a border. It is to
 make the terminal-size transaction ordered.
 
+The first follow-up fix in PR #152 got the ordering only half right. It moved
+`sync_native_backing_properties()` before the AppKit frame commits, but that
+function also forced `terminal.draw()`. Ghostty's Metal renderer reads the
+hosted IOSurface `CALayer` bounds at draw time. During live resize, forcing a
+draw before Con has moved the `NSScrollView`, document view, and surface view
+means Ghostty can synchronously draw/present against the old layer bounds. On
+Intel compositors that stale draw still shows up as a resize flash.
+
 ## Fix Applied
 
 `GhosttyView::update_frame` now updates Ghostty's backing properties first and
 then performs one deterministic AppKit scroll/document/surface geometry commit.
+The backing sync path no longer forces a draw. The only synchronous draw for
+the resize step happens after the native AppKit frames are committed, so
+Ghostty's renderer reads the final layer bounds for that frame.
 
 This restores the important ordering boundary from the pre-regression path:
 terminal framebuffer and PTY size are ready before the native Ghostty surface
@@ -53,7 +64,8 @@ intermediate AppKit states that normal layout coalesces away.
 
 For embedded native terminal surfaces on macOS:
 
-- resize Ghostty's framebuffer before moving the hosted surface view
+- sync Ghostty's framebuffer metadata before moving the hosted surface view
+- draw Ghostty only after the hosted surface view has its final layer bounds
 - commit the AppKit hierarchy once per layout pass when possible
 - do not solve resize flashes with full-terminal mattes or opaque underlays
 - keep this path macOS-only; Windows and Linux do not embed Ghostty through an
