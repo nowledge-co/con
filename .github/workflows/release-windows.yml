@@ -106,11 +106,38 @@ jobs:
           $ZigVersion = "0.15.2"
           $ZigDir    = "zig-x86_64-windows-$ZigVersion"
           $ZigZip    = "$ZigDir.zip"
-          $Url       = "https://ziglang.org/download/$ZigVersion/$ZigZip"
           $Dest      = "$env:USERPROFILE\.local"
+          $Out       = Join-Path $env:TEMP $ZigZip
+          $Urls      = @(
+            "https://zigmirror.hryx.net/zig/$ZigZip",
+            "https://zig.linus.dev/zig/$ZigZip",
+            "https://zig.mirror.mschae23.de/zig/$ZigZip",
+            "https://ziglang.freetls.fastly.net/$ZigZip",
+            "https://pkg.hexops.org/zig/$ZigZip",
+            "https://ziglang.org/download/$ZigVersion/$ZigZip"
+          )
           New-Item -ItemType Directory -Force -Path $Dest | Out-Null
-          Invoke-WebRequest -Uri $Url -OutFile "$env:TEMP\$ZigZip"
-          Expand-Archive -Path "$env:TEMP\$ZigZip" -DestinationPath $Dest -Force
+          Remove-Item -Force -ErrorAction SilentlyContinue $Out
+          $Downloaded = $false
+          foreach ($Url in $Urls) {
+            for ($Attempt = 1; $Attempt -le 3; $Attempt++) {
+              try {
+                Invoke-WebRequest -Uri $Url -OutFile $Out -TimeoutSec 120
+                if ((Test-Path $Out) -and ((Get-Item $Out).Length -gt 0)) {
+                  $Downloaded = $true
+                  break
+                }
+              } catch {
+                Write-Warning "Zig download failed from $Url on attempt ${Attempt}: $($_.Exception.Message)"
+                Start-Sleep -Seconds 5
+              }
+            }
+            if ($Downloaded) { break }
+          }
+          if (-not $Downloaded) {
+            throw "Failed to download Zig $ZigVersion from all mirrors"
+          }
+          Expand-Archive -Path $Out -DestinationPath $Dest -Force
           Add-Content -Path $env:GITHUB_PATH -Value "$Dest\$ZigDir"
           & "$Dest\$ZigDir\zig.exe" version
 
