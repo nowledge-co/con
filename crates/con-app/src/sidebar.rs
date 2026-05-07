@@ -686,7 +686,7 @@ impl SessionSidebar {
                     // drag_move to parent containers even when the cursor is
                     // outside them, so without this check the sidebar would
                     // show indicators while the pane is still on the right.
-                    if is_pane && !point_in_bounds(&event.event.position, &event.bounds) {
+                    if !point_in_bounds(&event.event.position, &event.bounds) {
                         if this.drop_slot.is_some() || this.drag_preview.borrow().is_some() {
                             this.drop_slot = None;
                             this.clear_drag_preview();
@@ -1162,8 +1162,8 @@ impl SessionSidebar {
                         return;
                     }
                     let is_pane = event.drag(cx).origin == DraggedTabOrigin::Pane;
-                    // For pane-origin drags, only proceed if cursor is inside container.
-                    if is_pane && !point_in_bounds(&event.event.position, &event.bounds) {
+                    // For all drag origins, only proceed if cursor is inside container.
+                    if !point_in_bounds(&event.event.position, &event.bounds) {
                         if this.drop_slot.is_some() || this.drag_preview.borrow().is_some() {
                             this.drop_slot = None;
                             this.clear_drag_preview();
