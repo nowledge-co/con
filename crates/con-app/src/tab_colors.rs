@@ -14,6 +14,8 @@ pub(crate) fn tab_accent_color_hsla(color: TabAccentColor, cx: &App) -> Hsla {
         TabAccentColor::Blue => (214.0, 0.80, 0.52, 0.62),
         TabAccentColor::Purple => (270.0, 0.70, 0.52, 0.62),
         TabAccentColor::Pink => (330.0, 0.78, 0.56, 0.64),
+        // Unknown is a forward-compat catch-all; render as neutral green.
+        TabAccentColor::Unknown => (142.0, 0.40, 0.45, 0.55),
     };
     gpui::hsla(h / 360.0, s, if is_dark { ld } else { ll }, 1.0)
 }

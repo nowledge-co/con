@@ -200,7 +200,7 @@ pub(super) fn horizontal_tab_slot_from_bounds(
     for (i, bounds) in tab_bounds.iter().enumerate() {
         let mid_x = bounds.origin.x + bounds.size.width / 2.0;
         if cursor.x < mid_x {
-            slot = i;
+            slot = i.min(tab_count);
             break;
         }
     }

@@ -1839,12 +1839,14 @@ impl PaneTree {
         cx: &App,
     ) -> AnyElement {
         let theme = cx.theme();
-        let bar_bg = if let Some(color) = tab_accent_color {
-            let mut h = crate::tab_colors::tab_accent_color_hsla(color, cx);
-            h.a = if is_focused { 0.35 } else { 0.18 };
-            h
-        } else if is_focused {
-            theme.tab_bar_segmented
+        let bar_bg = if is_focused {
+            if let Some(color) = tab_accent_color {
+                let mut h = crate::tab_colors::tab_accent_color_hsla(color, cx);
+                h.a = 0.35;
+                h
+            } else {
+                theme.tab_bar_segmented
+            }
         } else {
             theme.tab_bar_segmented.opacity(0.78)
         };

@@ -129,6 +129,13 @@ pub(crate) fn build_tab_context_menu(menu: PopupMenu, opts: TabMenuOptions) -> P
                 let pressed_ref = pressed.clone();
                 let idx_u8 = idx as u8;
 
+                let swatch_bg = swatch_hsla.unwrap_or(cx.theme().muted.opacity(0.35));
+                let wrapper_bg = if is_current {
+                    swatch_hsla.unwrap_or(cx.theme().muted).opacity(0.25)
+                } else {
+                    gpui::transparent_black()
+                };
+
                 let swatch = div()
                     .id(ElementId::Integer(idx as u64))
                     .w(ring)
@@ -138,24 +145,12 @@ pub(crate) fn build_tab_context_menu(menu: PopupMenu, opts: TabMenuOptions) -> P
                     .justify_center()
                     .cursor_pointer()
                     .rounded_full()
-                    .when(is_current, |el| {
-                        let ring_color = swatch_hsla.unwrap_or(cx.theme().muted);
-                        el.border_2().border_color(ring_color)
-                    })
+                    .bg(wrapper_bg)
                     .hover(|s| s.opacity(0.75))
                     .on_mouse_down(MouseButton::Left, move |_, _, _| {
                         pressed_ref.set(idx_u8);
                     })
-                    .child(
-                        div()
-                            .w(dot)
-                            .h(dot)
-                            .rounded_full()
-                            .map(|el| match swatch_hsla {
-                                Some(c) => el.bg(c),
-                                None => el.bg(cx.theme().muted.opacity(0.35)),
-                            }),
-                    );
+                    .child(div().w(dot).h(dot).rounded_full().bg(swatch_bg));
 
                 row = row.child(swatch);
             }

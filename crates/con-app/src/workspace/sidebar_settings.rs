@@ -82,26 +82,25 @@ impl ConWorkspace {
         else {
             return;
         };
-        // For now, "duplicate" = open a new tab whose CWD matches the
-        // source tab's focused terminal cwd. The conversation, panel
-        // state, and history don't carry over — that's intentional;
-        // duplicate is for "open another shell here", not "fork
-        // session state".
-        let cwd = self.tabs[index]
-            .pane_tree
-            .focused_terminal()
-            .current_dir(cx);
-        let terminal = self.create_terminal(cwd.as_deref(), window, cx);
-        let tab_number = self.tabs.len() + 1;
+        // Duplicate the full pane tree layout, preserving each pane's CWD.
+        let layout = self.tabs[index].pane_tree.to_state(cx, false);
+        let focused_pane_id = Some(self.tabs[index].pane_tree.focused_pane_id());
+        let ghostty_app = self.ghostty_app.clone();
+        let font_size = self.font_size;
+        let mut make_terminal =
+            |cwd: Option<&str>, _screen_text: Option<&[String]>, _force: bool| {
+                make_ghostty_terminal(&ghostty_app, cwd, None, font_size, window, cx)
+            };
+        let pane_tree = PaneTree::from_state(&layout, focused_pane_id, &mut make_terminal);
         let summary_id = self.next_tab_summary_id;
         self.next_tab_summary_id += 1;
         self.tabs.push(Tab {
-            pane_tree: PaneTree::new(terminal),
-            title: format!("Terminal {}", tab_number),
+            pane_tree,
+            title: format!("Terminal {}", summary_id + 1),
             user_label: self.tabs[index].user_label.clone(),
             ai_label: None,
             ai_icon: None,
-            color: None,
+            color: self.tabs[index].color,
             summary_id,
             needs_attention: false,
             session: AgentSession::new(),

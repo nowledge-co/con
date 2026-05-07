@@ -80,6 +80,8 @@ pub struct TabState {
 
 /// User-selectable accent color for a tab. Stored as a string tag so
 /// future colors can be added without breaking existing sessions.
+/// Unknown variants (e.g. from a newer build) deserialize to `Unknown`
+/// so a downgrade never discards the whole session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TabAccentColor {
@@ -91,6 +93,9 @@ pub enum TabAccentColor {
     Blue,
     Purple,
     Pink,
+    /// Catch-all for color tags added in future builds.
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
