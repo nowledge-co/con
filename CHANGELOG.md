@@ -4,7 +4,7 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.66` - Unreleased
+## `v0.1.0-beta.66` - 2026-05-08
 
 ### Changed
 
@@ -12,14 +12,28 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Matched the standalone Settings window titlebar to Con's main macOS window
   chrome while leaving the existing Windows and Linux settings-window frame
-  behavior unchanged.
+  behavior unchanged. _(PR
+  [#166](https://github.com/nowledge-co/con-terminal/pull/166) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 **Docs**
 
 - Added the Quick Terminal screenshot to the user guide and screenshot gallery,
   credited its original contributor, and linked the hosted docs, changelog, and
-  `llms.txt` agent index from the README. _(Quick Terminal was introduced in
-  PR [#135](https://github.com/nowledge-co/con-terminal/pull/135) by
+  `llms.txt` agent index from the README. _(PR
+  [#167](https://github.com/nowledge-co/con-terminal/pull/167) by
+  [@wey-gu](https://github.com/wey-gu); Quick Terminal was introduced in PR
+  [#135](https://github.com/nowledge-co/con-terminal/pull/135) by
+  [@sundy-li](https://github.com/sundy-li))_
+
+### Fixed
+
+**Tabs and Panes**
+
+- Preserved user-assigned tab accent colors across inactive tabs, vertical tab
+  entries, and split-pane title bars at lower emphasis, and shortened pane
+  titles to the final path component on Unix and Windows-style paths. _(PR
+  [#168](https://github.com/nowledge-co/con-terminal/pull/168) by
   [@sundy-li](https://github.com/sundy-li))_
 
 ## `v0.1.0-beta.65` - 2026-05-07
@@ -51,14 +65,6 @@ con is still pre-release, so entries may group related beta work while the produ
   [@wey-gu](https://github.com/wey-gu))_
 
 ### Fixed
-
-**Tabs and Panes**
-
-- Preserved user-assigned tab accent colors across inactive tabs, vertical tab
-  entries, and split-pane title bars at lower emphasis, and shortened pane
-  titles to the final path component on Unix and Windows-style paths. _(PR
-  [#168](https://github.com/nowledge-co/con-terminal/pull/168) by
-  [@sundy-li](https://github.com/sundy-li))_
 
 **macOS**
 
