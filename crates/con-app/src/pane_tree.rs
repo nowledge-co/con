@@ -681,7 +681,19 @@ impl PaneTree {
     }
 
     fn terminal_title_or_default(terminal: &TerminalPane, cx: &App) -> String {
-        terminal.title(cx).unwrap_or_else(|| "Terminal".to_string())
+        let title = terminal.title(cx).unwrap_or_else(|| "Terminal".to_string());
+        Self::short_pane_title(&title).to_string()
+    }
+
+    fn short_pane_title(title: &str) -> &str {
+        // Show only the last path component so narrow panes don't truncate to "...".
+        // OSC titles can contain either Unix or Windows separators regardless of host OS.
+        title
+            .trim_end_matches(['/', '\\'])
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(title)
     }
 
     pub fn pane_title(&self, pane_id: PaneId, cx: &App) -> Option<String> {
@@ -1841,12 +1853,20 @@ impl PaneTree {
         let theme = cx.theme();
         let bar_bg = if is_focused {
             if let Some(color) = tab_accent_color {
-                let mut h = crate::tab_colors::tab_accent_color_hsla(color, cx);
-                h.a = 0.35;
-                h
+                crate::tab_colors::tab_accent_surface_hsla(
+                    color,
+                    crate::tab_colors::TAB_ACCENT_ACTIVE_ALPHA,
+                    cx,
+                )
             } else {
                 theme.tab_bar_segmented
             }
+        } else if let Some(color) = tab_accent_color {
+            crate::tab_colors::tab_accent_surface_hsla(
+                color,
+                crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA,
+                cx,
+            )
         } else {
             theme.tab_bar_segmented.opacity(0.78)
         };
@@ -1926,20 +1946,15 @@ impl PaneTree {
 
         let title_el = div()
             .flex_1()
-            .flex()
-            .justify_center()
-            .items_center()
-            .overflow_hidden()
-            .child(
-                div()
-                    .truncate()
-                    .text_size(px(12.0))
-                    .line_height(px(16.0))
-                    .font_family(theme.font_family.clone())
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(title_color)
-                    .child(SharedString::from(title)),
-            );
+            .min_w_0()
+            .truncate()
+            .text_size(px(12.0))
+            .line_height(px(16.0))
+            .font_family(theme.font_family.clone())
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(title_color)
+            .text_center()
+            .child(SharedString::from(title));
         let dragged = DraggedTab {
             session_id,
             label: drag_label,
@@ -2711,6 +2726,38 @@ mod tests {
             next_split_id: 1,
             dragging: None,
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn short_pane_title_handles_unix_paths() {
+        assert_eq!(
+            PaneTree::short_pane_title("~/work/con-terminal"),
+            "con-terminal"
+        );
+        assert_eq!(
+            PaneTree::short_pane_title("~/work/con-terminal/"),
+            "con-terminal"
+        );
+        assert_eq!(PaneTree::short_pane_title("/"), "/");
+    }
+
+    #[::core::prelude::v1::test]
+    fn short_pane_title_handles_windows_paths() {
+        assert_eq!(
+            PaneTree::short_pane_title(r"C:\Users\alice\project"),
+            "project"
+        );
+        assert_eq!(
+            PaneTree::short_pane_title(r"C:\Users\alice\project\"),
+            "project"
+        );
+        assert_eq!(PaneTree::short_pane_title(r"C:\"), r"C:");
+    }
+
+    #[::core::prelude::v1::test]
+    fn short_pane_title_preserves_non_path_titles() {
+        assert_eq!(PaneTree::short_pane_title("Terminal"), "Terminal");
+        assert_eq!(PaneTree::short_pane_title("nvim main.rs"), "nvim main.rs");
     }
 
     #[::core::prelude::v1::test]

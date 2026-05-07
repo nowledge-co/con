@@ -141,7 +141,7 @@ crates/con-app/src/tab_colors.rs
 
 **Horizontal tab strip** (`top_bar.rs`):
 - Active tab: accent color at alpha 0.35 replaces `theme.background.opacity(elevated_ui_surface_opacity)`.
-- Inactive tab: accent color at alpha 0.12; hover at alpha 0.18.
+- Inactive tab: accent color at alpha 0.12; hover at alpha 0.20.
 - Active indicator dot: accent color if set, otherwise `active_tab_indicator_color()`. Only shown on the active tab.
 
 **Vertical rail pill** (`sidebar.rs`):
@@ -155,7 +155,11 @@ crates/con-app/src/tab_colors.rs
 
 **Pane title bar** (`pane_tree.rs`):
 - Focused pane: accent color at alpha 0.35 replaces `theme.tab_bar_segmented`.
-- Unfocused pane: always `theme.tab_bar_segmented.opacity(0.78)` — accent is reserved for the focused/active semantic state only.
+- Unfocused pane: accent color at alpha 0.12 when the tab has a user-assigned accent, otherwise `theme.tab_bar_segmented.opacity(0.78)`.
+
+Tab accent color is treated as user-assigned tab identity. Focused/active state
+is expressed by stronger alpha, not by making inactive instances forget their
+identity color.
 
 ### Persistence
 
