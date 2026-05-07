@@ -3,6 +3,12 @@
 con is a terminal first. If you hide the input bar and agent panel, it should
 feel like a fast, elegant terminal with nothing extra in the way.
 
+<p align="center">
+  <a href="screenshots.md">
+    <img width="1080" alt="Con main window with terminal panes and the agent panel" src="https://github.com/user-attachments/assets/389898d6-56bf-46aa-9279-65e59a57ed23" />
+  </a>
+</p>
+
 When you ask for AI, con uses the terminal objects you already work with:
 panes, SSH sessions, tmux panes, TUIs, visible output, and working directories.
 When a one-off routine becomes worth repeating, skills let you keep it as a

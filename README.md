@@ -48,12 +48,9 @@ If you're an old-school terminal user and only want enough AI harness when neede
   </a>
 </p>
 
-
-
 <p align="center">
   <a href="docs/screenshots.md">View the full screenshot gallery</a>
 </p>
-
 
 ## 2 min know-how
 
@@ -99,7 +96,7 @@ This installs the app into `/Applications` and links `con-cli` into
 `~/.local/bin`. Or download the DMG directly from
 [Releases](https://github.com/nowledge-co/con-terminal/releases).
 
-**Linux** (preview)
+**Linux** (preview, official installer)
 
 ```sh
 curl -fsSL https://con-releases.nowledge.co/install.sh | sh
@@ -109,11 +106,18 @@ This installs both `con` and `con-cli` into `~/.local/bin`. Or download
 `con-<version>-linux-x86_64.tar.gz` from the latest
 [Release](https://github.com/nowledge-co/con-terminal/releases).
 
-Arch Linux
+**Arch Linux / AUR** (community)
 
-Arch Linux users can install con via `pacman -S con-bin` or `paru -S con-bin` or `yay -S con-bin` .
+```sh
+yay -S con-bin
+```
 
-**Windows**
+`con-bin` is maintained on AUR by
+[`czyt`](https://aur.archlinux.org/account/czyt). `paru -S con-bin` works too.
+Use the official installer above if you need the newest beta immediately after
+a release.
+
+**Windows** (official installer)
 
 ```powershell
 irm https://con-releases.nowledge.co/install.ps1 | iex
@@ -123,14 +127,17 @@ This installs `con-app.exe` and `con-cli.exe` into the same PATH directory.
 Or download `con-windows-x86_64.zip` from the latest
 [Release](https://github.com/nowledge-co/con-terminal/releases).
 
-For Scoop users, here's how to install:
+**Windows / Scoop** (community)
 
 ```powershell
 scoop bucket add jam https://github.com/EFLKumo/jam
 scoop install jam/con-terminal
 ```
 
-This will make con portable and add `con-app` and `con-cli` to your PATH.
+The Scoop manifest is maintained by
+[`EFLKumo`](https://github.com/EFLKumo) in the
+[`jam`](https://github.com/EFLKumo/jam) bucket. It installs a portable Con and
+adds `con-app` and `con-cli` to your PATH.
 
 To build from source, see `HACKING.md`.
 
