@@ -1460,10 +1460,10 @@ fn inherit_shell_env() {
         }
     };
 
-    // Drain stdout on a background thread so the pipe never fills up and
-    // deadlocks the child. We use a channel so we can abandon the reader
-    // if the deadline is reached (e.g. a background process inherits stdout
-    // and keeps the pipe open after the shell exits).
+    // Read stdout incrementally on a background thread, sending chunks as they
+    // arrive. The main thread signals "child exited" via a second channel so
+    // the reader can stop without waiting for EOF (which may never come if a
+    // background process inherited stdout).
     let mut stdout_pipe = match child.stdout.take() {
         Some(p) => p,
         None => {
@@ -1471,11 +1471,50 @@ fn inherit_shell_env() {
             return;
         }
     };
-    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+
+    // Set the pipe to non-blocking so the reader thread can poll and check
+    // the stop signal without blocking forever on a single read call.
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        unsafe extern "C" {
+            fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+        }
+        #[cfg(target_os = "macos")]
+        const O_NONBLOCK: i32 = 0x0004;
+        #[cfg(target_os = "linux")]
+        const O_NONBLOCK: i32 = 0x0800;
+        const F_GETFL: i32 = 3;
+        const F_SETFL: i32 = 4;
+        let fd = stdout_pipe.as_raw_fd();
+        unsafe {
+            let flags = fcntl(fd, F_GETFL);
+            if flags >= 0 {
+                fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+            }
+        }
+    }
+
+    let (data_tx, data_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
     let reader_handle = std::thread::spawn(move || {
         let mut buf = Vec::new();
-        stdout_pipe.read_to_end(&mut buf).ok();
-        let _ = tx.send(buf);
+        let mut tmp = [0u8; 4096];
+        loop {
+            // Check if the main thread signalled stop.
+            if stop_rx.try_recv().is_ok() {
+                break;
+            }
+            match stdout_pipe.read(&mut tmp) {
+                Ok(0) => break, // EOF
+                Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = data_tx.send(buf);
     });
 
     // Wait for the child with a deadline.
@@ -1491,9 +1530,7 @@ fn inherit_shell_env() {
                     );
                     let _ = child.kill();
                     let _ = child.wait();
-                    // Killing the child closes the write end of the pipe, so
-                    // the reader thread gets EOF and exits. Join it to ensure
-                    // no thread is running before apply_to_env calls set_var.
+                    let _ = stop_tx.send(());
                     let _ = reader_handle.join();
                     return;
                 }
@@ -1501,18 +1538,19 @@ fn inherit_shell_env() {
             }
             Err(e) => {
                 log::debug!("inherit_shell_env: try_wait error: {e}");
+                let _ = stop_tx.send(());
                 let _ = reader_handle.join();
                 return;
             }
         }
     }
 
-    // Collect stdout with the remaining deadline — if a background process
-    // inherited the pipe and keeps it open, use whatever was buffered so far
-    // (empty on timeout). unwrap_or_default() means we always proceed on this
-    // thread and never call set_var from a concurrent context.
+    // Child exited — signal the reader to stop (it may still be draining
+    // buffered bytes) and collect whatever was read so far.
+    let _ = stop_tx.send(());
     let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-    let raw = rx.recv_timeout(remaining).unwrap_or_default();
+    let raw = data_rx.recv_timeout(remaining).unwrap_or_default();
+    let _ = reader_handle.join();
     let stdout = match std::str::from_utf8(&raw) {
         Ok(s) => s,
         Err(_) => return,
