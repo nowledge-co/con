@@ -1489,14 +1489,55 @@ fn inherit_shell_proxy_env() {
     // The shell may print noise to stdout from rc files; we parse the JSON
     // object by scanning for the first `{` in the output, matching Zed's
     // parse_env_map_from_noisy_output strategy.
-    let cmd_str = format!("{} --printenv", self_exe.display());
-    let output = match Command::new(&shell)
+    // Single-quote the exe path so spaces / metacharacters in bundle paths
+    // (e.g. `/Applications/Con Terminal.app/...`) don't get word-split by sh.
+    let exe_str = self_exe.display().to_string();
+    let quoted = exe_str.replace('\'', r"'\''");
+    let cmd_str = format!("'{}' --printenv", quoted);
+
+    // Spawn with a 5 s timeout — shell rc files can hang on slow NFS mounts,
+    // SSH agent prompts, etc.  We must not block the GUI from appearing.
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+    let mut child = match Command::new(&shell)
         .args(["-l", "-i", "-c", &cmd_str])
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
     {
-        Ok(o) => o,
+        Ok(c) => c,
         Err(e) => {
             log::debug!("inherit_shell_proxy_env: could not run {shell}: {e}");
+            return;
+        }
+    };
+
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break, // exited
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    log::debug!(
+                        "inherit_shell_proxy_env: shell timed out after {}s, killing",
+                        TIMEOUT.as_secs()
+                    );
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => {
+                log::debug!("inherit_shell_proxy_env: try_wait error: {e}");
+                return;
+            }
+        }
+    }
+
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => {
+            log::debug!("inherit_shell_proxy_env: wait_with_output error: {e}");
             return;
         }
     };
@@ -1568,13 +1609,6 @@ fn main() {
     #[cfg(target_os = "windows")]
     install_seh_filter();
 
-    // Inherit proxy env vars from the login shell before any network
-    // client is constructed.  GUI apps on macOS/Linux don't get the
-    // shell environment, so HTTP_PROXY / HTTPS_PROXY etc. are missing
-    // unless we source them explicitly.
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    inherit_shell_proxy_env();
-
     // Always capture backtraces unless the user already set a
     // preference. `full` prints symbols + line numbers when debug info
     // is present; harmless in release.
@@ -1583,8 +1617,8 @@ fn main() {
         unsafe { std::env::set_var("RUST_BACKTRACE", "full") };
     }
 
-    // Default to `info` for our crates if the user didn't set RUST_LOG,
-    // so early-init traces are visible without an explicit opt-in.
+    // Init the logger before inherit_shell_proxy_env so its log::info!/debug!
+    // calls are visible when debugging proxy issues.
     let mut builder = env_logger::Builder::from_default_env();
     if std::env::var_os("RUST_LOG").is_none() {
         builder.filter_level(log::LevelFilter::Info);
@@ -1607,6 +1641,13 @@ fn main() {
     }
     builder.init();
 
+    // Inherit proxy env vars from the login shell before any network
+    // client is constructed.  GUI apps on macOS/Linux don't get the
+    // shell environment, so HTTP_PROXY / HTTPS_PROXY etc. are missing
+    // unless we source them explicitly.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    inherit_shell_proxy_env();
+
     log::info!("con starting (pid {})", std::process::id());
     if let Some(path) = log_file_path.as_ref() {
         log::info!("logging to {}", path.display());
@@ -1618,7 +1659,8 @@ fn main() {
     let config = con_core::Config::load().unwrap_or_default();
     log::info!("config loaded");
     // Apply [network] proxy config — overrides any shell-inherited env vars.
-    config.network.apply_to_env();
+    // SAFETY: single-threaded at this point in startup; no other threads spawned yet.
+    unsafe { config.network.apply_to_env() };
 
     let app = gpui_platform::application()
         .with_quit_mode(QuitMode::Explicit)

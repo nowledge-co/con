@@ -514,11 +514,15 @@ impl NetworkConfig {
     /// pick them up automatically.
     ///
     /// Config values take precedence over whatever the shell env already has.
-    pub fn apply_to_env(&self) {
+    ///
+    /// # Safety
+    ///
+    /// Must be called from a single-threaded context (e.g. early in `main`)
+    /// before any other threads are spawned, because `std::env::set_var` is
+    /// not thread-safe.
+    pub unsafe fn apply_to_env(&self) {
         if let Some(ref v) = self.http_proxy {
             if !v.is_empty() {
-                // SAFETY: called from the main thread before any network
-                // clients are constructed; no concurrent env reads.
                 unsafe {
                     std::env::set_var("HTTP_PROXY", v);
                     std::env::set_var("http_proxy", v);
@@ -727,7 +731,8 @@ fn replace_file(tmp_path: &Path, path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Config, DEFAULT_TERMINAL_FONT_FAMILY, SkillsConfig, sanitize_terminal_font_family,
+        Config, DEFAULT_TERMINAL_FONT_FAMILY, NetworkConfig, SkillsConfig,
+        sanitize_terminal_font_family,
     };
 
     #[test]
@@ -824,5 +829,80 @@ quick_terminal = "cmd-\\"
 
         assert!(config.keybindings.quick_terminal_enabled);
         assert_eq!(config.keybindings.quick_terminal, "cmd-\\");
+    }
+
+    #[test]
+    fn network_config_defaults_to_empty() {
+        let config = NetworkConfig::default();
+        assert!(config.http_proxy.is_none());
+        assert!(config.https_proxy.is_none());
+    }
+
+    #[test]
+    fn network_config_deserializes_from_toml() {
+        let content = r#"
+[network]
+http_proxy  = "http://127.0.0.1:1086"
+https_proxy = "http://127.0.0.1:1086"
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+        assert_eq!(
+            config.network.http_proxy.as_deref(),
+            Some("http://127.0.0.1:1086")
+        );
+        assert_eq!(
+            config.network.https_proxy.as_deref(),
+            Some("http://127.0.0.1:1086")
+        );
+    }
+
+    #[test]
+    fn network_config_missing_section_is_default() {
+        let content = r#"
+[terminal]
+font_size = 14.0
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+        assert!(config.network.http_proxy.is_none());
+        assert!(config.network.https_proxy.is_none());
+    }
+
+    #[test]
+    fn network_config_partial_fields() {
+        let content = r#"
+[network]
+http_proxy = "http://proxy.example.com:8080"
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+        assert_eq!(
+            config.network.http_proxy.as_deref(),
+            Some("http://proxy.example.com:8080")
+        );
+        assert!(config.network.https_proxy.is_none());
+    }
+
+    #[test]
+    fn network_config_round_trips_through_serialization() {
+        let original = NetworkConfig {
+            http_proxy: Some("http://127.0.0.1:1086".to_string()),
+            https_proxy: Some("http://127.0.0.1:1087".to_string()),
+        };
+        let serialized = toml::to_string(&original).unwrap();
+        let deserialized: NetworkConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(original.http_proxy, deserialized.http_proxy);
+        assert_eq!(original.https_proxy, deserialized.https_proxy);
+    }
+
+    #[test]
+    fn network_config_empty_strings_are_preserved() {
+        // Empty strings are valid TOML values; apply_to_env skips them.
+        let content = r#"
+[network]
+http_proxy  = ""
+https_proxy = ""
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+        assert_eq!(config.network.http_proxy.as_deref(), Some(""));
+        assert_eq!(config.network.https_proxy.as_deref(), Some(""));
     }
 }

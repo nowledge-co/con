@@ -760,7 +760,10 @@ impl ConWorkspace {
 
         // Apply network/proxy config so new values take effect immediately
         // for any subsequent requests (Rig agent, model registry, updater).
-        full_config.network.apply_to_env();
+        // SAFETY: GPUI's main thread is the sole writer of these env vars;
+        // reqwest clients read proxy env lazily at construction time, not
+        // concurrently with this write.
+        unsafe { full_config.network.apply_to_env() };
 
         let term_config = full_config.terminal.clone();
         let appearance_config = full_config.appearance.clone();
