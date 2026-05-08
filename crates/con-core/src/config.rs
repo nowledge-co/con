@@ -539,7 +539,7 @@ impl NetworkConfig {
                 log::info!("network: {upper} set from config");
             },
             Some(_empty) => unsafe {
-                // Explicitly cleared by the user — remove any inherited value.
+                // Explicitly cleared by the user (empty string) — remove any inherited value.
                 std::env::remove_var(upper);
                 std::env::remove_var(lower);
                 log::info!("network: {upper} cleared from config");
