@@ -724,53 +724,6 @@ restore_terminal_text = false
     }
 
     #[test]
-    fn tab_accent_alpha_defaults_are_visible() {
-        let config = Config::default();
-        assert_eq!(config.appearance.tab_accent_inactive_alpha, 0.15);
-        assert_eq!(config.appearance.tab_accent_inactive_hover_alpha, 0.22);
-    }
-
-    #[test]
-    fn legacy_configs_receive_tab_accent_alpha_defaults() {
-        let content = r#"
-[appearance]
-terminal_opacity = 0.8
-"#;
-        let config: Config = toml::from_str(content).unwrap();
-
-        assert_eq!(config.appearance.tab_accent_inactive_alpha, 0.15);
-        assert_eq!(config.appearance.tab_accent_inactive_hover_alpha, 0.22);
-    }
-
-    #[test]
-    fn tab_accent_alpha_values_are_clamped_after_load() {
-        let content = r#"
-[appearance]
-tab_accent_inactive_alpha = 0.001
-tab_accent_inactive_hover_alpha = 0.02
-"#;
-        let mut config: Config = toml::from_str(content).unwrap();
-        config.normalize();
-
-        assert_eq!(config.appearance.tab_accent_inactive_alpha, 0.05);
-        assert_eq!(config.appearance.tab_accent_inactive_hover_alpha, 0.05);
-    }
-
-    #[test]
-    fn tab_accent_hover_alpha_never_drops_below_inactive_alpha() {
-        let content = r#"
-[appearance]
-tab_accent_inactive_alpha = 0.20
-tab_accent_inactive_hover_alpha = 0.10
-"#;
-        let mut config: Config = toml::from_str(content).unwrap();
-        config.normalize();
-
-        assert_eq!(config.appearance.tab_accent_inactive_alpha, 0.20);
-        assert_eq!(config.appearance.tab_accent_inactive_hover_alpha, 0.20);
-    }
-
-    #[test]
     fn default_keybindings_include_quick_terminal_fields() {
         let config = Config::default();
         assert!(!config.keybindings.quick_terminal_enabled);

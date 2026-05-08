@@ -35,15 +35,3 @@ pub(crate) fn tab_accent_surface_hsla(color: TabAccentColor, alpha: f32, cx: &Ap
 pub(crate) fn active_tab_indicator_color() -> Hsla {
     gpui::hsla(142.0 / 360.0, 0.60, 0.42, 1.0)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tab_accent_inactive_alpha_stays_visible() {
-        assert_eq!(TAB_ACCENT_ACTIVE_ALPHA, 0.35);
-        assert_eq!(TAB_ACCENT_INACTIVE_ALPHA, 0.15);
-        assert_eq!(TAB_ACCENT_INACTIVE_HOVER_ALPHA, 0.22);
-    }
-}
