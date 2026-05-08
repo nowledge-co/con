@@ -40,8 +40,20 @@ impl ConWorkspace {
             return;
         }
         self.record_input_history(content);
-        if !self.agent_panel_open {
+        if let Some(target) =
+            super::chrome::agent_panel_motion_target_for_agent_request(self.agent_panel_open)
+        {
             self.agent_panel_open = true;
+            let duration = Self::terminal_adjacent_chrome_duration(true, 290, 220);
+            #[cfg(target_os = "macos")]
+            if !duration.is_zero() {
+                self.arm_chrome_transition_underlay(duration + Duration::from_millis(80));
+            }
+            #[cfg(target_os = "macos")]
+            if duration.is_zero() {
+                self.arm_agent_panel_snap_guard(cx);
+            }
+            self.agent_panel_motion.set_target(target, duration);
         }
         self.agent_panel.update(cx, |panel, cx| {
             panel.add_message("user", content, cx);

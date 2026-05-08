@@ -193,6 +193,14 @@ const CONTROL_METHODS: &[(&str, &str)] = &[
         "agent.new_conversation",
         "Start a fresh built-in agent conversation for a tab.",
     ),
+    (
+        "agent.open_panel_for_request",
+        "Open the agent panel via the agent-request path (drives motion state) and return panel state.",
+    ),
+    (
+        "agent.panel_state",
+        "Return the current agent panel open/visible state.",
+    ),
 ];
 
 pub fn control_methods() -> Vec<ControlMethodInfo> {
@@ -375,6 +383,14 @@ pub enum ControlCommand {
     AgentNewConversation {
         tab_index: Option<usize>,
     },
+    /// Open the agent panel via the "Ask AI" / agent-request path (drives motion state).
+    AgentOpenPanelForRequest {
+        tab_index: Option<usize>,
+    },
+    /// Return the current agent panel open/visible state.
+    AgentPanelState {
+        tab_index: Option<usize>,
+    },
 }
 
 impl ControlCommand {
@@ -410,6 +426,8 @@ impl ControlCommand {
             Self::TmuxRun { .. } => "tmux.run",
             Self::AgentAsk { .. } => "agent.ask",
             Self::AgentNewConversation { .. } => "agent.new_conversation",
+            Self::AgentOpenPanelForRequest { .. } => "agent.open_panel_for_request",
+            Self::AgentPanelState { .. } => "agent.panel_state",
         }
     }
 
@@ -651,6 +669,8 @@ impl ControlCommand {
                 "timeout_secs": timeout_secs,
             }),
             Self::AgentNewConversation { tab_index } => json!({ "tab_index": tab_index }),
+            Self::AgentOpenPanelForRequest { tab_index } => json!({ "tab_index": tab_index }),
+            Self::AgentPanelState { tab_index } => json!({ "tab_index": tab_index }),
         }
     }
 
@@ -870,6 +890,18 @@ impl ControlCommand {
             "agent.new_conversation" => {
                 let params: TabScopedParams = decode_params(params)?;
                 Ok(Self::AgentNewConversation {
+                    tab_index: params.tab_index,
+                })
+            }
+            "agent.open_panel_for_request" => {
+                let params: TabScopedParams = decode_params(params)?;
+                Ok(Self::AgentOpenPanelForRequest {
+                    tab_index: params.tab_index,
+                })
+            }
+            "agent.panel_state" => {
+                let params: TabScopedParams = decode_params(params)?;
+                Ok(Self::AgentPanelState {
                     tab_index: params.tab_index,
                 })
             }

@@ -1427,6 +1427,160 @@ fn install_seh_filter() {
     }
 }
 
+/// On macOS and Linux, GUI apps launched from the Dock / Spotlight / a
+/// desktop launcher do not inherit the user's shell environment. Variables
+/// like `PATH`, `GOPATH`, `NVM_DIR`, `HTTP_PROXY`, etc. that are set in
+/// shell rc files are absent from the process environment.
+///
+/// Runs `<login-shell> -l -c 'env'` and full-overrides the process env with
+/// the shell's values, matching Zed's `load_login_shell_environment` strategy.
+/// `SHLVL` is skipped so terminal children start at level 1.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn inherit_shell_env() {
+    use std::io::Read;
+    use std::process::Command;
+
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+
+    // Run `<shell> -l -c 'env'`.
+    // -l : login shell — sources /etc/profile, ~/.zprofile, ~/.bash_profile …
+    //      (no -i: avoids interactive-only rc noise and TTY hangs)
+    const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+    let mut child = match Command::new(&shell)
+        .args(["-l", "-c", "env"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            log::debug!("inherit_shell_env: could not run {shell}: {e}");
+            return;
+        }
+    };
+
+    // Read stdout incrementally on a background thread, sending chunks as they
+    // arrive. The main thread signals "child exited" via a second channel so
+    // the reader can stop without waiting for EOF (which may never come if a
+    // background process inherited stdout).
+    let mut stdout_pipe = match child.stdout.take() {
+        Some(p) => p,
+        None => {
+            log::debug!("inherit_shell_env: no stdout pipe");
+            return;
+        }
+    };
+
+    // Set the pipe to non-blocking so the reader thread can poll and check
+    // the stop signal without blocking forever on a single read call.
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        unsafe extern "C" {
+            fn fcntl(fd: i32, cmd: i32, ...) -> i32;
+        }
+        #[cfg(target_os = "macos")]
+        const O_NONBLOCK: i32 = 0x0004;
+        #[cfg(target_os = "linux")]
+        const O_NONBLOCK: i32 = 0x0800;
+        const F_GETFL: i32 = 3;
+        const F_SETFL: i32 = 4;
+        let fd = stdout_pipe.as_raw_fd();
+        unsafe {
+            let flags = fcntl(fd, F_GETFL);
+            if flags >= 0 {
+                fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+            }
+        }
+    }
+
+    let (data_tx, data_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+    let reader_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 4096];
+        loop {
+            // Check if the main thread signalled stop.
+            if stop_rx.try_recv().is_ok() {
+                break;
+            }
+            match stdout_pipe.read(&mut tmp) {
+                Ok(0) => break, // EOF
+                Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = data_tx.send(buf);
+    });
+
+    // Wait for the child with a deadline.
+    let deadline = std::time::Instant::now() + TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    log::debug!(
+                        "inherit_shell_env: shell timed out after {}s, killing",
+                        TIMEOUT.as_secs()
+                    );
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stop_tx.send(());
+                    let _ = reader_handle.join();
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => {
+                log::debug!("inherit_shell_env: try_wait error: {e}");
+                let _ = stop_tx.send(());
+                let _ = reader_handle.join();
+                return;
+            }
+        }
+    }
+
+    // Child exited — signal the reader to stop (it may still be draining
+    // buffered bytes) and collect whatever was read so far.
+    let _ = stop_tx.send(());
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    let raw = data_rx.recv_timeout(remaining).unwrap_or_default();
+    let _ = reader_handle.join();
+    let stdout = match std::str::from_utf8(&raw) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    // Parse KEY=VALUE lines. Values may contain `=` so split on the first `=` only.
+    // Full override — shell values win, matching Zed's load_login_shell_environment.
+    // Skip SHLVL: the login shell increments it, and terminals spawned by con
+    // would inherit it and increment again (starting at 2 instead of 1).
+    let mut inherited = 0usize;
+    for line in stdout.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key == "SHLVL" {
+            continue;
+        }
+        // SAFETY: single-threaded at this point in startup; no other
+        // threads have been spawned yet.
+        unsafe { std::env::set_var(key, value) };
+        inherited += 1;
+    }
+
+    if inherited > 0 {
+        log::info!("inherit_shell_env: inherited {inherited} variables from login shell");
+    } else {
+        log::debug!("inherit_shell_env: no new variables found in login shell env");
+    }
+}
+
 fn main() {
     // Install a panic hook before anything else so every panic —
     // including ones from background threads that would otherwise be
@@ -1449,8 +1603,8 @@ fn main() {
         unsafe { std::env::set_var("RUST_BACKTRACE", "full") };
     }
 
-    // Default to `info` for our crates if the user didn't set RUST_LOG,
-    // so early-init traces are visible without an explicit opt-in.
+    // Init the logger before inherit_shell_env so its log::info!/debug!
+    // calls are visible when debugging proxy issues.
     let mut builder = env_logger::Builder::from_default_env();
     if std::env::var_os("RUST_LOG").is_none() {
         builder.filter_level(log::LevelFilter::Info);
@@ -1473,6 +1627,12 @@ fn main() {
     }
     builder.init();
 
+    // Inherit the full login shell environment before any network client is
+    // constructed. GUI apps on macOS/Linux launched from Dock/Spotlight don't
+    // get PATH, GOPATH, HTTP_PROXY, etc. from shell rc files.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    inherit_shell_env();
+
     log::info!("con starting (pid {})", std::process::id());
     if let Some(path) = log_file_path.as_ref() {
         log::info!("logging to {}", path.display());
@@ -1483,6 +1643,9 @@ fn main() {
 
     let config = con_core::Config::load().unwrap_or_default();
     log::info!("config loaded");
+    // Apply [network] proxy config — overrides any shell-inherited env vars.
+    // SAFETY: single-threaded at this point in startup; no other threads spawned yet.
+    unsafe { config.network.apply_to_env() };
 
     let app = gpui_platform::application()
         .with_quit_mode(QuitMode::Explicit)

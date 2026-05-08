@@ -1,3 +1,4 @@
+use super::chrome::agent_panel_motion_target_for_agent_request;
 use super::{
     ConWorkspace, SPLIT_PREVIEW_SEAM_THICKNESS, SplitDirection, SplitPlacement,
     TabRenameStateSnapshot, centered_drag_preview_origin, clamp_preview_origin_to_tab_bar,
@@ -15,6 +16,20 @@ use crate::sidebar::{
     DraggedTabPreviewConstraint, constrained_drag_preview_x_shift, constrained_drag_preview_y_shift,
 };
 use gpui::{Bounds, Point, Size, px};
+
+#[test]
+fn agent_request_opening_panel_drives_panel_motion_to_visible() {
+    // Always drives to 1.0 regardless of current open state, so a stale
+    // agent_panel_open flag (set without motion) is corrected on next request.
+    assert_eq!(
+        agent_panel_motion_target_for_agent_request(false),
+        Some(1.0)
+    );
+    assert_eq!(
+        agent_panel_motion_target_for_agent_request(true),
+        Some(1.0)
+    );
+}
 
 #[test]
 fn tab_drag_preview_origin_is_clamped_to_tab_bar_height() {

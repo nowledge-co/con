@@ -758,6 +758,10 @@ impl ConWorkspace {
             }
         }
 
+        // Note: network/proxy config changes take effect on next app restart.
+        // apply_to_env() is unsafe (requires single-threaded startup context)
+        // and must not be called here while background threads are active.
+
         let term_config = full_config.terminal.clone();
         let appearance_config = full_config.appearance.clone();
         self.apply_terminal_and_ui_appearance(&term_config, &appearance_config, window, cx);
