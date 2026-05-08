@@ -68,8 +68,17 @@ impl ConWorkspace {
             return;
         }
 
+        let mut created_any = false;
         for req in pending {
-            let terminal = self.create_terminal(None, window, cx);
+            if req.tab_idx >= self.tabs.len() {
+                let _ = req.response_tx.send(con_agent::PaneResponse::Error(format!(
+                    "Tab {} is no longer available.",
+                    req.tab_idx + 1
+                )));
+                continue;
+            }
+
+            let terminal = self.create_terminal(req.cwd.as_deref(), window, cx);
             let direction = match req.location {
                 con_agent::tools::PaneCreateLocation::Right => SplitDirection::Horizontal,
                 con_agent::tools::PaneCreateLocation::Down => SplitDirection::Vertical,
@@ -129,8 +138,12 @@ impl ConWorkspace {
                 is_alive: terminal.is_alive(cx),
                 has_shell_integration: terminal.has_shell_integration(cx),
             });
+            created_any = true;
         }
 
+        if created_any {
+            self.save_session(cx);
+        }
         cx.notify();
         window.refresh();
     }

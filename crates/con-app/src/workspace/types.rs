@@ -275,6 +275,7 @@ pub(super) struct ResolvedSurfaceTarget {
 /// A deferred create-pane request waiting for a window-aware context.
 pub(super) struct PendingCreatePane {
     pub(super) command: Option<String>,
+    pub(super) cwd: Option<String>,
     pub(super) tab_idx: usize,
     pub(super) location: con_agent::tools::PaneCreateLocation,
     pub(super) response_tx: crossbeam_channel::Sender<con_agent::PaneResponse>,
