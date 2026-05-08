@@ -1,0 +1,14 @@
+# system/tree.test
+# Tree: verify workspace structure.
+
+cmd --json tree  # tree has tabs array
+---- contains
+"tabs"
+
+cmd --json tree  # tab 1 has panes
+---- json-subset
+{"tabs":[{"tab_index":1}]}
+
+cmd --json tree  # pane has active_surface_id
+---- contains
+"active_surface_id"

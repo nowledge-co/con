@@ -2,24 +2,19 @@
 # Basic tab lifecycle: list, new, close.
 
 cmd --json tabs list  # at least one tab exists
-match json-subset
-----
+---- json-subset
 {"tabs":[{"index":1}]}
 
 cmd tabs new  # create a new tab succeeds
-match ok
-----
+---- ok
 
 cmd --json tabs list  # now have at least 2 tabs
-match contains
-----
+---- contains
 "index":2
 
 cmd --json tabs close --tab 2  # close the tab we just created
-match ok
-----
+---- ok
 
 cmd --json tabs list  # back to 1 tab
-match json-subset
-----
+---- json-subset
 {"tabs":[{"index":1}]}

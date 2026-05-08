@@ -1,0 +1,17 @@
+# panes/split.test
+# Pane split: create a split pane and verify layout.
+
+cmd --json panes list --tab 1  # start with 1 pane
+---- json-subset
+{"panes":[{"index":1}]}
+
+cmd --json panes create --tab 1 --location right  # split right
+---- ok
+
+cmd --json panes list --tab 1  # now have 2 panes
+---- contains
+"index":2
+
+cmd --json panes list --tab 1  # both panes are alive
+---- json-subset
+{"panes":[{"is_alive":true},{"is_alive":true}]}

@@ -2,16 +2,13 @@
 # Smoke test: con is running and responds to identify.
 
 cmd --json identify  # version field present
-match json-subset
-----
+---- json-subset
 {"version":"0.1.0"}
 
 cmd --json identify  # socket_path field present
-match contains
-----
+---- contains
 "socket_path"
 
 cmd --json capabilities  # methods array present
-match json-subset
-----
+---- json-subset
 {"methods":[{"method":"system.identify"}]}

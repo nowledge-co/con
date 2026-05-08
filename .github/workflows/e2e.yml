@@ -1,0 +1,101 @@
+name: e2e
+
+# End-to-end tests using con-test against a real con process.
+# Runs on macOS only — con requires a display for the GPUI window.
+# con-test launches con automatically, resets state between files,
+# and kills the process on exit.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/e2e.yml"
+      - "crates/con-test/**"
+      - "crates/con-app/**"
+      - "crates/con-core/**"
+      - "crates/con-cli/**"
+      - "crates/con-ghostty/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  pull_request:
+    paths:
+      - ".github/workflows/e2e.yml"
+      - "crates/con-test/**"
+      - "crates/con-app/**"
+      - "crates/con-core/**"
+      - "crates/con-cli/**"
+      - "crates/con-ghostty/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  # Suppress con's own log output during tests
+  RUST_LOG: error
+
+jobs:
+  e2e:
+    name: e2e (macos-latest)
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Zig 0.15.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIG_VERSION="0.15.2"
+          ZIG_ARCH="aarch64"
+          # Use x86_64 on Intel runners
+          if [[ "$(uname -m)" == "x86_64" ]]; then
+            ZIG_ARCH="x86_64"
+          fi
+          ZIG_DIR="zig-${ZIG_ARCH}-macos-${ZIG_VERSION}"
+          ZIG_TARBALL="${ZIG_DIR}.tar.xz"
+          for base_url in \
+            "https://zigmirror.hryx.net/zig" \
+            "https://zig.linus.dev/zig" \
+            "https://ziglang.org/download/${ZIG_VERSION}"; do
+            if curl --retry 3 --retry-all-errors --retry-delay 5 \
+              --connect-timeout 30 --max-time 120 \
+              -sSfL "${base_url}/${ZIG_TARBALL}" \
+              -o "/tmp/${ZIG_TARBALL}"; then
+              break
+            fi
+          done
+          test -s "/tmp/${ZIG_TARBALL}"
+          mkdir -p "$HOME/.local"
+          tar -xJf "/tmp/${ZIG_TARBALL}" -C "$HOME/.local"
+          echo "$HOME/.local/${ZIG_DIR}" >> "$GITHUB_PATH"
+          "$HOME/.local/${ZIG_DIR}/zig" version
+
+      - name: Build con, con-cli, con-test
+        run: cargo build -p con -p con-cli -p con-test
+
+      - name: Run con-test unit tests (parser)
+        run: cargo test -p con-test
+
+      - name: Run E2E tests
+        run: |
+          ./target/debug/con-test \
+            --startup-timeout 30 \
+            crates/con-test/testdata/
+        env:
+          # Write con logs to a file so they don't pollute test output.
+          # Uploaded as an artifact on failure for debugging.
+          CON_LOG_FILE: /tmp/con-e2e.log
+
+      - name: Upload con log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: con-e2e-log
+          path: /tmp/con-e2e.log
+          retention-days: 7

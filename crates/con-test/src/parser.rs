@@ -5,33 +5,31 @@
 /// ```text
 /// # This is a comment
 ///
-/// # A step block:
-/// cmd <con-cli arguments...>
-/// match <mode>          # optional, default: contains
-/// ----
+/// cmd <con-cli arguments...>   # optional inline label
+/// ---- <mode>                  # mode is optional, default: contains
 /// expected output here
-/// (blank line or next cmd ends the expected block)
 /// ```
 ///
-/// Match modes:
-///   exact        — full string equality (after trimming trailing whitespace per line)
-///   contains     — actual output contains the expected string (default)
-///   json-subset  — every key/value in expected JSON exists in actual JSON
-///   regex        — expected is a regex pattern matched against actual
-///   ok           — only checks that con-cli exited 0; expected block is ignored
-///   error        — checks that con-cli exited non-zero; expected block matched against stderr
-///
-/// A step may have an optional label comment on the same line as `cmd`:
-///   cmd --json tabs list   # verify initial tab count
+/// The `----` line optionally carries the match mode:
+///   ----              → contains (default)
+///   ---- exact        → full string equality
+///   ---- contains     → actual output contains the expected string
+///   ---- json-subset  → every key/value in expected JSON exists in actual JSON
+///   ---- ok           → only checks exit code == 0; expected block ignored
+///   ---- error        → checks exit code != 0; expected matched against stderr
+///   ---- regex        → expected is a regex pattern (not yet implemented)
 ///
 /// Blank lines and lines starting with `#` outside a step block are ignored.
+///
+/// Legacy `match <mode>` line between `cmd` and `----` is still accepted for
+/// backwards compatibility but the inline `---- <mode>` form is preferred.
 use anyhow::{Context, Result, bail};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MatchMode {
     /// Full string equality (trailing whitespace trimmed per line)
     Exact,
-    /// Actual output contains the expected string
+    /// Actual output contains the expected string (default)
     Contains,
     /// Expected is valid JSON; every key present in expected must match in actual
     JsonSubset,
@@ -50,15 +48,19 @@ impl Default for MatchMode {
 }
 
 impl MatchMode {
-    fn parse(s: &str) -> Result<Self> {
+    pub fn parse(s: &str) -> Result<Self> {
         match s.trim() {
+            "" => Ok(MatchMode::Contains),
             "exact" => Ok(MatchMode::Exact),
             "contains" => Ok(MatchMode::Contains),
             "json-subset" => Ok(MatchMode::JsonSubset),
             "regex" => Ok(MatchMode::Regex),
             "ok" => Ok(MatchMode::Ok),
             "error" => Ok(MatchMode::Error),
-            other => bail!("unknown match mode {:?}; valid: exact, contains, json-subset, regex, ok, error", other),
+            other => bail!(
+                "unknown match mode {:?}; valid: exact, contains, json-subset, ok, error",
+                other
+            ),
         }
     }
 }
@@ -88,18 +90,18 @@ pub fn parse_source(source: &str, origin: String) -> Result<Vec<Step>> {
     let mut i = 0;
 
     while i < lines.len() {
-        let raw = lines[i];
-        let trimmed = raw.trim();
+        let trimmed = lines[i].trim();
 
         // Skip blank lines and standalone comments
-        if trimmed.is_empty() || (trimmed.starts_with('#') && !trimmed.starts_with("cmd ")) {
+        if trimmed.is_empty() || trimmed.starts_with('#') {
             i += 1;
             continue;
         }
 
-        if let Some(rest) = trimmed.strip_prefix("cmd ").or_else(|| {
-            if trimmed == "cmd" { Some("") } else { None }
-        }) {
+        if let Some(rest) = trimmed
+            .strip_prefix("cmd ")
+            .or_else(|| if trimmed == "cmd" { Some("") } else { None })
+        {
             let cmd_line = i + 1; // 1-based
 
             // Split inline label comment: `cmd foo bar  # my label`
@@ -115,25 +117,43 @@ pub fn parse_source(source: &str, origin: String) -> Result<Vec<Step>> {
 
             i += 1;
 
-            // Optional `match <mode>` line
-            let mut match_mode = MatchMode::default();
+            // Legacy: optional `match <mode>` line before `----`
+            let mut legacy_mode: Option<MatchMode> = None;
             if i < lines.len() {
                 let next = lines[i].trim();
                 if let Some(mode_str) = next.strip_prefix("match ") {
-                    match_mode = MatchMode::parse(mode_str)
-                        .with_context(|| format!("{origin}:{}: invalid match mode", i + 1))?;
+                    legacy_mode = Some(
+                        MatchMode::parse(mode_str)
+                            .with_context(|| format!("{origin}:{}: invalid match mode", i + 1))?,
+                    );
                     i += 1;
                 }
             }
 
-            // Expect `----` separator
-            if i >= lines.len() || lines[i].trim() != "----" {
+            // Expect `----` separator, optionally followed by match mode
+            if i >= lines.len() {
                 bail!(
-                    "{origin}:{}: expected `----` after cmd/match block, got {:?}",
-                    i + 1,
-                    lines.get(i).unwrap_or(&"<eof>")
+                    "{origin}:{}: expected `----` after cmd block, got <eof>",
+                    i + 1
                 );
             }
+            let sep_line = lines[i].trim();
+            if !sep_line.starts_with("----") {
+                bail!(
+                    "{origin}:{}: expected `----` after cmd block, got {:?}",
+                    i + 1,
+                    sep_line
+                );
+            }
+            // Parse inline mode from `---- <mode>`
+            let inline_mode_str = sep_line.trim_start_matches('-').trim();
+            let match_mode = if let Some(legacy) = legacy_mode {
+                // Legacy `match` line takes precedence if both are present
+                legacy
+            } else {
+                MatchMode::parse(inline_mode_str)
+                    .with_context(|| format!("{origin}:{}: invalid match mode", i + 1))?
+            };
             i += 1; // skip ----
 
             // Collect expected output until blank line or next `cmd` or EOF
@@ -144,19 +164,20 @@ pub fn parse_source(source: &str, origin: String) -> Result<Vec<Step>> {
                 if t.starts_with("cmd ") || t == "cmd" {
                     break;
                 }
-                // A standalone blank line ends the expected block
-                if t.is_empty() && expected_lines.last().map(|l: &&str| l.trim().is_empty()).unwrap_or(true) {
-                    // Only break on the *first* blank line after content
-                    if !expected_lines.is_empty() {
-                        break;
-                    }
+                // A blank line ends the expected block (only after content has started)
+                if t.is_empty() && !expected_lines.is_empty() {
+                    break;
                 }
                 expected_lines.push(line);
                 i += 1;
             }
 
             // Trim trailing blank lines from expected block
-            while expected_lines.last().map(|l: &&str| l.trim().is_empty()).unwrap_or(false) {
+            while expected_lines
+                .last()
+                .map(|l: &&str| l.trim().is_empty())
+                .unwrap_or(false)
+            {
                 expected_lines.pop();
             }
 
@@ -182,9 +203,7 @@ pub fn parse_source(source: &str, origin: String) -> Result<Vec<Step>> {
 }
 
 /// Split `foo bar  # comment` into (`foo bar`, `comment`).
-/// Returns the original string and empty comment if no `#` found.
 fn split_inline_comment(s: &str) -> (&str, &str) {
-    // Find ` #` that is not inside a quoted string (simple heuristic: first ` #`)
     let mut in_single = false;
     let mut in_double = false;
     let bytes = s.as_bytes();
@@ -206,7 +225,6 @@ fn split_inline_comment(s: &str) -> (&str, &str) {
 }
 
 /// Very small shell-word splitter: handles double-quoted strings and backslash escapes.
-/// Does not support single-quoted strings or variable expansion (not needed here).
 pub fn shell_split(s: &str) -> Result<Vec<String>> {
     let mut args: Vec<String> = Vec::new();
     let mut current = String::new();
@@ -244,12 +262,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_simple_step() {
-        let src = r#"
-cmd --json identify
-----
-{"version":
-"#;
+    fn parse_simple_step_default_contains() {
+        let src = "cmd --json identify\n----\n{\"version\":\n";
         let steps = parse_source(src, "test".into()).unwrap();
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].args, vec!["--json", "identify"]);
@@ -258,35 +272,40 @@ cmd --json identify
     }
 
     #[test]
-    fn parse_match_mode_exact() {
-        let src = "cmd --json tabs list\nmatch exact\n----\n{}\n";
+    fn parse_inline_mode_on_separator() {
+        let src = "cmd --json tabs list\n---- exact\n{}\n";
         let steps = parse_source(src, "test".into()).unwrap();
         assert_eq!(steps[0].match_mode, MatchMode::Exact);
     }
 
     #[test]
-    fn parse_multiple_steps() {
-        let src = r#"
-cmd identify
-----
-con
-
-cmd --json tabs list
-match json-subset
-----
-{"tabs":[]}
-"#;
+    fn parse_inline_mode_json_subset() {
+        let src = "cmd --json tabs list\n---- json-subset\n{\"tabs\":[]}\n";
         let steps = parse_source(src, "test".into()).unwrap();
-        assert_eq!(steps.len(), 2);
-        assert_eq!(steps[1].match_mode, MatchMode::JsonSubset);
+        assert_eq!(steps[0].match_mode, MatchMode::JsonSubset);
     }
 
     #[test]
-    fn parse_ok_mode_empty_expected() {
-        let src = "cmd tabs new\nmatch ok\n----\n";
+    fn parse_inline_mode_ok_empty_expected() {
+        let src = "cmd tabs new\n---- ok\n";
         let steps = parse_source(src, "test".into()).unwrap();
         assert_eq!(steps[0].match_mode, MatchMode::Ok);
         assert_eq!(steps[0].expected, "");
+    }
+
+    #[test]
+    fn parse_legacy_match_line_still_works() {
+        let src = "cmd --json tabs list\nmatch json-subset\n----\n{\"tabs\":[]}\n";
+        let steps = parse_source(src, "test".into()).unwrap();
+        assert_eq!(steps[0].match_mode, MatchMode::JsonSubset);
+    }
+
+    #[test]
+    fn parse_multiple_steps() {
+        let src = "cmd identify\n----\ncon\n\ncmd --json tabs list\n---- json-subset\n{\"tabs\":[]}\n";
+        let steps = parse_source(src, "test".into()).unwrap();
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[1].match_mode, MatchMode::JsonSubset);
     }
 
     #[test]

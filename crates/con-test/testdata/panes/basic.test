@@ -2,16 +2,13 @@
 # Basic pane operations: list fields.
 
 cmd --json panes list --tab 1  # at least one pane in tab 1
-match json-subset
-----
+---- json-subset
 {"panes":[{"index":1}]}
 
 cmd --json panes list --tab 1  # pane has pane_id field
-match contains
-----
+---- contains
 "pane_id"
 
 cmd --json panes list --tab 1  # pane has control_capabilities field
-match contains
-----
+---- contains
 "control_capabilities"
