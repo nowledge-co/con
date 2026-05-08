@@ -142,7 +142,8 @@ actions!(
         Cut,
         Copy,
         Paste,
-        SelectAll
+        SelectAll,
+        Minimize
     ]
 );
 
@@ -1277,6 +1278,8 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new("cmd-shift-`", PreviousWindow, None),
         KeyBinding::new("cmd-~", PreviousWindow, None),
         KeyBinding::new("cmd-<", PreviousWindow, None),
+        KeyBinding::new("cmd-m", Minimize, None),
+        KeyBinding::new("cmd-m", Minimize, Some("Input")),
         KeyBinding::new("cmd-h", HideApp, Some("Input")),
         KeyBinding::new("cmd-alt-h", HideOtherApps, Some("Input")),
         KeyBinding::new("cmd-alt-shift-h", ShowAllApps, Some("Input")),
@@ -1838,6 +1841,8 @@ fn main() {
             Menu {
                 name: "Window".into(),
                 items: vec![
+                    MenuItem::action("Minimize", Minimize),
+                    MenuItem::separator(),
                     MenuItem::action("Next Window", NextWindow),
                     MenuItem::action("Previous Window", PreviousWindow),
                 ],
