@@ -153,6 +153,10 @@ pub struct SettingsPanel {
     recording_key: Option<String>,
     #[cfg(target_os = "macos")]
     recording_resume_keybindings: Option<con_core::config::KeybindingConfig>,
+
+    // Network / proxy
+    http_proxy_input: Entity<InputState>,
+    https_proxy_input: Entity<InputState>,
 }
 
 const SIDEBAR_PROVIDERS: &[ProviderKind] = &[
@@ -1229,6 +1233,20 @@ impl SettingsPanel {
             s.set_placeholder("Save as, e.g. flexoki-amber", window, cx);
             s
         });
+        let http_proxy_input = cx.new(|cx| {
+            let mut s = InputState::new(window, cx);
+            let val = config.network.http_proxy.clone().unwrap_or_default();
+            s.set_value(val, window, cx);
+            s.set_placeholder("http://127.0.0.1:1086", window, cx);
+            s
+        });
+        let https_proxy_input = cx.new(|cx| {
+            let mut s = InputState::new(window, cx);
+            let val = config.network.https_proxy.clone().unwrap_or_default();
+            s.set_value(val, window, cx);
+            s.set_placeholder("http://127.0.0.1:1086", window, cx);
+            s
+        });
 
         cx.subscribe(
             &terminal_opacity_slider,
@@ -1469,6 +1487,8 @@ impl SettingsPanel {
             recording_key: None,
             #[cfg(target_os = "macos")]
             recording_resume_keybindings: None,
+            http_proxy_input,
+            https_proxy_input,
         }
     }
 
@@ -2253,6 +2273,20 @@ impl SettingsPanel {
 
         // Keybindings are updated directly via record_keystroke — no reading needed
 
+        // Network / proxy
+        let http_proxy_text = self.http_proxy_input.read(cx).value().trim().to_string();
+        let https_proxy_text = self.https_proxy_input.read(cx).value().trim().to_string();
+        self.config.network.http_proxy = if http_proxy_text.is_empty() {
+            None
+        } else {
+            Some(http_proxy_text)
+        };
+        self.config.network.https_proxy = if https_proxy_text.is_empty() {
+            None
+        } else {
+            Some(https_proxy_text)
+        };
+
         match self.persist_config() {
             Ok(()) => {
                 self.save_error = None;
@@ -2938,6 +2972,20 @@ impl SettingsPanel {
                                         .children(global_presets),
                                 ),
                         ),
+                ),
+        )
+        // Network / proxy
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .child(group_label("Network", &theme))
+                .child(
+                    card(theme, card_opacity)
+                        .child(row_field("HTTP Proxy", &self.http_proxy_input))
+                        .child(row_separator(theme))
+                        .child(row_field("HTTPS Proxy", &self.https_proxy_input)),
                 ),
         )
     }

@@ -857,6 +857,59 @@ impl ConWorkspace {
                 }
                 Err(err) => Self::send_control_result(response_tx, Err(err)),
             },
+            ControlCommand::AgentOpenPanelForRequest { tab_index } => {
+                match self.resolve_control_tab_index(tab_index) {
+                    Ok(tab_idx) => {
+                        if tab_idx == self.active_tab {
+                            if let Some(target) =
+                                super::chrome::agent_panel_motion_target_for_agent_request(
+                                    self.agent_panel_open,
+                                )
+                            {
+                                self.agent_panel_open = true;
+                                let duration = Self::terminal_adjacent_chrome_duration(true, 290, 220);
+                                self.agent_panel_motion.set_target(target, duration);
+                            }
+                        }
+                        let open = if tab_idx == self.active_tab {
+                            self.agent_panel_open
+                        } else {
+                            false
+                        };
+                        Self::send_control_result(
+                            response_tx,
+                            Ok(json!({
+                                "agent_panel": {
+                                    "open": open,
+                                    "content_visible": open,
+                                }
+                            })),
+                        );
+                    }
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                }
+            }
+            ControlCommand::AgentPanelState { tab_index } => {
+                match self.resolve_control_tab_index(tab_index) {
+                    Ok(tab_idx) => {
+                        let open = if tab_idx == self.active_tab {
+                            self.agent_panel_open
+                        } else {
+                            false
+                        };
+                        Self::send_control_result(
+                            response_tx,
+                            Ok(json!({
+                                "agent_panel": {
+                                    "open": open,
+                                    "content_visible": open,
+                                }
+                            })),
+                        );
+                    }
+                    Err(err) => Self::send_control_result(response_tx, Err(err)),
+                }
+            }
         }
     }
 

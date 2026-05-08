@@ -1,5 +1,9 @@
 use super::*;
 
+pub(super) fn agent_panel_motion_target_for_agent_request(already_open: bool) -> Option<f32> {
+    if already_open { None } else { Some(1.0) }
+}
+
 impl ConWorkspace {
     pub(super) const SECONDARY_PANE_OBSERVATION_LINES: usize = 40;
 

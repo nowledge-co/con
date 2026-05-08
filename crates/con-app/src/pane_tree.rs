@@ -14,14 +14,6 @@ use crate::terminal_pane::TerminalPane;
 const RESTORED_SCREEN_TEXT_MAX_LINES: usize = 600;
 const RESTORED_SCREEN_TEXT_MAX_BYTES: usize = 128 * 1024;
 
-fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
-    if alpha.is_finite() {
-        alpha.clamp(0.0, 1.0)
-    } else {
-        crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA
-    }
-}
-
 /// Split direction for pane layout
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SplitDirection {
@@ -1865,28 +1857,12 @@ impl PaneTree {
         has_splits: bool,
         is_zoomed: bool,
         tab_accent_color: Option<con_core::session::TabAccentColor>,
-        tab_accent_inactive_alpha: f32,
+        _tab_accent_inactive_alpha: f32,
         close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         cx: &App,
     ) -> AnyElement {
         let theme = cx.theme();
-        let bar_bg = if is_focused {
-            if let Some(color) = tab_accent_color {
-                crate::tab_colors::tab_accent_surface_hsla(
-                    color,
-                    crate::tab_colors::TAB_ACCENT_ACTIVE_ALPHA,
-                    cx,
-                )
-            } else {
-                theme.tab_bar_segmented
-            }
-        } else if let Some(color) = tab_accent_color {
-            let inactive_alpha = sanitize_tab_accent_alpha(tab_accent_inactive_alpha);
-            crate::tab_colors::tab_accent_surface_hsla(color, inactive_alpha, cx)
-        } else {
-            theme.tab_bar_segmented.opacity(0.78)
-        };
         let title_color = if is_focused {
             theme.foreground.opacity(0.72)
         } else {
@@ -1894,6 +1870,25 @@ impl PaneTree {
         };
         let btn_color = theme.foreground.opacity(0.52);
         let btn_hover_bg = theme.foreground.opacity(0.08);
+
+        // Active-pane indicator dot — same color as the tab accent (or foreground fallback)
+        let dot = if is_focused {
+            let dot_color = if let Some(color) = tab_accent_color {
+                crate::tab_colors::tab_accent_color_hsla(color, cx)
+            } else {
+                theme.success
+            };
+            Some(
+                div()
+                    .flex_shrink_0()
+                    .size(px(6.0))
+                    .rounded_full()
+                    .mr(px(5.0))
+                    .bg(dot_color),
+            )
+        } else {
+            None
+        };
 
         // ⛶/⛶ fullscreen toggle button — always visible
         let zoom_icon = if is_zoomed {
@@ -1990,7 +1985,6 @@ impl PaneTree {
             .h(px(24.0))
             .w_full()
             .px(px(6.0))
-            .bg(bar_bg)
             .cursor_grab()
             .on_drag(
                 dragged,
@@ -1998,9 +1992,13 @@ impl PaneTree {
                     cx.stop_propagation();
                     cx.new(|_| dragged.clone())
                 },
-            )
-            .child(title_el)
-            .child(zoom_btn);
+            );
+
+        if let Some(dot) = dot {
+            bar = bar.child(dot);
+        }
+
+        bar = bar.child(title_el).child(zoom_btn);
 
         if let Some(close) = close_btn {
             bar = bar.child(close);

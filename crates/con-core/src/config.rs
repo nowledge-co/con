@@ -485,6 +485,59 @@ impl Default for KeybindingConfig {
     }
 }
 
+/// Network proxy configuration.
+///
+/// When set, these values override any `HTTP_PROXY` / `HTTPS_PROXY` environment
+/// variables that may have been inherited from the shell.  Leave empty to rely
+/// on the environment (the default).
+///
+/// # Example
+/// ```toml
+/// [network]
+/// http_proxy  = "http://127.0.0.1:1086"
+/// https_proxy = "http://127.0.0.1:1086"
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkConfig {
+    /// HTTP proxy URL, e.g. `http://127.0.0.1:1086`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_proxy: Option<String>,
+    /// HTTPS proxy URL, e.g. `http://127.0.0.1:1086`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub https_proxy: Option<String>,
+}
+
+impl NetworkConfig {
+    /// Apply the configured proxy values to the current process environment so
+    /// that all downstream `reqwest` clients (Rig, model registry, updater)
+    /// pick them up automatically.
+    ///
+    /// Config values take precedence over whatever the shell env already has.
+    pub fn apply_to_env(&self) {
+        if let Some(ref v) = self.http_proxy {
+            if !v.is_empty() {
+                // SAFETY: called from the main thread before any network
+                // clients are constructed; no concurrent env reads.
+                unsafe {
+                    std::env::set_var("HTTP_PROXY", v);
+                    std::env::set_var("http_proxy", v);
+                }
+                log::info!("network: HTTP_PROXY set from config");
+            }
+        }
+        if let Some(ref v) = self.https_proxy {
+            if !v.is_empty() {
+                unsafe {
+                    std::env::set_var("HTTPS_PROXY", v);
+                    std::env::set_var("https_proxy", v);
+                }
+                log::info!("network: HTTPS_PROXY set from config");
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -493,6 +546,7 @@ pub struct Config {
     pub agent: AgentConfig,
     pub keybindings: KeybindingConfig,
     pub skills: SkillsConfig,
+    pub network: NetworkConfig,
 }
 
 /// Configuration for skill discovery paths.

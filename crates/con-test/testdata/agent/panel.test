@@ -1,0 +1,12 @@
+# agent/panel.test
+# Regression: opening the agent panel through the agent-request path must also
+# drive the panel motion state, otherwise the right panel appears but its
+# contents render with opacity 0 until the user toggles Cmd+L twice.
+
+con-cli --json agent open-panel-for-request  # simulate Ask AI opening the panel
+---- json-subset
+{"agent_panel":{"open":true,"content_visible":true}}
+
+con-cli --json agent panel-state  # panel state remains visible after the request open
+---- json-subset
+{"agent_panel":{"open":true,"content_visible":true}}

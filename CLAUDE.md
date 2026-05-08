@@ -87,15 +87,15 @@ Windows-named binary requires.
 
 - `con-cli` is a real client for Con's local control socket, not a stub.
 - Implementation details live in `docs/impl/socket-api.md`.
-- The current live E2E workflow lives in `docs/impl/con-cli-e2e.md`.
+- The current live E2E workflow lives in `docs/impl/con-cli-e2e.md` and `docs/impl/con-test.md`.
 
 ## Local Skills
 
 - `skills/con-cli-e2e/SKILL.md` — use when validating the control plane from
-  an external agent or when writing eval automation against a real running Con
-  session. Prefer `con-cli --json`, verify pane capabilities before acting, and
-  treat `panes create` as provisional until the new pane reports as alive and
-  shell-ready.
+  an external agent, writing eval automation against a real running Con session,
+  or writing/fixing integration tests in `crates/con-test/testdata/`. Covers
+  both manual `con-cli` E2E and the `con-test` runner (test file format,
+  assertion types, common failure patterns).
 - `skills/gpui-cache-aware/SKILL.md` — use when reviewing or changing UI
   performance, especially markdown/chat rendering, terminal-adjacent UI, or
   resize/animation paths.
@@ -171,6 +171,14 @@ Read the component's source in `3pp/gpui-component/crates/ui/src/` to understand
 
 - `main` — stable
 - Feature branches: `wey-gu/<short-name>`
+
+## Testing Strategy
+
+After implementing a PR, write tests following this priority order:
+
+- **Unit tests first** — test functions and logic directly in the same crate using `#[cfg(test)]` modules. Cover non-trivial logic, edge cases, and error paths.
+- **con-test for integration** — use `con-test` only for integration and interactive behavior that requires a running session (e.g., pane lifecycle, socket API, agent interactions).
+- **No low-value tests** — don't write tests just to hit coverage. Skip tests for trivial getters, one-liner wrappers, or behavior already covered by the type system. Every test should catch a real bug or document a real contract.
 
 ## Postmortems
 

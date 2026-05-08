@@ -93,6 +93,8 @@ enum TmuxCommand {
 enum AgentCommand {
     Ask(AgentAskArgs),
     NewConversation(TabArgs),
+    OpenPanelForRequest(TabArgs),
+    PanelState(TabArgs),
 }
 
 #[derive(Args, Clone, Default)]
@@ -659,6 +661,24 @@ fn main() -> Result<()> {
                     },
                 )?;
                 print_result(&result, cli.json, render_new_conversation)?;
+            }
+            AgentCommand::OpenPanelForRequest(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::AgentOpenPanelForRequest {
+                        tab_index: args.tab,
+                    },
+                )?;
+                print_result(&result, cli.json, render_pretty_json)?;
+            }
+            AgentCommand::PanelState(args) => {
+                let result = send_command(
+                    &socket_path,
+                    ControlCommand::AgentPanelState {
+                        tab_index: args.tab,
+                    },
+                )?;
+                print_result(&result, cli.json, render_pretty_json)?;
             }
         },
     }

@@ -1427,7 +1427,134 @@ fn install_seh_filter() {
     }
 }
 
+/// Print the current process environment as a JSON object to stdout.
+///
+/// This is the `--printenv` mode: the login shell runs
+/// `con --printenv` and we emit JSON so the parent process can parse it
+/// robustly even when the shell rc files produce noisy output on other fds.
+fn cmd_printenv() {
+    let map: std::collections::HashMap<String, String> = std::env::vars().collect();
+    match serde_json::to_string(&map) {
+        Ok(json) => {
+            println!("{json}");
+        }
+        Err(e) => {
+            eprintln!("con --printenv: failed to serialize env: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// On macOS and Linux, GUI apps launched from the Dock / Spotlight / a
+/// desktop launcher do not inherit the user's shell environment, so proxy
+/// variables like `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` (and their
+/// lowercase equivalents) are absent from the process environment.
+///
+/// This function runs the user's login shell with `-l -i -c "con --printenv"`
+/// (Zed-style) so the shell fully initialises its rc files before we capture
+/// the environment as JSON.  Only proxy-related variables that are not already
+/// set in the process environment are injected, so an explicit env-var or a
+/// `[network]` config value always wins.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn inherit_shell_proxy_env() {
+    use std::process::Command;
+
+    // Proxy-related variable names we want to forward (both cases).
+    const PROXY_VARS: &[&str] = &[
+        "HTTP_PROXY",
+        "http_proxy",
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "NO_PROXY",
+        "no_proxy",
+    ];
+
+    // Path to the running binary — we re-invoke ourselves with --printenv.
+    let self_exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            log::debug!("inherit_shell_proxy_env: current_exe: {e}");
+            return;
+        }
+    };
+
+    // Determine the user's login shell from $SHELL, falling back to /bin/sh.
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+
+    // Run `<shell> -l -i -c "<self> --printenv"`.
+    // -l  : login shell (sources /etc/profile, ~/.zprofile, ~/.bash_profile …)
+    // -i  : interactive (sources ~/.zshrc, ~/.bashrc … where proxy vars often live)
+    // The shell may print noise to stdout from rc files; we parse the JSON
+    // object by scanning for the first `{` in the output, matching Zed's
+    // parse_env_map_from_noisy_output strategy.
+    let cmd_str = format!("{} --printenv", self_exe.display());
+    let output = match Command::new(&shell)
+        .args(["-l", "-i", "-c", &cmd_str])
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            log::debug!("inherit_shell_proxy_env: could not run {shell}: {e}");
+            return;
+        }
+    };
+
+    let stdout = match std::str::from_utf8(&output.stdout) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    // Scan for the first `{` and try to parse a JSON object from there,
+    // tolerating any shell startup noise that precedes it.
+    let env_map: std::collections::HashMap<String, String> = {
+        let mut parsed = None;
+        for (pos, _) in stdout.match_indices('{') {
+            if let Ok(map) =
+                serde_json::from_str::<std::collections::HashMap<String, String>>(&stdout[pos..])
+            {
+                parsed = Some(map);
+                break;
+            }
+        }
+        match parsed {
+            Some(m) => m,
+            None => {
+                log::debug!("inherit_shell_proxy_env: no JSON env found in shell output");
+                return;
+            }
+        }
+    };
+
+    let mut inherited = 0usize;
+    for key in PROXY_VARS {
+        if let Some(value) = env_map.get(*key) {
+            // Only set if not already present in the process environment.
+            if std::env::var_os(key).is_none() {
+                // SAFETY: single-threaded at this point in startup; no other
+                // threads have been spawned yet.
+                unsafe { std::env::set_var(key, value) };
+                inherited += 1;
+                log::info!("inherit_shell_proxy_env: inherited {key} from login shell");
+            }
+        }
+    }
+
+    if inherited == 0 {
+        log::debug!("inherit_shell_proxy_env: no proxy vars found in login shell env");
+    }
+}
+
 fn main() {
+    // `--printenv`: emit the current process environment as JSON and exit.
+    // This is invoked by `inherit_shell_proxy_env` via the login shell so we
+    // can capture the full shell environment robustly (Zed-style).
+    if std::env::args().any(|a| a == "--printenv") {
+        cmd_printenv();
+        return;
+    }
+
     // Install a panic hook before anything else so every panic —
     // including ones from background threads that would otherwise be
     // invisible — gets written to both stderr and a dated log file.
@@ -1440,6 +1567,13 @@ fn main() {
     // Rust's panic infrastructure entirely.
     #[cfg(target_os = "windows")]
     install_seh_filter();
+
+    // Inherit proxy env vars from the login shell before any network
+    // client is constructed.  GUI apps on macOS/Linux don't get the
+    // shell environment, so HTTP_PROXY / HTTPS_PROXY etc. are missing
+    // unless we source them explicitly.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    inherit_shell_proxy_env();
 
     // Always capture backtraces unless the user already set a
     // preference. `full` prints symbols + line numbers when debug info
@@ -1483,6 +1617,8 @@ fn main() {
 
     let config = con_core::Config::load().unwrap_or_default();
     log::info!("config loaded");
+    // Apply [network] proxy config — overrides any shell-inherited env vars.
+    config.network.apply_to_env();
 
     let app = gpui_platform::application()
         .with_quit_mode(QuitMode::Explicit)

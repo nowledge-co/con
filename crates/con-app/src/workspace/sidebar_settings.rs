@@ -758,6 +758,10 @@ impl ConWorkspace {
             }
         }
 
+        // Apply network/proxy config so new values take effect immediately
+        // for any subsequent requests (Rig agent, model registry, updater).
+        full_config.network.apply_to_env();
+
         let term_config = full_config.terminal.clone();
         let appearance_config = full_config.appearance.clone();
         self.apply_terminal_and_ui_appearance(&term_config, &appearance_config, window, cx);
