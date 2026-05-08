@@ -2289,12 +2289,20 @@ impl SettingsPanel {
         // Keybindings are updated directly via record_keystroke — no reading needed
 
         // Network / proxy
-        // Empty string → Some("") so apply_to_env can clear any inherited proxy on restart.
-        // None means "not configured at all" and would leave inherited values untouched.
+        // Blank field → None (leave inherited env untouched).
+        // Non-empty   → Some(value) (override or clear on next startup).
         let http_proxy_text = self.http_proxy_input.read(cx).value().trim().to_string();
         let https_proxy_text = self.https_proxy_input.read(cx).value().trim().to_string();
-        self.config.network.http_proxy = Some(http_proxy_text);
-        self.config.network.https_proxy = Some(https_proxy_text);
+        self.config.network.http_proxy = if http_proxy_text.is_empty() {
+            None
+        } else {
+            Some(http_proxy_text)
+        };
+        self.config.network.https_proxy = if https_proxy_text.is_empty() {
+            None
+        } else {
+            Some(https_proxy_text)
+        };
 
         match self.persist_config() {
             Ok(()) => {
