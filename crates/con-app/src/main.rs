@@ -1428,30 +1428,17 @@ fn install_seh_filter() {
 }
 
 /// On macOS and Linux, GUI apps launched from the Dock / Spotlight / a
-/// desktop launcher do not inherit the user's shell environment, so proxy
-/// variables like `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` (and their
-/// lowercase equivalents) are absent from the process environment.
+/// desktop launcher do not inherit the user's shell environment. Variables
+/// like `PATH`, `GOPATH`, `NVM_DIR`, `HTTP_PROXY`, etc. that are set in
+/// shell rc files are absent from the process environment.
 ///
-/// Runs `<login-shell> -l -c 'env'` and parses the `KEY=VALUE` output.
-/// Only proxy-related variables not already set in the process environment
-/// are injected, so an explicit env-var or a `[network]` config value wins.
+/// Runs `<login-shell> -l -c 'env'` and injects every variable that is not
+/// already present in the current process environment, so explicit env-vars
+/// and `[network]` config values always win.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn inherit_shell_proxy_env() {
+fn inherit_shell_env() {
     use std::process::Command;
 
-    // Proxy-related variable names we want to forward (both cases).
-    const PROXY_VARS: &[&str] = &[
-        "HTTP_PROXY",
-        "http_proxy",
-        "HTTPS_PROXY",
-        "https_proxy",
-        "ALL_PROXY",
-        "all_proxy",
-        "NO_PROXY",
-        "no_proxy",
-    ];
-
-    // Determine the user's login shell from $SHELL, falling back to /bin/sh.
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
 
     // Run `<shell> -l -c 'env'`.
@@ -1468,7 +1455,7 @@ fn inherit_shell_proxy_env() {
     {
         Ok(c) => c,
         Err(e) => {
-            log::debug!("inherit_shell_proxy_env: could not run {shell}: {e}");
+            log::debug!("inherit_shell_env: could not run {shell}: {e}");
             return;
         }
     };
@@ -1481,7 +1468,7 @@ fn inherit_shell_proxy_env() {
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
                     log::debug!(
-                        "inherit_shell_proxy_env: shell timed out after {}s, killing",
+                        "inherit_shell_env: shell timed out after {}s, killing",
                         TIMEOUT.as_secs()
                     );
                     let _ = child.kill();
@@ -1491,7 +1478,7 @@ fn inherit_shell_proxy_env() {
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             Err(e) => {
-                log::debug!("inherit_shell_proxy_env: try_wait error: {e}");
+                log::debug!("inherit_shell_env: try_wait error: {e}");
                 return;
             }
         }
@@ -1500,7 +1487,7 @@ fn inherit_shell_proxy_env() {
     let output = match child.wait_with_output() {
         Ok(o) => o,
         Err(e) => {
-            log::debug!("inherit_shell_proxy_env: wait_with_output error: {e}");
+            log::debug!("inherit_shell_env: wait_with_output error: {e}");
             return;
         }
     };
@@ -1511,29 +1498,28 @@ fn inherit_shell_proxy_env() {
     };
 
     // Parse KEY=VALUE lines. Values may contain `=` so split on the first `=` only.
+    // Inject every variable not already present — existing values win.
     let mut inherited = 0usize;
     for line in stdout.lines() {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        if PROXY_VARS.contains(&key) && std::env::var_os(key).is_none() {
+        if std::env::var_os(key).is_none() {
             // SAFETY: single-threaded at this point in startup; no other
             // threads have been spawned yet.
             unsafe { std::env::set_var(key, value) };
             inherited += 1;
-            log::info!("inherit_shell_proxy_env: inherited {key} from login shell");
         }
     }
 
-    if inherited == 0 {
-        log::debug!("inherit_shell_proxy_env: no proxy vars found in login shell env");
+    if inherited > 0 {
+        log::info!("inherit_shell_env: inherited {inherited} variables from login shell");
+    } else {
+        log::debug!("inherit_shell_env: no new variables found in login shell env");
     }
 }
 
 fn main() {
-    // `--printenv`: emit the current process environment as JSON and exit.
-    // This is invoked by `inherit_shell_proxy_env` via the login shell so we
-    // can capture the full shell environment robustly (Zed-style).
     // Install a panic hook before anything else so every panic —
     // including ones from background threads that would otherwise be
     // invisible — gets written to both stderr and a dated log file.
@@ -1555,7 +1541,7 @@ fn main() {
         unsafe { std::env::set_var("RUST_BACKTRACE", "full") };
     }
 
-    // Init the logger before inherit_shell_proxy_env so its log::info!/debug!
+    // Init the logger before inherit_shell_env so its log::info!/debug!
     // calls are visible when debugging proxy issues.
     let mut builder = env_logger::Builder::from_default_env();
     if std::env::var_os("RUST_LOG").is_none() {
@@ -1579,12 +1565,11 @@ fn main() {
     }
     builder.init();
 
-    // Inherit proxy env vars from the login shell before any network
-    // client is constructed.  GUI apps on macOS/Linux don't get the
-    // shell environment, so HTTP_PROXY / HTTPS_PROXY etc. are missing
-    // unless we source them explicitly.
+    // Inherit the full login shell environment before any network client is
+    // constructed. GUI apps on macOS/Linux launched from Dock/Spotlight don't
+    // get PATH, GOPATH, HTTP_PROXY, etc. from shell rc files.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    inherit_shell_proxy_env();
+    inherit_shell_env();
 
     log::info!("con starting (pid {})", std::process::id());
     if let Some(path) = log_file_path.as_ref() {
