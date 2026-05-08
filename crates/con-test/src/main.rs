@@ -117,7 +117,8 @@ struct Cli {
     #[arg(long, value_name = "PATH")]
     con_cli: Option<PathBuf>,
 
-    /// Control endpoint for the launched con process (default: platform-specific)
+    /// Control endpoint path for the launched con process
+    /// (default: temp Unix socket on Unix, named pipe on Windows)
     #[arg(long, value_name = "PATH")]
     socket: Option<PathBuf>,
 
@@ -167,7 +168,7 @@ fn main() -> ExitCode {
         Color::detect()
     };
 
-    let con_bin = match resolve_bin(cli.con.as_deref(), "con") {
+    let con_bin = match resolve_bin(cli.con.as_deref(), app_binary_name()) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("{} {e}", color.red("error:"));
@@ -342,14 +343,14 @@ fn print_file_result(path: &Path, result: &runner::FileResult, color: &Color) {
 // ---------------------------------------------------------------------------
 
 /// Resolve a binary path.
-/// Priority: explicit flag → CON_<NAME> env var → cargo target/ sibling → PATH
+/// Priority: explicit flag → documented env var → cargo target/ sibling → PATH
 fn resolve_bin(flag: Option<&Path>, name: &str) -> Result<PathBuf> {
     if let Some(p) = flag {
         return Ok(p.to_path_buf());
     }
 
-    let env_key = format!("CON_{}", name.to_uppercase().replace('-', "_"));
-    if let Ok(env) = std::env::var(&env_key) {
+    let env_key = env_key_for_bin(name);
+    if let Ok(env) = std::env::var(env_key) {
         return Ok(PathBuf::from(env));
     }
 
@@ -365,7 +366,7 @@ fn resolve_bin(flag: Option<&Path>, name: &str) -> Result<PathBuf> {
     }
 
     // Fall back to PATH.
-    let output = Command::new("which").arg(name).output();
+    let output = Command::new(path_lookup_command()).arg(name).output();
     match output {
         Ok(o) if o.status.success() => {
             let path = String::from_utf8_lossy(&o.stdout).trim().to_string();
@@ -375,6 +376,34 @@ fn resolve_bin(flag: Option<&Path>, name: &str) -> Result<PathBuf> {
             "{name} not found. Build it with `cargo build -p {name}` or pass --{name} <path>"
         ),
     }
+}
+
+fn env_key_for_bin(name: &str) -> &'static str {
+    match name {
+        "con" | "con-app" => "CON",
+        "con-cli" => "CON_CLI",
+        _ => "CON_BIN",
+    }
+}
+
+#[cfg(windows)]
+fn app_binary_name() -> &'static str {
+    "con-app"
+}
+
+#[cfg(not(windows))]
+fn app_binary_name() -> &'static str {
+    "con"
+}
+
+#[cfg(windows)]
+fn path_lookup_command() -> &'static str {
+    "where"
+}
+
+#[cfg(not(windows))]
+fn path_lookup_command() -> &'static str {
+    "which"
 }
 
 // ---------------------------------------------------------------------------
@@ -408,6 +437,77 @@ fn collect_from_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    #[test]
+    fn env_keys_match_documented_overrides() {
+        assert_eq!(env_key_for_bin("con"), "CON");
+        assert_eq!(env_key_for_bin("con-app"), "CON");
+        assert_eq!(env_key_for_bin("con-cli"), "CON_CLI");
+    }
+
+    #[test]
+    fn default_socket_endpoint_is_platform_appropriate() {
+        let endpoint = default_control_endpoint();
+        let endpoint = endpoint.to_string_lossy();
+        #[cfg(windows)]
+        assert!(endpoint.starts_with(r"\\.\pipe\con-test-"));
+        #[cfg(not(windows))]
+        assert!(endpoint.ends_with(".sock"));
+    }
+
+    #[test]
+    fn app_binary_name_is_platform_appropriate() {
+        #[cfg(windows)]
+        assert_eq!(app_binary_name(), "con-app");
+        #[cfg(not(windows))]
+        assert_eq!(app_binary_name(), "con");
+    }
+
+    #[test]
+    fn explicit_flag_wins_over_env() {
+        let _guard = EnvGuard::set("CON", "/tmp/ignored-con");
+        let resolved = resolve_bin(Some(Path::new("/tmp/explicit-con")), "con").unwrap();
+        assert_eq!(resolved, PathBuf::from("/tmp/explicit-con"));
+    }
+
+    #[test]
+    fn documented_env_override_is_used() {
+        let _guard = EnvGuard::set("CON_CLI", "/tmp/documented-con-cli");
+        let resolved = resolve_bin(None, "con-cli").unwrap();
+        assert_eq!(resolved, PathBuf::from("/tmp/documented-con-cli"));
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
 }
 
 use std::process::Command;

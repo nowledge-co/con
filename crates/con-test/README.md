@@ -80,10 +80,13 @@ Arguments:
   <PATHS>...  .test files or directories (searched recursively)
 
 Options:
-  --con <PATH>              Path to con binary     (default: target/ sibling, then PATH)
+  --con <PATH>              Path to con app binary (default: target/ sibling, then PATH)
+                            Env override: CON
+                            Binary name: con on Unix, con-app on Windows
   --con-cli <PATH>          Path to con-cli binary (default: target/ sibling, then PATH)
-  --socket <PATH>           Socket path for the launched con process
-                            (default: /tmp/con-test-<pid>.sock)
+                            Env override: CON_CLI
+  --socket <PATH>           Control endpoint for the launched con process
+                            (default: temp Unix socket on Unix, named pipe on Windows)
   --startup-timeout <SECS> Seconds to wait for con to start (default: 30)
   --rewrite                 Rewrite expected blocks from actual output (baseline mode)
   --fail-fast               Stop after the first failing file

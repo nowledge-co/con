@@ -83,15 +83,29 @@ contain many fields (pane state, capabilities, etc.) that vary between runs.
 
 ### Binary resolution
 
-Both `con` and `con-cli` are resolved in this order:
+The con app binary and `con-cli` are resolved in this order:
 
 1. `--con` / `--con-cli` flag
 2. `CON` / `CON_CLI` environment variable
 3. Sibling binary in the same `target/` directory as `con-test`
 4. `PATH`
 
-When running from the workspace (`cargo build && ./target/debug/con-test ...`), step 3
-picks up the freshly built binaries automatically.
+The default app binary name is platform-aware: `con` on Unix and `con-app` on
+Windows, because `CON` is a reserved DOS device name. When running from the
+workspace (`cargo build && ./target/debug/con-test ...`), step 3 picks up the
+freshly built binaries automatically.
+
+### Control endpoint
+
+If `--socket` is not provided, `con-test` creates an isolated endpoint name for
+the launched app:
+
+- Unix: a temp Unix socket path like `/tmp/con-test-<pid>.sock`
+- Windows: a named pipe path like `\\.\pipe\con-test-<pid>`
+
+Readiness is detected by attempting to connect to the endpoint, not by checking
+for a filesystem path. This keeps startup detection portable across Unix sockets
+and Windows named pipes.
 
 ## Repository layout
 

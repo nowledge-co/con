@@ -49,43 +49,61 @@ impl ConProcess {
             socket: socket.to_path_buf(),
         };
 
-        process.wait_for_socket(startup_timeout)?;
+        process.wait_for_control_endpoint(con_bin, startup_timeout)?;
         Ok(process)
     }
 
     /// Block until the control endpoint is ready or the timeout expires.
-    fn wait_for_socket(&mut self, timeout: Duration) -> Result<()> {
+    fn wait_for_control_endpoint(&mut self, con_bin: &Path, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            if let Some(status) = self.child.try_wait()? {
-                bail!("con exited before control endpoint was ready (status: {status})");
+            if let Some(status) = self.child_status()? {
+                bail!("con exited before the control endpoint was ready: {status}");
             }
 
             if control_endpoint_ready(&self.socket) {
-                // Give con a brief moment to finish binding before we connect.
+                // Give con a brief moment to finish installing the workspace before tests start.
                 std::thread::sleep(Duration::from_millis(100));
                 return Ok(());
             }
+
             std::thread::sleep(Duration::from_millis(200));
         }
         bail!(
-            "con did not expose control endpoint at {} within {:?}",
+            "con ({}) did not expose control endpoint at {} within {:?}",
+            con_bin.display(),
             self.socket.display(),
             timeout
         )
     }
+
+    fn child_status(&mut self) -> Result<Option<std::process::ExitStatus>> {
+        self.child
+            .try_wait()
+            .context("failed to poll con child process status")
+    }
+}
+
+#[cfg(unix)]
+fn control_endpoint_ready(socket: &Path) -> bool {
+    std::os::unix::net::UnixStream::connect(socket).is_ok()
 }
 
 #[cfg(windows)]
 fn control_endpoint_ready(socket: &Path) -> bool {
     // Windows uses Named Pipes (e.g. \\.\pipe\con). Opening as a file
     // is the canonical probe and succeeds only once the server is listening.
-    std::fs::OpenOptions::new().read(true).open(socket).is_ok()
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(socket)
+        .is_ok()
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(unix, windows)))]
 fn control_endpoint_ready(socket: &Path) -> bool {
-    socket.exists()
+    let _ = socket;
+    false
 }
 
 impl Drop for ConProcess {
