@@ -29,19 +29,39 @@ impl Color {
     }
 
     fn green<'a>(&self, s: &'a str) -> ColorStr<'a> {
-        ColorStr { s, code: "32", enabled: self.enabled }
+        ColorStr {
+            s,
+            code: "32",
+            enabled: self.enabled,
+        }
     }
     fn red<'a>(&self, s: &'a str) -> ColorStr<'a> {
-        ColorStr { s, code: "31", enabled: self.enabled }
+        ColorStr {
+            s,
+            code: "31",
+            enabled: self.enabled,
+        }
     }
     fn yellow<'a>(&self, s: &'a str) -> ColorStr<'a> {
-        ColorStr { s, code: "33", enabled: self.enabled }
+        ColorStr {
+            s,
+            code: "33",
+            enabled: self.enabled,
+        }
     }
     fn bold<'a>(&self, s: &'a str) -> ColorStr<'a> {
-        ColorStr { s, code: "1", enabled: self.enabled }
+        ColorStr {
+            s,
+            code: "1",
+            enabled: self.enabled,
+        }
     }
     fn dim<'a>(&self, s: &'a str) -> ColorStr<'a> {
-        ColorStr { s, code: "2", enabled: self.enabled }
+        ColorStr {
+            s,
+            code: "2",
+            enabled: self.enabled,
+        }
     }
 }
 
@@ -164,16 +184,15 @@ fn main() -> ExitCode {
     };
 
     if test_files.is_empty() {
-        eprintln!("{}", color.yellow("no .test files found in the given paths"));
+        eprintln!(
+            "{}",
+            color.yellow("no .test files found in the given paths")
+        );
         return ExitCode::FAILURE;
     }
 
     // Launch a single con process for the entire test run.
-    println!(
-        "{} con ({})...",
-        color.dim("launching"),
-        con_bin.display()
-    );
+    println!("{} con ({})...", color.dim("launching"), con_bin.display());
     let _con_process = match runner::ConProcess::launch(
         &con_bin,
         &socket,
@@ -227,11 +246,7 @@ fn main() -> ExitCode {
                 }
             }
             Err(e) => {
-                eprintln!(
-                    "  {} running {}: {e}",
-                    color.red("error:"),
-                    path.display()
-                );
+                eprintln!("  {} running {}: {e}", color.red("error:"), path.display());
                 failed += 1;
                 if cli.fail_fast {
                     break;
@@ -278,11 +293,7 @@ fn print_file_result(path: &Path, result: &runner::FileResult, color: &Color) {
             color.dim(&counts)
         );
         for failure in &result.failures {
-            println!(
-                "  {} {}",
-                color.red("---"),
-                color.bold(&failure.step_label)
-            );
+            println!("  {} {}", color.red("---"), color.bold(&failure.step_label));
             println!("      {}  {}", color.dim("cmd:"), failure.cmd);
             println!(
                 "      {}  {}",
@@ -376,9 +387,7 @@ fn collect_test_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
 }
 
 fn collect_from_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-    let mut entries: Vec<_> = std::fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
-        .collect();
+    let mut entries: Vec<_> = std::fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
     entries.sort_by_key(|e| e.path());
     for entry in entries {
         let path = entry.path();

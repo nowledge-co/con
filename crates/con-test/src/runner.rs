@@ -70,7 +70,6 @@ impl ConProcess {
             timeout
         )
     }
-
 }
 
 impl Drop for ConProcess {
@@ -110,8 +109,12 @@ fn reset_tabs(con_cli: &Path, socket: &Path) -> Result<()> {
 
         match extra {
             Some(idx) => {
-                cli_run(con_cli, socket, &["tabs", "close", "--tab", &idx.to_string()])
-                    .with_context(|| format!("reset_tabs: tabs close --tab {idx} failed"))?;
+                cli_run(
+                    con_cli,
+                    socket,
+                    &["tabs", "close", "--tab", &idx.to_string()],
+                )
+                .with_context(|| format!("reset_tabs: tabs close --tab {idx} failed"))?;
                 std::thread::sleep(Duration::from_millis(50));
             }
             None => break,
@@ -121,6 +124,7 @@ fn reset_tabs(con_cli: &Path, socket: &Path) -> Result<()> {
 }
 
 fn reset_panes(con_cli: &Path, socket: &Path) -> Result<()> {
+    let mut attempts = 0usize;
     loop {
         let json = cli_json(con_cli, socket, &["panes", "list", "--tab", "1"])?;
         let panes = json["panes"]
@@ -129,6 +133,13 @@ fn reset_panes(con_cli: &Path, socket: &Path) -> Result<()> {
 
         if panes.len() <= 1 {
             break;
+        }
+        attempts += 1;
+        if attempts > 20 {
+            bail!(
+                "reset_panes: still have {} panes after 20 close attempts",
+                panes.len()
+            );
         }
 
         // Keep the pane with the lowest pane_id; send Ctrl-D to all others.
@@ -517,7 +528,9 @@ fn rewrite_file(path: &Path, _steps: &[Step], rewrites: &[(usize, String)]) -> R
                 i += 1;
             }
 
-            if i < lines.len() && lines[i].trim() == "----" {
+            let sep_is_legacy = i < lines.len() && lines[i].trim() == "----";
+            let sep_is_inline = i < lines.len() && lines[i].trim().starts_with("---- ");
+            if sep_is_legacy || sep_is_inline {
                 out.push_str(lines[i]);
                 out.push('\n');
                 i += 1;

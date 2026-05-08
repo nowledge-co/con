@@ -79,8 +79,8 @@ pub struct Step {
 }
 
 pub fn parse_file(path: &std::path::Path) -> Result<Vec<Step>> {
-    let source = std::fs::read_to_string(path)
-        .with_context(|| format!("cannot read {}", path.display()))?;
+    let source =
+        std::fs::read_to_string(path).with_context(|| format!("cannot read {}", path.display()))?;
     parse_source(&source, path.display().to_string())
 }
 
@@ -138,15 +138,17 @@ pub fn parse_source(source: &str, origin: String) -> Result<Vec<Step>> {
                 );
             }
             let sep_line = lines[i].trim();
-            if !sep_line.starts_with("----") {
+            let inline_mode_str = if sep_line == "----" {
+                ""
+            } else if let Some(mode) = sep_line.strip_prefix("---- ") {
+                mode.trim()
+            } else {
                 bail!(
                     "{origin}:{}: expected `----` after cmd block, got {:?}",
                     i + 1,
                     sep_line
                 );
-            }
-            // Parse inline mode from `---- <mode>`
-            let inline_mode_str = sep_line.trim_start_matches('-').trim();
+            };
             let match_mode = if let Some(legacy) = legacy_mode {
                 // Legacy `match` line takes precedence if both are present
                 legacy
@@ -301,8 +303,15 @@ mod tests {
     }
 
     #[test]
+    fn separator_requires_space_before_mode() {
+        let src = "cmd --json tabs list\n----json-subset\n{\"tabs\":[]}\n";
+        assert!(parse_source(src, "test".into()).is_err());
+    }
+
+    #[test]
     fn parse_multiple_steps() {
-        let src = "cmd identify\n----\ncon\n\ncmd --json tabs list\n---- json-subset\n{\"tabs\":[]}\n";
+        let src =
+            "cmd identify\n----\ncon\n\ncmd --json tabs list\n---- json-subset\n{\"tabs\":[]}\n";
         let steps = parse_source(src, "test".into()).unwrap();
         assert_eq!(steps.len(), 2);
         assert_eq!(steps[1].match_mode, MatchMode::JsonSubset);
