@@ -869,6 +869,7 @@ impl ConWorkspace {
                                 self.agent_panel_open = true;
                                 let duration = Self::terminal_adjacent_chrome_duration(true, 290, 220);
                                 self.agent_panel_motion.set_target(target, duration);
+                                cx.notify();
                             }
                         }
                         let open = if tab_idx == self.active_tab {
