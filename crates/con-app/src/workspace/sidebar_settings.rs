@@ -758,12 +758,9 @@ impl ConWorkspace {
             }
         }
 
-        // Apply network/proxy config so new values take effect immediately
-        // for any subsequent requests (Rig agent, model registry, updater).
-        // SAFETY: GPUI's main thread is the sole writer of these env vars;
-        // reqwest clients read proxy env lazily at construction time, not
-        // concurrently with this write.
-        unsafe { full_config.network.apply_to_env() };
+        // Note: network/proxy config changes take effect on next app restart.
+        // apply_to_env() is unsafe (requires single-threaded startup context)
+        // and must not be called here while background threads are active.
 
         let term_config = full_config.terminal.clone();
         let appearance_config = full_config.appearance.clone();

@@ -513,31 +513,39 @@ impl NetworkConfig {
     /// that all downstream `reqwest` clients (Rig, model registry, updater)
     /// pick them up automatically.
     ///
-    /// Config values take precedence over whatever the shell env already has.
+    /// - `Some(non_empty)` → sets the env var.
+    /// - `None` or `Some("")` → removes the env var so a previously-set value
+    ///   does not linger after the user clears the setting.
     ///
     /// # Safety
     ///
     /// Must be called from a single-threaded context (e.g. early in `main`)
-    /// before any other threads are spawned, because `std::env::set_var` is
-    /// not thread-safe.
+    /// before any other threads are spawned, because `std::env::set_var` and
+    /// `std::env::remove_var` are not thread-safe.
     pub unsafe fn apply_to_env(&self) {
-        if let Some(ref v) = self.http_proxy {
-            if !v.is_empty() {
-                unsafe {
-                    std::env::set_var("HTTP_PROXY", v);
-                    std::env::set_var("http_proxy", v);
-                }
+        // HTTP proxy
+        match self.http_proxy.as_deref() {
+            Some(v) if !v.is_empty() => unsafe {
+                std::env::set_var("HTTP_PROXY", v);
+                std::env::set_var("http_proxy", v);
                 log::info!("network: HTTP_PROXY set from config");
-            }
+            },
+            _ => unsafe {
+                std::env::remove_var("HTTP_PROXY");
+                std::env::remove_var("http_proxy");
+            },
         }
-        if let Some(ref v) = self.https_proxy {
-            if !v.is_empty() {
-                unsafe {
-                    std::env::set_var("HTTPS_PROXY", v);
-                    std::env::set_var("https_proxy", v);
-                }
+        // HTTPS proxy
+        match self.https_proxy.as_deref() {
+            Some(v) if !v.is_empty() => unsafe {
+                std::env::set_var("HTTPS_PROXY", v);
+                std::env::set_var("https_proxy", v);
                 log::info!("network: HTTPS_PROXY set from config");
-            }
+            },
+            _ => unsafe {
+                std::env::remove_var("HTTPS_PROXY");
+                std::env::remove_var("https_proxy");
+            },
         }
     }
 }
