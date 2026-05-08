@@ -224,19 +224,26 @@ impl SettingsPanel {
     }
 
     fn clamp_tab_accent_inactive_alpha(value: f32) -> f32 {
-        value.clamp(
-            AppearanceConfig::MIN_TAB_ACCENT_ALPHA,
-            AppearanceConfig::MAX_TAB_ACCENT_INACTIVE_ALPHA,
-        )
+        if value.is_finite() {
+            value.clamp(
+                AppearanceConfig::MIN_TAB_ACCENT_ALPHA,
+                AppearanceConfig::MAX_TAB_ACCENT_INACTIVE_ALPHA,
+            )
+        } else {
+            crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA
+        }
     }
 
     fn clamp_tab_accent_inactive_hover_alpha(value: f32, inactive: f32) -> f32 {
-        value
-            .clamp(
+        let value = if value.is_finite() {
+            value.clamp(
                 AppearanceConfig::MIN_TAB_ACCENT_ALPHA,
                 AppearanceConfig::MAX_TAB_ACCENT_INACTIVE_HOVER_ALPHA,
             )
-            .max(inactive)
+        } else {
+            crate::tab_colors::TAB_ACCENT_INACTIVE_HOVER_ALPHA
+        };
+        value.max(inactive)
     }
 
     fn tab_accent_inactive_alpha_value(&self) -> f32 {

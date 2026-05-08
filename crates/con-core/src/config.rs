@@ -50,6 +50,15 @@ fn default_tab_accent_inactive_alpha() -> f32 {
 fn default_tab_accent_inactive_hover_alpha() -> f32 {
     0.22
 }
+
+fn sanitize_tab_accent_alpha(value: f32, default: f32, max: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(AppearanceConfig::MIN_TAB_ACCENT_ALPHA, max)
+    } else {
+        default
+    }
+}
+
 fn default_restore_terminal_text() -> bool {
     true
 }
@@ -162,17 +171,17 @@ impl AppearanceConfig {
     pub const MAX_TAB_ACCENT_INACTIVE_HOVER_ALPHA: f32 = 0.40;
 
     pub fn normalize(&mut self) {
-        self.tab_accent_inactive_alpha = self.tab_accent_inactive_alpha.clamp(
-            Self::MIN_TAB_ACCENT_ALPHA,
+        self.tab_accent_inactive_alpha = sanitize_tab_accent_alpha(
+            self.tab_accent_inactive_alpha,
+            default_tab_accent_inactive_alpha(),
             Self::MAX_TAB_ACCENT_INACTIVE_ALPHA,
         );
-        self.tab_accent_inactive_hover_alpha = self
-            .tab_accent_inactive_hover_alpha
-            .clamp(
-                Self::MIN_TAB_ACCENT_ALPHA,
-                Self::MAX_TAB_ACCENT_INACTIVE_HOVER_ALPHA,
-            )
-            .max(self.tab_accent_inactive_alpha);
+        self.tab_accent_inactive_hover_alpha = sanitize_tab_accent_alpha(
+            self.tab_accent_inactive_hover_alpha,
+            default_tab_accent_inactive_hover_alpha(),
+            Self::MAX_TAB_ACCENT_INACTIVE_HOVER_ALPHA,
+        )
+        .max(self.tab_accent_inactive_alpha);
     }
 }
 

@@ -381,6 +381,9 @@ impl SessionSidebar {
         inactive_hover_alpha: f32,
         cx: &mut Context<Self>,
     ) {
+        let inactive_alpha = sanitize_tab_accent_alpha(inactive_alpha);
+        let inactive_hover_alpha =
+            sanitize_tab_accent_alpha(inactive_hover_alpha).max(inactive_alpha);
         if (self.tab_accent_inactive_alpha - inactive_alpha).abs() > f32::EPSILON
             || (self.tab_accent_inactive_hover_alpha - inactive_hover_alpha).abs() > f32::EPSILON
         {
@@ -1484,7 +1487,7 @@ impl SessionSidebar {
                 .map(|color| {
                     crate::tab_colors::tab_accent_surface_hsla(
                         color,
-                        crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA,
+                        self.tab_accent_inactive_alpha,
                         cx,
                     )
                 })
@@ -1495,7 +1498,7 @@ impl SessionSidebar {
             .map(|color| {
                 crate::tab_colors::tab_accent_surface_hsla(
                     color,
-                    crate::tab_colors::TAB_ACCENT_INACTIVE_HOVER_ALPHA,
+                    self.tab_accent_inactive_hover_alpha,
                     cx,
                 )
             })
@@ -1746,6 +1749,14 @@ fn sidebar_surface(theme: &gpui_component::Theme, opacity: f32, intensity: f32) 
 
 fn elevated_surface(theme: &gpui_component::Theme, opacity: f32) -> Hsla {
     theme.background.opacity((opacity + 0.06).min(0.98))
+}
+
+fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
+    if alpha.is_finite() {
+        alpha.clamp(0.0, 1.0)
+    } else {
+        crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA
+    }
 }
 
 /// 2-px horizontal drop indicator drawn above (`above=true`) or

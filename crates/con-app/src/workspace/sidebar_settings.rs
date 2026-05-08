@@ -1,5 +1,13 @@
 use super::*;
 
+fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
+    if alpha.is_finite() {
+        alpha.clamp(0.0, 1.0)
+    } else {
+        crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA
+    }
+}
+
 impl ConWorkspace {
     pub(super) fn on_sidebar_select(
         &mut self,
@@ -969,8 +977,11 @@ impl ConWorkspace {
         self.terminal_opacity = next_terminal_opacity;
         self.terminal_blur = next_terminal_blur;
         self.ui_opacity = Self::clamp_ui_opacity(appearance_config.ui_opacity);
-        self.tab_accent_inactive_alpha = appearance_config.tab_accent_inactive_alpha;
-        self.tab_accent_inactive_hover_alpha = appearance_config.tab_accent_inactive_hover_alpha;
+        self.tab_accent_inactive_alpha =
+            sanitize_tab_accent_alpha(appearance_config.tab_accent_inactive_alpha);
+        self.tab_accent_inactive_hover_alpha =
+            sanitize_tab_accent_alpha(appearance_config.tab_accent_inactive_hover_alpha)
+                .max(self.tab_accent_inactive_alpha);
         self.background_image = next_background_image;
         self.background_image_opacity = next_background_image_opacity;
         self.background_image_position = next_background_image_position;

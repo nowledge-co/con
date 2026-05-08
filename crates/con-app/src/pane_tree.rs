@@ -14,6 +14,14 @@ use crate::terminal_pane::TerminalPane;
 const RESTORED_SCREEN_TEXT_MAX_LINES: usize = 600;
 const RESTORED_SCREEN_TEXT_MAX_BYTES: usize = 128 * 1024;
 
+fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
+    if alpha.is_finite() {
+        alpha.clamp(0.0, 1.0)
+    } else {
+        crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA
+    }
+}
+
 /// Split direction for pane layout
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SplitDirection {
@@ -1874,7 +1882,8 @@ impl PaneTree {
                 theme.tab_bar_segmented
             }
         } else if let Some(color) = tab_accent_color {
-            crate::tab_colors::tab_accent_surface_hsla(color, tab_accent_inactive_alpha, cx)
+            let inactive_alpha = sanitize_tab_accent_alpha(tab_accent_inactive_alpha);
+            crate::tab_colors::tab_accent_surface_hsla(color, inactive_alpha, cx)
         } else {
             theme.tab_bar_segmented.opacity(0.78)
         };

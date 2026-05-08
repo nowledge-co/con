@@ -2,8 +2,8 @@
 # Smoke test: con is running and responds to identify.
 
 con-cli --json identify  # version field present
----- json-subset
-{"version":"0.1.0"}
+---- contains
+"version"
 
 con-cli --json identify  # socket_path field present
 ---- contains
