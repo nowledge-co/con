@@ -4,6 +4,19 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.67` - Unreleased
+
+### Fixed
+
+**Tabs and Panes**
+
+- New panes created by Con's agent/control plane now inherit the focused pane's
+  working directory, and new tabs inherit the active terminal's restored working
+  directory instead of dropping back to the shell default. _(Issue
+  [#171](https://github.com/nowledge-co/con-terminal/issues/171), PR
+  [#172](https://github.com/nowledge-co/con-terminal/pull/172) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.66` - 2026-05-08
 
 ### Changed

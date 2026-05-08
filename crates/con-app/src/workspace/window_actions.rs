@@ -279,7 +279,11 @@ impl ConWorkspace {
     }
 
     pub(super) fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
-        let terminal = self.create_terminal(None, window, cx);
+        let cwd = self
+            .has_active_tab()
+            .then(|| self.active_terminal().current_dir(cx))
+            .flatten();
+        let terminal = self.create_terminal(cwd.as_deref(), window, cx);
         let tab_number = self.tabs.len() + 1;
         let summary_id = self.next_tab_summary_id;
         self.next_tab_summary_id += 1;
