@@ -1508,19 +1508,11 @@ fn inherit_shell_env() {
     }
 
     // Collect stdout with the remaining deadline — if a background process
-    // inherited the pipe and keeps it open, we abandon after the timeout.
+    // inherited the pipe and keeps it open, use whatever was buffered so far
+    // (empty on timeout). unwrap_or_default() means we always proceed on this
+    // thread and never call set_var from a concurrent context.
     let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-    let raw = match rx.recv_timeout(remaining) {
-        Ok(b) => b,
-        Err(_) => {
-            log::debug!("inherit_shell_env: stdout reader timed out (background process holding pipe open)");
-            // The reader thread may still be blocked; it will eventually get
-            // EOF when the background process exits. We cannot join here
-            // without blocking, so we detach — but we must not call set_var
-            // after this point (we return immediately).
-            return;
-        }
-    };
+    let raw = rx.recv_timeout(remaining).unwrap_or_default();
     let stdout = match std::str::from_utf8(&raw) {
         Ok(s) => s,
         Err(_) => return,
