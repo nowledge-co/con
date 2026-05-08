@@ -1687,6 +1687,21 @@ impl SettingsPanel {
         self.provider_model_status = None;
         self.provider_model_status_error = false;
         self.set_recording_key(None);
+        // Network / proxy — repopulate so reopening the panel shows current values.
+        self.http_proxy_input.update(cx, |s, cx| {
+            s.set_value(
+                &self.config.network.http_proxy.clone().unwrap_or_default(),
+                window,
+                cx,
+            )
+        });
+        self.https_proxy_input.update(cx, |s, cx| {
+            s.set_value(
+                &self.config.network.https_proxy.clone().unwrap_or_default(),
+                window,
+                cx,
+            )
+        });
         self.focus_handle.focus(window, cx);
     }
 

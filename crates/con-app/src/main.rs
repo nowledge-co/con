@@ -1432,11 +1432,12 @@ fn install_seh_filter() {
 /// like `PATH`, `GOPATH`, `NVM_DIR`, `HTTP_PROXY`, etc. that are set in
 /// shell rc files are absent from the process environment.
 ///
-/// Runs `<login-shell> -l -c 'env'` and injects every variable that is not
-/// already present in the current process environment, so explicit env-vars
-/// and `[network]` config values always win.
+/// Runs `<login-shell> -l -c 'env'` and full-overrides the process env with
+/// the shell's values, matching Zed's `load_login_shell_environment` strategy.
+/// `SHLVL` is skipped so terminal children start at level 1.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn inherit_shell_env() {
+    use std::io::Read;
     use std::process::Command;
 
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
@@ -1444,7 +1445,6 @@ fn inherit_shell_env() {
     // Run `<shell> -l -c 'env'`.
     // -l : login shell — sources /etc/profile, ~/.zprofile, ~/.bash_profile …
     //      (no -i: avoids interactive-only rc noise and TTY hangs)
-    // env outputs KEY=VALUE\n lines; no JSON, no self-invocation needed.
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
     let mut child = match Command::new(&shell)
         .args(["-l", "-c", "env"])
@@ -1460,7 +1460,22 @@ fn inherit_shell_env() {
         }
     };
 
-    // Poll with a deadline so a hanging rc file doesn't block the GUI.
+    // Drain stdout on a background thread so the pipe never fills up and
+    // deadlocks the child. The child can then exit, and we join with a timeout.
+    let mut stdout_pipe = match child.stdout.take() {
+        Some(p) => p,
+        None => {
+            log::debug!("inherit_shell_env: no stdout pipe");
+            return;
+        }
+    };
+    let reader_thread = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        stdout_pipe.read_to_end(&mut buf).ok();
+        buf
+    });
+
+    // Wait for the child with a deadline.
     let deadline = std::time::Instant::now() + TIMEOUT;
     loop {
         match child.try_wait() {
@@ -1484,15 +1499,11 @@ fn inherit_shell_env() {
         }
     }
 
-    let output = match child.wait_with_output() {
-        Ok(o) => o,
-        Err(e) => {
-            log::debug!("inherit_shell_env: wait_with_output error: {e}");
-            return;
-        }
+    let raw = match reader_thread.join() {
+        Ok(b) => b,
+        Err(_) => return,
     };
-
-    let stdout = match std::str::from_utf8(&output.stdout) {
+    let stdout = match std::str::from_utf8(&raw) {
         Ok(s) => s,
         Err(_) => return,
     };
