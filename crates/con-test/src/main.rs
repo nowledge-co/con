@@ -3,6 +3,7 @@ mod runner;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use anyhow::Result;
 use clap::Parser;
@@ -17,13 +18,21 @@ struct Cli {
     #[arg(required = true)]
     paths: Vec<PathBuf>,
 
-    /// Path to the con-cli binary (defaults to finding it on PATH or in cargo target/)
+    /// Path to the con binary to launch (defaults to sibling in cargo target/)
+    #[arg(long, value_name = "PATH")]
+    con: Option<PathBuf>,
+
+    /// Path to the con-cli binary (defaults to sibling in cargo target/)
     #[arg(long, value_name = "PATH")]
     con_cli: Option<PathBuf>,
 
-    /// Override the con socket path (passed as --socket to con-cli)
+    /// Socket path for the launched con process (default: /tmp/con-test-<pid>.sock)
     #[arg(long, value_name = "PATH")]
     socket: Option<PathBuf>,
+
+    /// Seconds to wait for con to start (default: 30)
+    #[arg(long, default_value_t = 30)]
+    startup_timeout: u64,
 
     /// Rewrite expected output in .test files from actual output (baseline mode)
     #[arg(long)]
@@ -33,7 +42,7 @@ struct Cli {
     #[arg(long)]
     fail_fast: bool,
 
-    /// Show full diff even for passing tests
+    /// Show full pass/skip results in addition to failures
     #[arg(long)]
     verbose: bool,
 }
@@ -41,13 +50,25 @@ struct Cli {
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
-    let con_cli = match resolve_con_cli(cli.con_cli.as_deref()) {
+    let con_bin = match resolve_bin(cli.con.as_deref(), "con") {
         Ok(p) => p,
         Err(e) => {
             eprintln!("error: {e}");
             return ExitCode::FAILURE;
         }
     };
+
+    let con_cli = match resolve_bin(cli.con_cli.as_deref(), "con-cli") {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let socket = cli.socket.unwrap_or_else(|| {
+        std::env::temp_dir().join(format!("con-test-{}.sock", std::process::id()))
+    });
 
     let test_files = match collect_test_files(&cli.paths) {
         Ok(files) => files,
@@ -62,9 +83,24 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // Launch a single con process for the entire test run.
+    println!("launching con ({})...", con_bin.display());
+    let _con_process = match runner::ConProcess::launch(
+        &con_bin,
+        &socket,
+        Duration::from_secs(cli.startup_timeout),
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: failed to launch con: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("con ready on {}\n", socket.display());
+
     let config = runner::RunConfig {
-        con_cli,
-        socket: cli.socket,
+        con_cli: con_cli.clone(),
+        socket: socket.clone(),
         rewrite: cli.rewrite,
         verbose: cli.verbose,
     };
@@ -74,6 +110,16 @@ fn main() -> ExitCode {
     let mut skipped = 0usize;
 
     for path in &test_files {
+        // Reset con to a clean baseline before each file.
+        if let Err(e) = runner::reset_state(&con_cli, &socket) {
+            eprintln!("error: reset_state failed before {}: {e}", path.display());
+            failed += 1;
+            if cli.fail_fast {
+                break;
+            }
+            continue;
+        }
+
         match runner::run_file(path, &config) {
             Ok(result) => {
                 print_file_result(path, &result);
@@ -132,41 +178,38 @@ fn print_file_result(path: &Path, result: &runner::FileResult) {
     }
 }
 
-/// Resolve the con-cli binary path.
-/// Priority: --con-cli flag → CON_CLI env var → cargo target/debug/con-cli → PATH
-fn resolve_con_cli(flag: Option<&Path>) -> Result<PathBuf> {
+/// Resolve a binary path.
+/// Priority: explicit flag → CON_<NAME> env var → cargo target/ sibling → PATH
+fn resolve_bin(flag: Option<&Path>, name: &str) -> Result<PathBuf> {
     if let Some(p) = flag {
         return Ok(p.to_path_buf());
     }
-    if let Ok(env) = std::env::var("CON_CLI") {
+
+    let env_key = format!("CON_{}", name.to_uppercase().replace('-', "_"));
+    if let Ok(env) = std::env::var(&env_key) {
         return Ok(PathBuf::from(env));
     }
-    // Try workspace target directory (useful when running from the repo)
-    let workspace_target = {
+
+    // Sibling in the same target directory as con-test itself.
+    let sibling = {
         let mut p = std::env::current_exe().unwrap_or_default();
-        // current_exe is something like target/debug/con-test; sibling is con-cli
         p.pop();
-        p.push("con-cli");
+        p.push(name);
         p
     };
-    if workspace_target.exists() {
-        return Ok(workspace_target);
+    if sibling.exists() {
+        return Ok(sibling);
     }
-    // Fall back to PATH
-    which_con_cli()
-}
 
-fn which_con_cli() -> Result<PathBuf> {
-    let output = std::process::Command::new("which")
-        .arg("con-cli")
-        .output();
+    // Fall back to PATH.
+    let output = Command::new("which").arg(name).output();
     match output {
         Ok(o) if o.status.success() => {
             let path = String::from_utf8_lossy(&o.stdout).trim().to_string();
             Ok(PathBuf::from(path))
         }
         _ => anyhow::bail!(
-            "con-cli not found. Build it with `cargo build -p con-cli` or pass --con-cli <path>"
+            "{name} not found. Build it with `cargo build -p {name}` or pass --{name} <path>"
         ),
     }
 }
@@ -205,3 +248,5 @@ fn collect_from_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     }
     Ok(())
 }
+
+use std::process::Command;
