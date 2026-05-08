@@ -1498,18 +1498,21 @@ fn inherit_shell_env() {
     };
 
     // Parse KEY=VALUE lines. Values may contain `=` so split on the first `=` only.
-    // Inject every variable not already present — existing values win.
+    // Full override — shell values win, matching Zed's load_login_shell_environment.
+    // Skip SHLVL: the login shell increments it, and terminals spawned by con
+    // would inherit it and increment again (starting at 2 instead of 1).
     let mut inherited = 0usize;
     for line in stdout.lines() {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        if std::env::var_os(key).is_none() {
-            // SAFETY: single-threaded at this point in startup; no other
-            // threads have been spawned yet.
-            unsafe { std::env::set_var(key, value) };
-            inherited += 1;
+        if key == "SHLVL" {
+            continue;
         }
+        // SAFETY: single-threaded at this point in startup; no other
+        // threads have been spawned yet.
+        unsafe { std::env::set_var(key, value) };
+        inherited += 1;
     }
 
     if inherited > 0 {

@@ -513,9 +513,9 @@ impl NetworkConfig {
     /// that all downstream `reqwest` clients (Rig, model registry, updater)
     /// pick them up automatically.
     ///
-    /// - `Some(non_empty)` → sets the env var.
-    /// - `None` or `Some("")` → removes the env var so a previously-set value
-    ///   does not linger after the user clears the setting.
+    /// - `Some(non_empty)` → sets the env var (overrides shell-inherited value).
+    /// - `Some("")`        → removes the env var (user explicitly cleared it).
+    /// - `None`            → no-op (not configured; leave whatever the env has).
     ///
     /// # Safety
     ///
@@ -523,29 +523,30 @@ impl NetworkConfig {
     /// before any other threads are spawned, because `std::env::set_var` and
     /// `std::env::remove_var` are not thread-safe.
     pub unsafe fn apply_to_env(&self) {
-        // HTTP proxy
-        match self.http_proxy.as_deref() {
-            Some(v) if !v.is_empty() => unsafe {
-                std::env::set_var("HTTP_PROXY", v);
-                std::env::set_var("http_proxy", v);
-                log::info!("network: HTTP_PROXY set from config");
-            },
-            _ => unsafe {
-                std::env::remove_var("HTTP_PROXY");
-                std::env::remove_var("http_proxy");
-            },
+        unsafe {
+            Self::apply_one("HTTP_PROXY", "http_proxy", self.http_proxy.as_deref());
+            Self::apply_one("HTTPS_PROXY", "https_proxy", self.https_proxy.as_deref());
         }
-        // HTTPS proxy
-        match self.https_proxy.as_deref() {
+    }
+
+    /// # Safety
+    /// Same as `apply_to_env` — must be called single-threaded.
+    unsafe fn apply_one(upper: &str, lower: &str, value: Option<&str>) {
+        match value {
             Some(v) if !v.is_empty() => unsafe {
-                std::env::set_var("HTTPS_PROXY", v);
-                std::env::set_var("https_proxy", v);
-                log::info!("network: HTTPS_PROXY set from config");
+                std::env::set_var(upper, v);
+                std::env::set_var(lower, v);
+                log::info!("network: {upper} set from config");
             },
-            _ => unsafe {
-                std::env::remove_var("HTTPS_PROXY");
-                std::env::remove_var("https_proxy");
+            Some(_empty) => unsafe {
+                // Explicitly cleared by the user — remove any inherited value.
+                std::env::remove_var(upper);
+                std::env::remove_var(lower);
+                log::info!("network: {upper} cleared from config");
             },
+            None => {
+                // Not configured — leave the environment untouched.
+            }
         }
     }
 }
