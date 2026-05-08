@@ -98,5 +98,6 @@ Options:
 Before each `.test` file, con-test resets con to a known baseline:
 - All tabs except tab 1 are closed
 - All panes in tab 1 except the first are closed (via Ctrl-D)
+- All pane-local surfaces in the surviving pane except the first are closed
 
-Every test file starts with exactly 1 tab and 1 pane.
+Every test file starts with exactly 1 tab, 1 pane, and 1 surface.

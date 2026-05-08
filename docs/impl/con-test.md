@@ -80,6 +80,8 @@ contain many fields (pane state, capabilities, etc.) that vary between runs.
    each close so indices stay accurate.
 2. `reset_panes` — sends Ctrl-D to extra panes in tab 1 until only one remains,
    keeping the pane with the lowest `pane_id`.
+3. `reset_surfaces` — closes extra pane-local surfaces in the surviving pane,
+   keeping the surface with the lowest `surface_id`.
 
 ### Binary resolution
 

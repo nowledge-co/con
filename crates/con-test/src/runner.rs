@@ -121,11 +121,13 @@ impl Drop for ConProcess {
 /// Reset con to a known baseline state before each test file:
 ///   1. Close all tabs except tab 1 (con requires at least one tab).
 ///   2. Close all extra panes in tab 1 by sending Ctrl-D to their shells.
+///   3. Close extra pane-local surfaces in the surviving pane.
 ///
 /// We re-query after each close because indices shift on removal.
 pub fn reset_state(con_cli: &Path, socket: &Path) -> Result<()> {
     reset_tabs(con_cli, socket)?;
     reset_panes(con_cli, socket)?;
+    reset_surfaces(con_cli, socket)?;
     Ok(())
 }
 
@@ -205,6 +207,68 @@ fn reset_panes(con_cli: &Path, socket: &Path) -> Result<()> {
                     ],
                 );
                 std::thread::sleep(Duration::from_millis(300));
+            }
+            None => break,
+        }
+    }
+    Ok(())
+}
+
+fn reset_surfaces(con_cli: &Path, socket: &Path) -> Result<()> {
+    let mut attempts = 0usize;
+    loop {
+        let json = cli_json(
+            con_cli,
+            socket,
+            &["surfaces", "list", "--tab", "1", "--pane-index", "1"],
+        )?;
+        let surfaces = json["surfaces"]
+            .as_array()
+            .context("reset_surfaces: missing surfaces array")?;
+
+        if surfaces.len() <= 1 {
+            break;
+        }
+        attempts += 1;
+        if attempts > 20 {
+            bail!(
+                "reset_surfaces: still have {} surfaces after 20 close attempts",
+                surfaces.len()
+            );
+        }
+
+        // Keep the lowest surface_id for the surviving pane and close all others.
+        let min_surface_id = surfaces
+            .iter()
+            .filter_map(|s| s["surface_id"].as_u64())
+            .min()
+            .context("reset_surfaces: no surface_id found")?;
+
+        let extra_id = surfaces
+            .iter()
+            .filter_map(|s| s["surface_id"].as_u64())
+            .find(|&id| id != min_surface_id);
+
+        match extra_id {
+            Some(id) => {
+                cli_run(
+                    con_cli,
+                    socket,
+                    &[
+                        "surfaces",
+                        "close",
+                        "--tab",
+                        "1",
+                        "--pane-index",
+                        "1",
+                        "--surface-id",
+                        &id.to_string(),
+                    ],
+                )
+                .with_context(|| {
+                    format!("reset_surfaces: surfaces close --surface-id {id} failed")
+                })?;
+                std::thread::sleep(Duration::from_millis(100));
             }
             None => break,
         }
