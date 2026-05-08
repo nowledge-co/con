@@ -8,6 +8,77 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 
+// ---------------------------------------------------------------------------
+// ANSI color helpers — disabled when stdout is not a tty or NO_COLOR is set
+// ---------------------------------------------------------------------------
+
+struct Color {
+    enabled: bool,
+}
+
+impl Color {
+    fn detect() -> Self {
+        // Respect NO_COLOR env var (https://no-color.org/)
+        if std::env::var_os("NO_COLOR").is_some() {
+            return Color { enabled: false };
+        }
+        // Check if stdout is a tty
+        Color {
+            enabled: is_tty_stdout(),
+        }
+    }
+
+    fn green<'a>(&self, s: &'a str) -> ColorStr<'a> {
+        ColorStr { s, code: "32", enabled: self.enabled }
+    }
+    fn red<'a>(&self, s: &'a str) -> ColorStr<'a> {
+        ColorStr { s, code: "31", enabled: self.enabled }
+    }
+    fn yellow<'a>(&self, s: &'a str) -> ColorStr<'a> {
+        ColorStr { s, code: "33", enabled: self.enabled }
+    }
+    fn bold<'a>(&self, s: &'a str) -> ColorStr<'a> {
+        ColorStr { s, code: "1", enabled: self.enabled }
+    }
+    fn dim<'a>(&self, s: &'a str) -> ColorStr<'a> {
+        ColorStr { s, code: "2", enabled: self.enabled }
+    }
+}
+
+struct ColorStr<'a> {
+    s: &'a str,
+    code: &'static str,
+    enabled: bool,
+}
+
+impl std::fmt::Display for ColorStr<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.enabled {
+            write!(f, "\x1b[{}m{}\x1b[0m", self.code, self.s)
+        } else {
+            write!(f, "{}", self.s)
+        }
+    }
+}
+
+#[cfg(unix)]
+fn is_tty_stdout() -> bool {
+    unsafe extern "C" {
+        fn isatty(fd: i32) -> i32;
+    }
+    // SAFETY: fd 1 is always valid (stdout)
+    unsafe { isatty(1) != 0 }
+}
+
+#[cfg(not(unix))]
+fn is_tty_stdout() -> bool {
+    false
+}
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+
 #[derive(Parser)]
 #[command(
     name = "con-test",
@@ -45,15 +116,29 @@ struct Cli {
     /// Show full pass/skip results in addition to failures
     #[arg(long)]
     verbose: bool,
+
+    /// Disable colored output
+    #[arg(long)]
+    no_color: bool,
 }
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    let color = if cli.no_color {
+        Color { enabled: false }
+    } else {
+        Color::detect()
+    };
+
     let con_bin = match resolve_bin(cli.con.as_deref(), "con") {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{} {e}", color.red("error:"));
             return ExitCode::FAILURE;
         }
     };
@@ -61,7 +146,7 @@ fn main() -> ExitCode {
     let con_cli = match resolve_bin(cli.con_cli.as_deref(), "con-cli") {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("error: {e}");
+            eprintln!("{} {e}", color.red("error:"));
             return ExitCode::FAILURE;
         }
     };
@@ -73,18 +158,22 @@ fn main() -> ExitCode {
     let test_files = match collect_test_files(&cli.paths) {
         Ok(files) => files,
         Err(e) => {
-            eprintln!("error collecting test files: {e}");
+            eprintln!("{} collecting test files: {e}", color.red("error:"));
             return ExitCode::FAILURE;
         }
     };
 
     if test_files.is_empty() {
-        eprintln!("no .test files found in the given paths");
+        eprintln!("{}", color.yellow("no .test files found in the given paths"));
         return ExitCode::FAILURE;
     }
 
     // Launch a single con process for the entire test run.
-    println!("launching con ({})...", con_bin.display());
+    println!(
+        "{} con ({})...",
+        color.dim("launching"),
+        con_bin.display()
+    );
     let _con_process = match runner::ConProcess::launch(
         &con_bin,
         &socket,
@@ -92,11 +181,15 @@ fn main() -> ExitCode {
     ) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("error: failed to launch con: {e}");
+            eprintln!("{} failed to launch con: {e}", color.red("error:"));
             return ExitCode::FAILURE;
         }
     };
-    println!("con ready on {}\n", socket.display());
+    println!(
+        "{} {}\n",
+        color.dim("con ready on"),
+        color.dim(&socket.display().to_string())
+    );
 
     let config = runner::RunConfig {
         con_cli: con_cli.clone(),
@@ -110,9 +203,12 @@ fn main() -> ExitCode {
     let mut skipped = 0usize;
 
     for path in &test_files {
-        // Reset con to a clean baseline before each file.
         if let Err(e) = runner::reset_state(&con_cli, &socket) {
-            eprintln!("error: reset_state failed before {}: {e}", path.display());
+            eprintln!(
+                "  {} reset_state failed before {}: {e}",
+                color.red("error:"),
+                path.display()
+            );
             failed += 1;
             if cli.fail_fast {
                 break;
@@ -122,7 +218,7 @@ fn main() -> ExitCode {
 
         match runner::run_file(path, &config) {
             Ok(result) => {
-                print_file_result(path, &result);
+                print_file_result(path, &result, &color);
                 passed += result.passed;
                 failed += result.failed;
                 skipped += result.skipped;
@@ -131,7 +227,11 @@ fn main() -> ExitCode {
                 }
             }
             Err(e) => {
-                eprintln!("error running {}: {e}", path.display());
+                eprintln!(
+                    "  {} running {}: {e}",
+                    color.red("error:"),
+                    path.display()
+                );
                 failed += 1;
                 if cli.fail_fast {
                     break;
@@ -141,42 +241,84 @@ fn main() -> ExitCode {
     }
 
     println!();
-    println!(
-        "results: {} passed, {} failed, {} skipped  ({} files)",
+
+    // Summary line
+    let summary = format!(
+        "{} passed  {} failed  {} skipped  ({} files)",
         passed,
         failed,
         skipped,
         test_files.len()
     );
-
     if failed > 0 {
+        println!("{}", color.bold(&format!("results: {summary}")));
         ExitCode::FAILURE
     } else {
+        println!("{}", color.bold(&format!("results: {summary}")));
         ExitCode::SUCCESS
     }
 }
 
-fn print_file_result(path: &Path, result: &runner::FileResult) {
-    let status = if result.failed > 0 { "FAIL" } else { "ok  " };
-    println!(
-        "{status}  {}  ({} passed, {} failed, {} skipped)",
-        path.display(),
-        result.passed,
-        result.failed,
-        result.skipped
+// ---------------------------------------------------------------------------
+// Output
+// ---------------------------------------------------------------------------
+
+fn print_file_result(path: &Path, result: &runner::FileResult, color: &Color) {
+    let path_str = path.display().to_string();
+    let counts = format!(
+        "({} passed, {} failed, {} skipped)",
+        result.passed, result.failed, result.skipped
     );
-    for failure in &result.failures {
-        println!("  --- FAIL: {}", failure.step_label);
-        println!("      cmd:      {}", failure.cmd);
-        println!("      expected: {}", failure.expected.trim());
-        println!("      actual:   {}", failure.actual.trim());
-        if !failure.diff.is_empty() {
-            for line in failure.diff.lines() {
-                println!("      {line}");
+
+    if result.failed > 0 {
+        println!(
+            "{}  {}  {}",
+            color.red("FAIL"),
+            path_str,
+            color.dim(&counts)
+        );
+        for failure in &result.failures {
+            println!(
+                "  {} {}",
+                color.red("---"),
+                color.bold(&failure.step_label)
+            );
+            println!("      {}  {}", color.dim("cmd:"), failure.cmd);
+            println!(
+                "      {}  {}",
+                color.dim("expected:"),
+                failure.expected.trim()
+            );
+            println!(
+                "      {}  {}",
+                color.yellow("actual:  "),
+                failure.actual.trim()
+            );
+            if !failure.diff.is_empty() {
+                for line in failure.diff.lines() {
+                    if line.starts_with('+') {
+                        println!("      {}", color.green(line));
+                    } else if line.starts_with('-') {
+                        println!("      {}", color.red(line));
+                    } else {
+                        println!("      {}", color.dim(line));
+                    }
+                }
             }
         }
+    } else {
+        println!(
+            "{}  {}  {}",
+            color.green("ok  "),
+            path_str,
+            color.dim(&counts)
+        );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Binary resolution
+// ---------------------------------------------------------------------------
 
 /// Resolve a binary path.
 /// Priority: explicit flag → CON_<NAME> env var → cargo target/ sibling → PATH
@@ -214,7 +356,10 @@ fn resolve_bin(flag: Option<&Path>, name: &str) -> Result<PathBuf> {
     }
 }
 
-/// Recursively collect all .test files from the given paths.
+// ---------------------------------------------------------------------------
+// File collection
+// ---------------------------------------------------------------------------
+
 fn collect_test_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     for path in paths {
@@ -223,10 +368,7 @@ fn collect_test_files(paths: &[PathBuf]) -> Result<Vec<PathBuf>> {
         } else if path.extension().map(|e| e == "test").unwrap_or(false) {
             files.push(path.clone());
         } else {
-            anyhow::bail!(
-                "{} is not a .test file or directory",
-                path.display()
-            );
+            anyhow::bail!("{} is not a .test file or directory", path.display());
         }
     }
     files.sort();
