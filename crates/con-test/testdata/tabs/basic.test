@@ -1,0 +1,20 @@
+# tabs/basic.test
+# Basic tab lifecycle: list, new, close.
+
+con-cli --json tabs list  # at least one tab exists
+---- json-subset
+{"tabs":[{"index":1}]}
+
+con-cli tabs new  # create a new tab succeeds
+---- ok
+
+con-cli --json tabs list  # now have at least 2 tabs
+---- contains
+"index":2
+
+con-cli --json tabs close --tab 2  # close the tab we just created
+---- ok
+
+con-cli --json tabs list  # back to 1 tab
+---- json-subset
+{"tabs":[{"index":1}]}

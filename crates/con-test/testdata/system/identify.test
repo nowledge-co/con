@@ -1,0 +1,14 @@
+# system/identify.test
+# Smoke test: con is running and responds to identify.
+
+con-cli --json identify  # version field present
+---- contains
+"version"
+
+con-cli --json identify  # socket_path field present
+---- contains
+"socket_path"
+
+con-cli --json capabilities  # methods array present
+---- json-subset
+{"methods":[{"method":"system.identify"}]}

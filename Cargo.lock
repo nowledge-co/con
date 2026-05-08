@@ -1388,6 +1388,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "con-test"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde_json",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

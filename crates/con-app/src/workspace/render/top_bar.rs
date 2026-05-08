@@ -1,6 +1,14 @@
 use super::super::*;
 use gpui_component::menu::ContextMenuExt;
 
+fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
+    if alpha.is_finite() {
+        alpha.clamp(0.0, 1.0)
+    } else {
+        crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA
+    }
+}
+
 impl ConWorkspace {
     pub(super) fn render_top_bar(
         &mut self,
@@ -562,20 +570,20 @@ impl ConWorkspace {
                         .text_color(theme.foreground)
                         .font_weight(FontWeight::MEDIUM);
                 } else {
+                    let inactive_alpha = sanitize_tab_accent_alpha(self.tab_accent_inactive_alpha);
+                    let inactive_hover_alpha =
+                        sanitize_tab_accent_alpha(self.tab_accent_inactive_hover_alpha)
+                            .max(inactive_alpha);
                     let inactive_bg = tab_color
                         .map(|color| {
-                            crate::tab_colors::tab_accent_surface_hsla(
-                                color,
-                                crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA,
-                                cx,
-                            )
+                            crate::tab_colors::tab_accent_surface_hsla(color, inactive_alpha, cx)
                         })
                         .unwrap_or(theme.background.opacity(0.14));
                     let inactive_hover_bg = tab_color
                         .map(|color| {
                             crate::tab_colors::tab_accent_surface_hsla(
                                 color,
-                                crate::tab_colors::TAB_ACCENT_INACTIVE_HOVER_ALPHA,
+                                inactive_hover_alpha,
                                 cx,
                             )
                         })

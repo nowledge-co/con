@@ -1,0 +1,14 @@
+# panes/basic.test
+# Basic pane operations: list fields.
+
+con-cli --json panes list --tab 1  # at least one pane in tab 1
+---- json-subset
+{"panes":[{"index":1}]}
+
+con-cli --json panes list --tab 1  # pane has pane_id field
+---- contains
+"pane_id"
+
+con-cli --json panes list --tab 1  # pane has control_capabilities field
+---- contains
+"control_capabilities"

@@ -14,6 +14,14 @@ use crate::terminal_pane::TerminalPane;
 const RESTORED_SCREEN_TEXT_MAX_LINES: usize = 600;
 const RESTORED_SCREEN_TEXT_MAX_BYTES: usize = 128 * 1024;
 
+fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
+    if alpha.is_finite() {
+        alpha.clamp(0.0, 1.0)
+    } else {
+        crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA
+    }
+}
+
 /// Split direction for pane layout
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SplitDirection {
@@ -786,6 +794,7 @@ impl PaneTree {
         rename_editor: Option<SurfaceRenameEditor>,
         divider_color: Hsla,
         tab_accent_color: Option<con_core::session::TabAccentColor>,
+        tab_accent_inactive_alpha: f32,
         hide_pane_title_bar: bool,
         cx: &App,
     ) -> AnyElement {
@@ -812,6 +821,7 @@ impl PaneTree {
                 zoomed_pane_id,
                 session_id,
                 tab_accent_color,
+                tab_accent_inactive_alpha,
                 hide_pane_title_bar,
                 cx,
             ) {
@@ -835,6 +845,7 @@ impl PaneTree {
             zoomed_pane_id,
             session_id,
             tab_accent_color,
+            tab_accent_inactive_alpha,
             hide_pane_title_bar,
             cx,
         )
@@ -1517,6 +1528,7 @@ impl PaneTree {
         zoomed_pane_id: Option<PaneId>,
         session_id: u64,
         tab_accent_color: Option<con_core::session::TabAccentColor>,
+        tab_accent_inactive_alpha: f32,
         hide_pane_title_bar: bool,
         cx: &App,
     ) -> AnyElement {
@@ -1540,6 +1552,7 @@ impl PaneTree {
                 zoomed_pane_id,
                 session_id,
                 tab_accent_color,
+                tab_accent_inactive_alpha,
                 hide_pane_title_bar,
                 cx,
             ),
@@ -1586,6 +1599,7 @@ impl PaneTree {
                     zoomed_pane_id,
                     session_id,
                     tab_accent_color,
+                    tab_accent_inactive_alpha,
                     hide_pane_title_bar,
                     cx,
                 );
@@ -1605,6 +1619,7 @@ impl PaneTree {
                     zoomed_pane_id,
                     session_id,
                     tab_accent_color,
+                    tab_accent_inactive_alpha,
                     hide_pane_title_bar,
                     cx,
                 );
@@ -1769,6 +1784,7 @@ impl PaneTree {
         zoomed_pane_id: Option<PaneId>,
         session_id: u64,
         tab_accent_color: Option<con_core::session::TabAccentColor>,
+        tab_accent_inactive_alpha: f32,
         hide_pane_title_bar: bool,
         cx: &App,
     ) -> Option<AnyElement> {
@@ -1792,6 +1808,7 @@ impl PaneTree {
                 zoomed_pane_id,
                 session_id,
                 tab_accent_color,
+                tab_accent_inactive_alpha,
                 hide_pane_title_bar,
                 cx,
             )),
@@ -1810,6 +1827,7 @@ impl PaneTree {
                 zoomed_pane_id,
                 session_id,
                 tab_accent_color,
+                tab_accent_inactive_alpha,
                 hide_pane_title_bar,
                 cx,
             )
@@ -1828,6 +1846,7 @@ impl PaneTree {
                     zoomed_pane_id,
                     session_id,
                     tab_accent_color,
+                    tab_accent_inactive_alpha,
                     hide_pane_title_bar,
                     cx,
                 )
@@ -1846,6 +1865,7 @@ impl PaneTree {
         has_splits: bool,
         is_zoomed: bool,
         tab_accent_color: Option<con_core::session::TabAccentColor>,
+        tab_accent_inactive_alpha: f32,
         close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         cx: &App,
@@ -1862,11 +1882,8 @@ impl PaneTree {
                 theme.tab_bar_segmented
             }
         } else if let Some(color) = tab_accent_color {
-            crate::tab_colors::tab_accent_surface_hsla(
-                color,
-                crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA,
-                cx,
-            )
+            let inactive_alpha = sanitize_tab_accent_alpha(tab_accent_inactive_alpha);
+            crate::tab_colors::tab_accent_surface_hsla(color, inactive_alpha, cx)
         } else {
             theme.tab_bar_segmented.opacity(0.78)
         };
@@ -2008,6 +2025,7 @@ impl PaneTree {
         zoomed_pane_id: Option<PaneId>,
         session_id: u64,
         tab_accent_color: Option<con_core::session::TabAccentColor>,
+        tab_accent_inactive_alpha: f32,
         hide_pane_title_bar: bool,
         cx: &App,
     ) -> AnyElement {
@@ -2058,6 +2076,7 @@ impl PaneTree {
                 tree_has_splits,
                 is_zoomed,
                 tab_accent_color,
+                tab_accent_inactive_alpha,
                 close_pane_cb,
                 toggle_zoom_cb,
                 cx,

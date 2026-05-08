@@ -410,6 +410,7 @@ impl Render for ConWorkspace {
                 self.surface_rename.clone(),
                 pane_divider_color,
                 tab_accent_color,
+                self.tab_accent_inactive_alpha,
                 self.hide_pane_title_bar,
                 cx,
             )

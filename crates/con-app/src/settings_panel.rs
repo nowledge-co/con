@@ -6,7 +6,7 @@ use con_agent::{
 use con_core::{
     Config,
     config::{
-        DEFAULT_TERMINAL_FONT_FAMILY, MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE,
+        AppearanceConfig, DEFAULT_TERMINAL_FONT_FAMILY, MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE,
         is_gpui_pseudo_font_family, sanitize_terminal_font_family,
     },
 };
@@ -133,6 +133,8 @@ pub struct SettingsPanel {
     terminal_opacity_slider: Entity<SliderState>,
     terminal_blur: bool,
     ui_opacity_slider: Entity<SliderState>,
+    tab_accent_inactive_alpha_slider: Entity<SliderState>,
+    tab_accent_inactive_hover_alpha_slider: Entity<SliderState>,
     background_image_input: Entity<InputState>,
     background_image_opacity_slider: Entity<SliderState>,
     background_image_position_select: Entity<SelectState<Vec<String>>>,
@@ -219,6 +221,40 @@ impl SettingsPanel {
 
     fn ui_opacity_value(&self) -> f32 {
         Self::clamp_ui_opacity(self.config.appearance.ui_opacity)
+    }
+
+    fn clamp_tab_accent_inactive_alpha(value: f32) -> f32 {
+        if value.is_finite() {
+            value.clamp(
+                AppearanceConfig::MIN_TAB_ACCENT_ALPHA,
+                AppearanceConfig::MAX_TAB_ACCENT_INACTIVE_ALPHA,
+            )
+        } else {
+            crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA
+        }
+    }
+
+    fn clamp_tab_accent_inactive_hover_alpha(value: f32, inactive: f32) -> f32 {
+        let value = if value.is_finite() {
+            value.clamp(
+                AppearanceConfig::MIN_TAB_ACCENT_ALPHA,
+                AppearanceConfig::MAX_TAB_ACCENT_INACTIVE_HOVER_ALPHA,
+            )
+        } else {
+            crate::tab_colors::TAB_ACCENT_INACTIVE_HOVER_ALPHA
+        };
+        value.max(inactive)
+    }
+
+    fn tab_accent_inactive_alpha_value(&self) -> f32 {
+        Self::clamp_tab_accent_inactive_alpha(self.config.appearance.tab_accent_inactive_alpha)
+    }
+
+    fn tab_accent_inactive_hover_alpha_value(&self) -> f32 {
+        Self::clamp_tab_accent_inactive_hover_alpha(
+            self.config.appearance.tab_accent_inactive_hover_alpha,
+            self.tab_accent_inactive_alpha_value(),
+        )
     }
 
     fn clamp_background_image_opacity(value: f32) -> f32 {
@@ -1132,6 +1168,27 @@ impl SettingsPanel {
                 .step(0.01)
                 .default_value(Self::clamp_ui_opacity(config.appearance.ui_opacity))
         });
+        let tab_accent_inactive_alpha_slider = cx.new(|_| {
+            SliderState::new()
+                .min(AppearanceConfig::MIN_TAB_ACCENT_ALPHA)
+                .max(AppearanceConfig::MAX_TAB_ACCENT_INACTIVE_ALPHA)
+                .step(0.01)
+                .default_value(Self::clamp_tab_accent_inactive_alpha(
+                    config.appearance.tab_accent_inactive_alpha,
+                ))
+        });
+        let tab_accent_inactive_hover_alpha_slider = cx.new(|_| {
+            let inactive =
+                Self::clamp_tab_accent_inactive_alpha(config.appearance.tab_accent_inactive_alpha);
+            SliderState::new()
+                .min(AppearanceConfig::MIN_TAB_ACCENT_ALPHA)
+                .max(AppearanceConfig::MAX_TAB_ACCENT_INACTIVE_HOVER_ALPHA)
+                .step(0.01)
+                .default_value(Self::clamp_tab_accent_inactive_hover_alpha(
+                    config.appearance.tab_accent_inactive_hover_alpha,
+                    inactive,
+                ))
+        });
         let background_image_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder("~/Pictures/wallpaper.jpg", window, cx);
@@ -1190,6 +1247,44 @@ impl SettingsPanel {
             |this, _, event: &SliderEvent, cx| match event {
                 SliderEvent::Change(value) => {
                     this.config.appearance.ui_opacity = Self::clamp_ui_opacity(value.end());
+                    cx.emit(AppearancePreview);
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            &tab_accent_inactive_alpha_slider,
+            window,
+            |this, _, event: &SliderEvent, window, cx| match event {
+                SliderEvent::Change(value) => {
+                    let inactive = Self::clamp_tab_accent_inactive_alpha(value.end());
+                    this.config.appearance.tab_accent_inactive_alpha = inactive;
+                    let hover = Self::clamp_tab_accent_inactive_hover_alpha(
+                        this.config.appearance.tab_accent_inactive_hover_alpha,
+                        inactive,
+                    );
+                    this.config.appearance.tab_accent_inactive_hover_alpha = hover;
+                    this.tab_accent_inactive_hover_alpha_slider
+                        .update(cx, |slider, cx| slider.set_value(hover, window, cx));
+                    cx.emit(AppearancePreview);
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            &tab_accent_inactive_hover_alpha_slider,
+            window,
+            |this, _, event: &SliderEvent, window, cx| match event {
+                SliderEvent::Change(value) => {
+                    let inactive = Self::clamp_tab_accent_inactive_alpha(
+                        this.config.appearance.tab_accent_inactive_alpha,
+                    );
+                    let hover = Self::clamp_tab_accent_inactive_hover_alpha(value.end(), inactive);
+                    this.config.appearance.tab_accent_inactive_hover_alpha = hover;
+                    this.tab_accent_inactive_hover_alpha_slider
+                        .update(cx, |slider, cx| slider.set_value(hover, window, cx));
                     cx.emit(AppearancePreview);
                     cx.notify();
                 }
@@ -1356,6 +1451,8 @@ impl SettingsPanel {
             terminal_opacity_slider,
             terminal_blur: config.appearance.terminal_blur,
             ui_opacity_slider,
+            tab_accent_inactive_alpha_slider,
+            tab_accent_inactive_hover_alpha_slider,
             background_image_input,
             background_image_opacity_slider,
             background_image_position_select,
@@ -1508,6 +1605,29 @@ impl SettingsPanel {
                 cx,
             );
         });
+        self.tab_accent_inactive_alpha_slider
+            .update(cx, |slider, cx| {
+                slider.set_value(
+                    Self::clamp_tab_accent_inactive_alpha(
+                        self.config.appearance.tab_accent_inactive_alpha,
+                    ),
+                    window,
+                    cx,
+                );
+            });
+        self.tab_accent_inactive_hover_alpha_slider
+            .update(cx, |slider, cx| {
+                slider.set_value(
+                    Self::clamp_tab_accent_inactive_hover_alpha(
+                        self.config.appearance.tab_accent_inactive_hover_alpha,
+                        Self::clamp_tab_accent_inactive_alpha(
+                            self.config.appearance.tab_accent_inactive_alpha,
+                        ),
+                    ),
+                    window,
+                    cx,
+                );
+            });
         self.background_image_input.update(cx, |s, cx| {
             s.set_value(
                 &self
@@ -2104,6 +2224,17 @@ impl SettingsPanel {
         self.config.appearance.terminal_blur = self.terminal_blur;
         self.config.appearance.ui_opacity =
             Self::clamp_ui_opacity(self.ui_opacity_slider.read(cx).value().end());
+        self.config.appearance.tab_accent_inactive_alpha = Self::clamp_tab_accent_inactive_alpha(
+            self.tab_accent_inactive_alpha_slider.read(cx).value().end(),
+        );
+        self.config.appearance.tab_accent_inactive_hover_alpha =
+            Self::clamp_tab_accent_inactive_hover_alpha(
+                self.tab_accent_inactive_hover_alpha_slider
+                    .read(cx)
+                    .value()
+                    .end(),
+                self.config.appearance.tab_accent_inactive_alpha,
+            );
         let background_image_text = self
             .background_image_input
             .read(cx)
@@ -2960,12 +3091,17 @@ impl SettingsPanel {
         let ui_font_size_input = self.ui_font_size_input.clone();
         let terminal_opacity_slider = self.terminal_opacity_slider.clone();
         let ui_opacity_slider = self.ui_opacity_slider.clone();
+        let tab_accent_inactive_alpha_slider = self.tab_accent_inactive_alpha_slider.clone();
+        let tab_accent_inactive_hover_alpha_slider =
+            self.tab_accent_inactive_hover_alpha_slider.clone();
         let background_image_input = self.background_image_input.clone();
         let background_image_opacity_slider = self.background_image_opacity_slider.clone();
         let background_image_position_select = self.background_image_position_select.clone();
         let background_image_fit_select = self.background_image_fit_select.clone();
         let terminal_opacity = self.terminal_opacity_value();
         let ui_opacity = self.ui_opacity_value();
+        let tab_accent_inactive_alpha = self.tab_accent_inactive_alpha_value();
+        let tab_accent_inactive_hover_alpha = self.tab_accent_inactive_hover_alpha_value();
         let background_image_opacity = self.background_image_opacity_value();
         let card_opacity = self.card_opacity();
         let image_repeat_toggle = Switch::new("background-image-repeat")
@@ -3318,6 +3454,22 @@ impl SettingsPanel {
                                     cx.emit(AppearancePreview);
                                     cx.notify();
                                 })),
+                            theme,
+                        ))
+                        .child(row_separator(theme))
+                        .child(slider_row(
+                            "Inactive Accent",
+                            "Accent strength for inactive tabs and unfocused pane titles.",
+                            &tab_accent_inactive_alpha_slider,
+                            tab_accent_inactive_alpha,
+                            theme,
+                        ))
+                        .child(row_separator(theme))
+                        .child(slider_row(
+                            "Hover Accent",
+                            "Accent strength when hovering inactive tabs.",
+                            &tab_accent_inactive_hover_alpha_slider,
+                            tab_accent_inactive_hover_alpha,
                             theme,
                         )),
                 ),

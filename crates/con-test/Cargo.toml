@@ -1,0 +1,15 @@
+[package]
+name = "con-test"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Logic test framework for con-cli — drives a live con session via .test files"
+
+[[bin]]
+name = "con-test"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+clap = { version = "4.5", features = ["derive"] }

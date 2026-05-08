@@ -40,8 +40,17 @@ impl ConWorkspace {
         let terminal_opacity = Self::effective_terminal_opacity(config.appearance.terminal_opacity);
         let terminal_blur = Self::effective_terminal_blur(config.appearance.terminal_blur);
         let ui_opacity = Self::clamp_ui_opacity(config.appearance.ui_opacity);
+        let tab_accent_inactive_alpha = config.appearance.tab_accent_inactive_alpha;
+        let tab_accent_inactive_hover_alpha = config.appearance.tab_accent_inactive_hover_alpha;
         let effective_ui_opacity = Self::effective_ui_opacity(ui_opacity);
-        sidebar.update(cx, |s, cx| s.set_ui_opacity(effective_ui_opacity, cx));
+        sidebar.update(cx, |s, cx| {
+            s.set_ui_opacity(effective_ui_opacity, cx);
+            s.set_tab_accent_alphas(
+                tab_accent_inactive_alpha,
+                tab_accent_inactive_hover_alpha,
+                cx,
+            );
+        });
         let background_image = config.appearance.background_image.clone();
         let background_image_opacity =
             Self::clamp_background_image_opacity(config.appearance.background_image_opacity);
@@ -651,6 +660,8 @@ impl ConWorkspace {
             terminal_opacity,
             terminal_blur,
             ui_opacity,
+            tab_accent_inactive_alpha,
+            tab_accent_inactive_hover_alpha,
             background_image,
             background_image_opacity,
             background_image_position,

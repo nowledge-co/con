@@ -1,0 +1,14 @@
+# panes/exec.test
+# Pane read: read terminal content from the active pane.
+# Does not require shell integration — works immediately after con starts.
+
+con-cli --json panes read --tab 1 --lines 5  # can read pane content
+---- ok
+
+con-cli --json panes list --tab 1  # pane reports surface_ready and is_alive
+---- json-subset
+{"panes":[{"surface_ready":true,"is_alive":true}]}
+
+con-cli --json panes list --tab 1  # pane has read_screen capability
+---- contains
+"read_screen"
