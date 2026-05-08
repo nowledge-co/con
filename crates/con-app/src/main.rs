@@ -1472,7 +1472,7 @@ fn inherit_shell_env() {
         }
     };
     let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
-    std::thread::spawn(move || {
+    let reader_handle = std::thread::spawn(move || {
         let mut buf = Vec::new();
         stdout_pipe.read_to_end(&mut buf).ok();
         let _ = tx.send(buf);
@@ -1491,12 +1491,17 @@ fn inherit_shell_env() {
                     );
                     let _ = child.kill();
                     let _ = child.wait();
+                    // Killing the child closes the write end of the pipe, so
+                    // the reader thread gets EOF and exits. Join it to ensure
+                    // no thread is running before apply_to_env calls set_var.
+                    let _ = reader_handle.join();
                     return;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             Err(e) => {
                 log::debug!("inherit_shell_env: try_wait error: {e}");
+                let _ = reader_handle.join();
                 return;
             }
         }
@@ -1509,6 +1514,10 @@ fn inherit_shell_env() {
         Ok(b) => b,
         Err(_) => {
             log::debug!("inherit_shell_env: stdout reader timed out (background process holding pipe open)");
+            // The reader thread may still be blocked; it will eventually get
+            // EOF when the background process exits. We cannot join here
+            // without blocking, so we detach — but we must not call set_var
+            // after this point (we return immediately).
             return;
         }
     };
