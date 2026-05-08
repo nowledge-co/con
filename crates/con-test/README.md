@@ -35,7 +35,8 @@ cargo build -p con -p con-cli -p con-test
 ```
 # comment
 
-cmd <con-cli arguments...>   # optional inline label
+con-cli <arguments...>   # preferred
+cmd <arguments...>       # legacy alias
 ---- <mode>
 expected output here
 ```
@@ -55,18 +56,18 @@ expected output here
 ```
 # tabs/basic.test
 
-cmd --json tabs list  # at least one tab exists
+con-cli --json tabs list  # at least one tab exists
 ---- json-subset
 {"tabs":[{"index":1}]}
 
-cmd tabs new
+con-cli tabs new
 ---- ok
 
-cmd --json tabs list
+con-cli --json tabs list
 ---- contains
 "index":2
 
-cmd --json tabs close --tab 2
+con-cli --json tabs close --tab 2
 ---- ok
 ```
 

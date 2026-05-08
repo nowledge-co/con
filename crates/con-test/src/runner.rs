@@ -517,7 +517,11 @@ fn rewrite_file(path: &Path, _steps: &[Step], rewrites: &[(usize, String)]) -> R
     while i < lines.len() {
         let trimmed = lines[i].trim();
 
-        if trimmed.starts_with("cmd ") || trimmed == "cmd" {
+        if trimmed.starts_with("con-cli ")
+            || trimmed == "con-cli"
+            || trimmed.starts_with("cmd ")
+            || trimmed == "cmd"
+        {
             out.push_str(lines[i]);
             out.push('\n');
             i += 1;
@@ -539,7 +543,11 @@ fn rewrite_file(path: &Path, _steps: &[Step], rewrites: &[(usize, String)]) -> R
             // Skip old expected block
             while i < lines.len() {
                 let t = lines[i].trim();
-                if t.starts_with("cmd ") || t == "cmd" {
+                if t.starts_with("con-cli ")
+                    || t == "con-cli"
+                    || t.starts_with("cmd ")
+                    || t == "cmd"
+                {
                     break;
                 }
                 if t.is_empty() {

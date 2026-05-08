@@ -5,8 +5,9 @@
 /// ```text
 /// # This is a comment
 ///
-/// cmd <con-cli arguments...>   # optional inline label
-/// ---- <mode>                  # mode is optional, default: contains
+/// con-cli <arguments...>   # preferred
+/// cmd <arguments...>       # legacy alias
+/// ---- <mode>              # mode is optional, default: contains
 /// expected output here
 /// ```
 ///
@@ -21,8 +22,10 @@
 ///
 /// Blank lines and lines starting with `#` outside a step block are ignored.
 ///
-/// Legacy `match <mode>` line between `cmd` and `----` is still accepted for
-/// backwards compatibility but the inline `---- <mode>` form is preferred.
+/// Both `con-cli ...` (preferred) and legacy `cmd ...` step directives are
+/// accepted. Legacy `match <mode>` line between the step directive and `----`
+/// is also accepted for backwards compatibility but the inline `---- <mode>`
+/// form is preferred.
 use anyhow::{Context, Result, bail};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,16 +101,14 @@ pub fn parse_source(source: &str, origin: String) -> Result<Vec<Step>> {
             continue;
         }
 
-        if let Some(rest) = trimmed
-            .strip_prefix("cmd ")
-            .or_else(|| if trimmed == "cmd" { Some("") } else { None })
-        {
+        if let Some(rest) = step_args(trimmed) {
             let cmd_line = i + 1; // 1-based
 
-            // Split inline label comment: `cmd foo bar  # my label`
+            // Split inline label comment: `con-cli foo bar  # my label`
             let (args_str, label) = split_inline_comment(rest);
-            let args = shell_split(args_str.trim())
-                .with_context(|| format!("{origin}:{cmd_line}: failed to parse cmd arguments"))?;
+            let args = shell_split(args_str.trim()).with_context(|| {
+                format!("{origin}:{cmd_line}: failed to parse con-cli arguments")
+            })?;
 
             let label = if label.is_empty() {
                 format!("line {cmd_line}: {}", args_str.trim())
@@ -133,7 +134,7 @@ pub fn parse_source(source: &str, origin: String) -> Result<Vec<Step>> {
             // Expect `----` separator, optionally followed by match mode
             if i >= lines.len() {
                 bail!(
-                    "{origin}:{}: expected `----` after cmd block, got <eof>",
+                    "{origin}:{}: expected `----` after con-cli/cmd block, got <eof>",
                     i + 1
                 );
             }
@@ -144,7 +145,7 @@ pub fn parse_source(source: &str, origin: String) -> Result<Vec<Step>> {
                 mode.trim()
             } else {
                 bail!(
-                    "{origin}:{}: expected `----` after cmd block, got {:?}",
+                    "{origin}:{}: expected `----` after con-cli/cmd block, got {:?}",
                     i + 1,
                     sep_line
                 );
@@ -158,12 +159,12 @@ pub fn parse_source(source: &str, origin: String) -> Result<Vec<Step>> {
             };
             i += 1; // skip ----
 
-            // Collect expected output until blank line or next `cmd` or EOF
+            // Collect expected output until blank line, next step directive, or EOF
             let mut expected_lines: Vec<&str> = Vec::new();
             while i < lines.len() {
                 let line = lines[i];
                 let t = line.trim();
-                if t.starts_with("cmd ") || t == "cmd" {
+                if step_args(t).is_some() {
                     break;
                 }
                 // A blank line ends the expected block (only after content has started)
@@ -194,7 +195,7 @@ pub fn parse_source(source: &str, origin: String) -> Result<Vec<Step>> {
             });
         } else {
             bail!(
-                "{origin}:{}: unexpected line {:?} (expected `cmd`, `#`, or blank)",
+                "{origin}:{}: unexpected line {:?} (expected `con-cli`, legacy `cmd`, `#`, or blank)",
                 i + 1,
                 trimmed
             );
@@ -202,6 +203,13 @@ pub fn parse_source(source: &str, origin: String) -> Result<Vec<Step>> {
     }
 
     Ok(steps)
+}
+
+fn step_args(line: &str) -> Option<&str> {
+    line.strip_prefix("con-cli ")
+        .or_else(|| if line == "con-cli" { Some("") } else { None })
+        .or_else(|| line.strip_prefix("cmd "))
+        .or_else(|| if line == "cmd" { Some("") } else { None })
 }
 
 /// Split `foo bar  # comment` into (`foo bar`, `comment`).
@@ -265,7 +273,7 @@ mod tests {
 
     #[test]
     fn parse_simple_step_default_contains() {
-        let src = "cmd --json identify\n----\n{\"version\":\n";
+        let src = "con-cli --json identify\n----\n{\"version\":\n";
         let steps = parse_source(src, "test".into()).unwrap();
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].args, vec!["--json", "identify"]);
@@ -274,22 +282,31 @@ mod tests {
     }
 
     #[test]
+    fn parse_legacy_cmd_directive_still_works() {
+        let src = "cmd --json identify\n----\n{\"version\":\n";
+        let steps = parse_source(src, "test".into()).unwrap();
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0].args, vec!["--json", "identify"]);
+        assert_eq!(steps[0].match_mode, MatchMode::Contains);
+    }
+
+    #[test]
     fn parse_inline_mode_on_separator() {
-        let src = "cmd --json tabs list\n---- exact\n{}\n";
+        let src = "con-cli --json tabs list\n---- exact\n{}\n";
         let steps = parse_source(src, "test".into()).unwrap();
         assert_eq!(steps[0].match_mode, MatchMode::Exact);
     }
 
     #[test]
     fn parse_inline_mode_json_subset() {
-        let src = "cmd --json tabs list\n---- json-subset\n{\"tabs\":[]}\n";
+        let src = "con-cli --json tabs list\n---- json-subset\n{\"tabs\":[]}\n";
         let steps = parse_source(src, "test".into()).unwrap();
         assert_eq!(steps[0].match_mode, MatchMode::JsonSubset);
     }
 
     #[test]
     fn parse_inline_mode_ok_empty_expected() {
-        let src = "cmd tabs new\n---- ok\n";
+        let src = "con-cli tabs new\n---- ok\n";
         let steps = parse_source(src, "test".into()).unwrap();
         assert_eq!(steps[0].match_mode, MatchMode::Ok);
         assert_eq!(steps[0].expected, "");
@@ -297,21 +314,20 @@ mod tests {
 
     #[test]
     fn parse_legacy_match_line_still_works() {
-        let src = "cmd --json tabs list\nmatch json-subset\n----\n{\"tabs\":[]}\n";
+        let src = "con-cli --json tabs list\nmatch json-subset\n----\n{\"tabs\":[]}\n";
         let steps = parse_source(src, "test".into()).unwrap();
         assert_eq!(steps[0].match_mode, MatchMode::JsonSubset);
     }
 
     #[test]
     fn separator_requires_space_before_mode() {
-        let src = "cmd --json tabs list\n----json-subset\n{\"tabs\":[]}\n";
+        let src = "con-cli --json tabs list\n----json-subset\n{\"tabs\":[]}\n";
         assert!(parse_source(src, "test".into()).is_err());
     }
 
     #[test]
     fn parse_multiple_steps() {
-        let src =
-            "cmd identify\n----\ncon\n\ncmd --json tabs list\n---- json-subset\n{\"tabs\":[]}\n";
+        let src = "con-cli identify\n----\ncon\n\ncon-cli --json tabs list\n---- json-subset\n{\"tabs\":[]}\n";
         let steps = parse_source(src, "test".into()).unwrap();
         assert_eq!(steps.len(), 2);
         assert_eq!(steps[1].match_mode, MatchMode::JsonSubset);
@@ -319,7 +335,7 @@ mod tests {
 
     #[test]
     fn inline_label_comment() {
-        let src = "cmd --json identify  # smoke test\n----\ncon\n";
+        let src = "con-cli --json identify  # smoke test\n----\ncon\n";
         let steps = parse_source(src, "test".into()).unwrap();
         assert_eq!(steps[0].label, "smoke test");
     }

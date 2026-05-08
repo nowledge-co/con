@@ -1,14 +1,14 @@
 # tabs/rename.test
 # Tab state: verify tab 1 initial fields.
 
-cmd --json tabs list  # initial state has tab 1
+con-cli --json tabs list  # initial state has tab 1
 ---- json-subset
 {"tabs":[{"index":1}]}
 
-cmd --json tabs list  # tab 1 is active
+con-cli --json tabs list  # tab 1 is active
 ---- json-subset
 {"tabs":[{"index":1,"is_active":true}]}
 
-cmd --json tabs list  # tab 1 has a title
+con-cli --json tabs list  # tab 1 has a title
 ---- contains
 "title"

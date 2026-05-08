@@ -23,12 +23,13 @@ execution against a shared process.
 ```
 # comment
 
-cmd <con-cli arguments...>   # optional inline label
+con-cli <arguments...>   # preferred
+cmd <arguments...>       # legacy alias
 ---- <mode>
 expected output here
 ```
 
-The `----` line carries the match mode inline. A blank line or the next `cmd` ends the
+The `----` line carries the match mode inline. A blank line or the next step directive ends the
 expected block.
 
 **Match modes:**
@@ -47,18 +48,18 @@ expected block.
 ```
 # tabs/basic.test
 
-cmd --json tabs list  # at least one tab exists
+con-cli --json tabs list  # at least one tab exists
 ---- json-subset
 {"tabs":[{"index":1}]}
 
-cmd tabs new
+con-cli tabs new
 ---- ok
 
-cmd --json tabs list
+con-cli --json tabs list
 ---- contains
 "index":2
 
-cmd --json tabs close --tab 2
+con-cli --json tabs close --tab 2
 ---- ok
 ```
 
@@ -164,7 +165,7 @@ Steps:
 ## Adding tests
 
 1. Create a `.test` file under `testdata/` in the appropriate subdirectory.
-2. Write `cmd` / `---- <mode>` / expected blocks.
+2. Write `con-cli` / `---- <mode>` / expected blocks.
 3. If unsure about exact output, run with `--rewrite` to generate the baseline:
    ```bash
    ./target/debug/con-test --rewrite crates/con-test/testdata/my-new-test.test
