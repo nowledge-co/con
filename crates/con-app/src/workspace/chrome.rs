@@ -1,7 +1,10 @@
 use super::*;
 
-pub(super) fn agent_panel_motion_target_for_agent_request(already_open: bool) -> Option<f32> {
-    if already_open { None } else { Some(1.0) }
+/// Always returns `Some(1.0)` for agent-request opens so the motion value is
+/// driven to visible even when `agent_panel_open` was set by a path that
+/// skipped the motion update (e.g. the skill-invoke branch).
+pub(super) fn agent_panel_motion_target_for_agent_request(_already_open: bool) -> Option<f32> {
+    Some(1.0)
 }
 
 impl ConWorkspace {
