@@ -560,9 +560,25 @@ fn json_is_subset(expected: &Value, actual: &Value) -> bool {
                 .map(|av| json_is_subset(ev, av))
                 .unwrap_or(false)
         }),
-        (Value::Array(exp_arr), Value::Array(act_arr)) => exp_arr
-            .iter()
-            .all(|ev| act_arr.iter().any(|av| json_is_subset(ev, av))),
+        (Value::Array(exp_arr), Value::Array(act_arr)) => {
+            if exp_arr.len() > act_arr.len() {
+                return false;
+            }
+
+            let mut used = vec![false; act_arr.len()];
+            exp_arr.iter().all(|ev| {
+                if let Some(index) = act_arr
+                    .iter()
+                    .enumerate()
+                    .position(|(idx, av)| !used[idx] && json_is_subset(ev, av))
+                {
+                    used[index] = true;
+                    true
+                } else {
+                    false
+                }
+            })
+        }
         _ => expected == actual,
     }
 }
@@ -673,6 +689,29 @@ fn rewrite_file(path: &Path, _steps: &[Step], rewrites: &[(usize, String)]) -> R
 
     std::fs::write(path, out)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_subset_arrays_preserve_duplicate_expectations() {
+        let expected = serde_json::json!([
+            {"is_alive": true},
+            {"is_alive": true}
+        ]);
+        let actual_one = serde_json::json!([
+            {"pane_id": 1, "is_alive": true}
+        ]);
+        let actual_two = serde_json::json!([
+            {"pane_id": 1, "is_alive": true},
+            {"pane_id": 2, "is_alive": true}
+        ]);
+
+        assert!(!json_is_subset(&expected, &actual_one));
+        assert!(json_is_subset(&expected, &actual_two));
+    }
 }
 
 /// Quote a shell argument if it contains spaces or special characters.

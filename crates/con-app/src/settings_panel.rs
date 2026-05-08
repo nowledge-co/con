@@ -1253,9 +1253,10 @@ impl SettingsPanel {
             },
         )
         .detach();
-        cx.subscribe(
+        cx.subscribe_in(
             &tab_accent_inactive_alpha_slider,
-            |this, _, event: &SliderEvent, cx| match event {
+            window,
+            |this, _, event: &SliderEvent, window, cx| match event {
                 SliderEvent::Change(value) => {
                     let inactive = Self::clamp_tab_accent_inactive_alpha(value.end());
                     this.config.appearance.tab_accent_inactive_alpha = inactive;
@@ -1264,21 +1265,26 @@ impl SettingsPanel {
                         inactive,
                     );
                     this.config.appearance.tab_accent_inactive_hover_alpha = hover;
+                    this.tab_accent_inactive_hover_alpha_slider
+                        .update(cx, |slider, cx| slider.set_value(hover, window, cx));
                     cx.emit(AppearancePreview);
                     cx.notify();
                 }
             },
         )
         .detach();
-        cx.subscribe(
+        cx.subscribe_in(
             &tab_accent_inactive_hover_alpha_slider,
-            |this, _, event: &SliderEvent, cx| match event {
+            window,
+            |this, _, event: &SliderEvent, window, cx| match event {
                 SliderEvent::Change(value) => {
                     let inactive = Self::clamp_tab_accent_inactive_alpha(
                         this.config.appearance.tab_accent_inactive_alpha,
                     );
-                    this.config.appearance.tab_accent_inactive_hover_alpha =
-                        Self::clamp_tab_accent_inactive_hover_alpha(value.end(), inactive);
+                    let hover = Self::clamp_tab_accent_inactive_hover_alpha(value.end(), inactive);
+                    this.config.appearance.tab_accent_inactive_hover_alpha = hover;
+                    this.tab_accent_inactive_hover_alpha_slider
+                        .update(cx, |slider, cx| slider.set_value(hover, window, cx));
                     cx.emit(AppearancePreview);
                     cx.notify();
                 }

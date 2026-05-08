@@ -358,7 +358,7 @@ fn resolve_bin(flag: Option<&Path>, name: &str) -> Result<PathBuf> {
     let sibling = {
         let mut p = std::env::current_exe().unwrap_or_default();
         p.pop();
-        p.push(name);
+        p.push(platform_exe_name(name));
         p
     };
     if sibling.exists() {
@@ -383,6 +383,22 @@ fn env_key_for_bin(name: &str) -> &'static str {
         "con" | "con-app" => "CON",
         "con-cli" => "CON_CLI",
         _ => "CON_BIN",
+    }
+}
+
+fn platform_exe_name(name: &str) -> String {
+    #[cfg(windows)]
+    {
+        if name.ends_with(".exe") {
+            name.to_string()
+        } else {
+            format!("{name}.exe")
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        name.to_string()
     }
 }
 
@@ -467,6 +483,14 @@ mod tests {
         assert_eq!(app_binary_name(), "con-app");
         #[cfg(not(windows))]
         assert_eq!(app_binary_name(), "con");
+    }
+
+    #[test]
+    fn sibling_lookup_uses_platform_exe_name() {
+        #[cfg(windows)]
+        assert_eq!(platform_exe_name("con-cli"), "con-cli.exe");
+        #[cfg(not(windows))]
+        assert_eq!(platform_exe_name("con-cli"), "con-cli");
     }
 
     #[test]
