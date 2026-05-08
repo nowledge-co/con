@@ -1427,34 +1427,14 @@ fn install_seh_filter() {
     }
 }
 
-/// Print the current process environment as a JSON object to stdout.
-///
-/// This is the `--printenv` mode: the login shell runs
-/// `con --printenv` and we emit JSON so the parent process can parse it
-/// robustly even when the shell rc files produce noisy output on other fds.
-fn cmd_printenv() {
-    let map: std::collections::HashMap<String, String> = std::env::vars().collect();
-    match serde_json::to_string(&map) {
-        Ok(json) => {
-            println!("{json}");
-        }
-        Err(e) => {
-            eprintln!("con --printenv: failed to serialize env: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
 /// On macOS and Linux, GUI apps launched from the Dock / Spotlight / a
 /// desktop launcher do not inherit the user's shell environment, so proxy
 /// variables like `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` (and their
 /// lowercase equivalents) are absent from the process environment.
 ///
-/// This function runs the user's login shell with `-l -i -c "con --printenv"`
-/// (Zed-style) so the shell fully initialises its rc files before we capture
-/// the environment as JSON.  Only proxy-related variables that are not already
-/// set in the process environment are injected, so an explicit env-var or a
-/// `[network]` config value always wins.
+/// Runs `<login-shell> -l -c 'env'` and parses the `KEY=VALUE` output.
+/// Only proxy-related variables not already set in the process environment
+/// are injected, so an explicit env-var or a `[network]` config value wins.
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn inherit_shell_proxy_env() {
     use std::process::Command;
@@ -1471,37 +1451,19 @@ fn inherit_shell_proxy_env() {
         "no_proxy",
     ];
 
-    // Path to the running binary — we re-invoke ourselves with --printenv.
-    let self_exe = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(e) => {
-            log::debug!("inherit_shell_proxy_env: current_exe: {e}");
-            return;
-        }
-    };
-
     // Determine the user's login shell from $SHELL, falling back to /bin/sh.
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
 
-    // Run `<shell> -l -i -c "<self> --printenv"`.
-    // -l  : login shell (sources /etc/profile, ~/.zprofile, ~/.bash_profile …)
-    // -i  : interactive (sources ~/.zshrc, ~/.bashrc … where proxy vars often live)
-    // The shell may print noise to stdout from rc files; we parse the JSON
-    // object by scanning for the first `{` in the output, matching Zed's
-    // parse_env_map_from_noisy_output strategy.
-    // Single-quote the exe path so spaces / metacharacters in bundle paths
-    // (e.g. `/Applications/Con Terminal.app/...`) don't get word-split by sh.
-    let exe_str = self_exe.display().to_string();
-    let quoted = exe_str.replace('\'', r"'\''");
-    let cmd_str = format!("'{}' --printenv", quoted);
-
-    // Spawn with a 5 s timeout — shell rc files can hang on slow NFS mounts,
-    // SSH agent prompts, etc.  We must not block the GUI from appearing.
+    // Run `<shell> -l -c 'env'`.
+    // -l : login shell — sources /etc/profile, ~/.zprofile, ~/.bash_profile …
+    //      (no -i: avoids interactive-only rc noise and TTY hangs)
+    // env outputs KEY=VALUE\n lines; no JSON, no self-invocation needed.
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
     let mut child = match Command::new(&shell)
-        .args(["-l", "-i", "-c", &cmd_str])
+        .args(["-l", "-c", "env"])
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
         .spawn()
     {
         Ok(c) => c,
@@ -1511,10 +1473,11 @@ fn inherit_shell_proxy_env() {
         }
     };
 
+    // Poll with a deadline so a hanging rc file doesn't block the GUI.
     let deadline = std::time::Instant::now() + TIMEOUT;
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => break, // exited
+            Ok(Some(_)) => break,
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
                     log::debug!(
@@ -1547,38 +1510,18 @@ fn inherit_shell_proxy_env() {
         Err(_) => return,
     };
 
-    // Scan for the first `{` and try to parse a JSON object from there,
-    // tolerating any shell startup noise that precedes it.
-    let env_map: std::collections::HashMap<String, String> = {
-        let mut parsed = None;
-        for (pos, _) in stdout.match_indices('{') {
-            if let Ok(map) =
-                serde_json::from_str::<std::collections::HashMap<String, String>>(&stdout[pos..])
-            {
-                parsed = Some(map);
-                break;
-            }
-        }
-        match parsed {
-            Some(m) => m,
-            None => {
-                log::debug!("inherit_shell_proxy_env: no JSON env found in shell output");
-                return;
-            }
-        }
-    };
-
+    // Parse KEY=VALUE lines. Values may contain `=` so split on the first `=` only.
     let mut inherited = 0usize;
-    for key in PROXY_VARS {
-        if let Some(value) = env_map.get(*key) {
-            // Only set if not already present in the process environment.
-            if std::env::var_os(key).is_none() {
-                // SAFETY: single-threaded at this point in startup; no other
-                // threads have been spawned yet.
-                unsafe { std::env::set_var(key, value) };
-                inherited += 1;
-                log::info!("inherit_shell_proxy_env: inherited {key} from login shell");
-            }
+    for line in stdout.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if PROXY_VARS.contains(&key) && std::env::var_os(key).is_none() {
+            // SAFETY: single-threaded at this point in startup; no other
+            // threads have been spawned yet.
+            unsafe { std::env::set_var(key, value) };
+            inherited += 1;
+            log::info!("inherit_shell_proxy_env: inherited {key} from login shell");
         }
     }
 
@@ -1591,11 +1534,6 @@ fn main() {
     // `--printenv`: emit the current process environment as JSON and exit.
     // This is invoked by `inherit_shell_proxy_env` via the login shell so we
     // can capture the full shell environment robustly (Zed-style).
-    if std::env::args().any(|a| a == "--printenv") {
-        cmd_printenv();
-        return;
-    }
-
     // Install a panic hook before anything else so every panic —
     // including ones from background threads that would otherwise be
     // invisible — gets written to both stderr and a dated log file.
