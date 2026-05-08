@@ -1,0 +1,18 @@
+# panes/exec.test
+# Pane exec: run a command in the active shell and verify output.
+# Requires the focused pane to expose exec_visible_shell capability.
+
+cmd --json panes list --tab 1  # confirm exec_visible_shell available
+match contains
+----
+"exec_visible_shell"
+
+cmd --json panes exec --tab 1 --pane-id 0 -- /bin/echo CON_TEST_EXEC_OK  # run echo
+match contains
+----
+CON_TEST_EXEC_OK
+
+cmd --json panes wait --tab 1 --pane-id 0 --pattern CON_TEST_EXEC_OK --timeout 10  # wait for output
+match json-subset
+----
+{"status":"matched"}
