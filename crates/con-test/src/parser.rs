@@ -6,7 +6,7 @@
 /// # This is a comment
 ///
 /// con-cli <arguments...>   # preferred
-/// cmd <arguments...>       # legacy alias
+/// # Legacy: old tests may still use `cmd ...`
 /// ---- <mode>              # mode is optional, default: contains
 /// expected output here
 /// ```

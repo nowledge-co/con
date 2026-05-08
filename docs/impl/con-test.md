@@ -23,8 +23,8 @@ execution against a shared process.
 ```
 # comment
 
-con-cli <arguments...>   # preferred
-cmd <arguments...>       # legacy alias
+con-cli <arguments...>       # preferred
+# Legacy: old tests may still use `cmd ...`
 ---- <mode>
 expected output here
 ```
