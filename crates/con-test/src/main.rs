@@ -117,7 +117,7 @@ struct Cli {
     #[arg(long, value_name = "PATH")]
     con_cli: Option<PathBuf>,
 
-    /// Socket path for the launched con process (default: /tmp/con-test-<pid>.sock)
+    /// Control endpoint for the launched con process (default: platform-specific)
     #[arg(long, value_name = "PATH")]
     socket: Option<PathBuf>,
 
@@ -146,6 +146,18 @@ struct Cli {
 // Main
 // ---------------------------------------------------------------------------
 
+fn default_control_endpoint() -> PathBuf {
+    #[cfg(windows)]
+    {
+        PathBuf::from(format!(r"\\.\pipe\con-test-{}", std::process::id()))
+    }
+
+    #[cfg(not(windows))]
+    {
+        std::env::temp_dir().join(format!("con-test-{}.sock", std::process::id()))
+    }
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -171,9 +183,7 @@ fn main() -> ExitCode {
         }
     };
 
-    let socket = cli.socket.unwrap_or_else(|| {
-        std::env::temp_dir().join(format!("con-test-{}.sock", std::process::id()))
-    });
+    let socket = cli.socket.unwrap_or_else(default_control_endpoint);
 
     let test_files = match collect_test_files(&cli.paths) {
         Ok(files) => files,

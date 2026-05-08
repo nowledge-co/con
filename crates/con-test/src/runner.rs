@@ -44,7 +44,7 @@ impl ConProcess {
             .spawn()
             .with_context(|| format!("failed to launch con from {}", con_bin.display()))?;
 
-        let process = ConProcess {
+        let mut process = ConProcess {
             child,
             socket: socket.to_path_buf(),
         };
@@ -53,11 +53,15 @@ impl ConProcess {
         Ok(process)
     }
 
-    /// Block until the socket file appears or the timeout expires.
-    fn wait_for_socket(&self, timeout: Duration) -> Result<()> {
+    /// Block until the control endpoint is ready or the timeout expires.
+    fn wait_for_socket(&mut self, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
-            if self.socket.exists() {
+            if let Some(status) = self.child.try_wait()? {
+                bail!("con exited before control endpoint was ready (status: {status})");
+            }
+
+            if control_endpoint_ready(&self.socket) {
                 // Give con a brief moment to finish binding before we connect.
                 std::thread::sleep(Duration::from_millis(100));
                 return Ok(());
@@ -65,11 +69,23 @@ impl ConProcess {
             std::thread::sleep(Duration::from_millis(200));
         }
         bail!(
-            "con did not create socket at {} within {:?}",
+            "con did not expose control endpoint at {} within {:?}",
             self.socket.display(),
             timeout
         )
     }
+}
+
+#[cfg(windows)]
+fn control_endpoint_ready(socket: &Path) -> bool {
+    // Windows uses Named Pipes (e.g. \\.\pipe\con). Opening as a file
+    // is the canonical probe and succeeds only once the server is listening.
+    std::fs::OpenOptions::new().read(true).open(socket).is_ok()
+}
+
+#[cfg(not(windows))]
+fn control_endpoint_ready(socket: &Path) -> bool {
+    socket.exists()
 }
 
 impl Drop for ConProcess {
