@@ -514,14 +514,13 @@ impl NetworkConfig {
     /// pick them up automatically.
     ///
     /// - `Some(non_empty)` → sets the env var (overrides shell-inherited value).
-    /// - `Some("")`        → removes the env var (user explicitly cleared it).
-    /// - `None`            → no-op (not configured; leave whatever the env has).
+    /// - `Some("")` / `None` → no-op (leave whatever the env has).
     ///
     /// # Safety
     ///
     /// Must be called from a single-threaded context (e.g. early in `main`)
-    /// before any other threads are spawned, because `std::env::set_var` and
-    /// `std::env::remove_var` are not thread-safe.
+    /// before any other threads are spawned, because `std::env::set_var` is
+    /// not thread-safe.
     pub unsafe fn apply_to_env(&self) {
         unsafe {
             Self::apply_one("HTTP_PROXY", "http_proxy", self.http_proxy.as_deref());
@@ -532,22 +531,16 @@ impl NetworkConfig {
     /// # Safety
     /// Same as `apply_to_env` — must be called single-threaded.
     unsafe fn apply_one(upper: &str, lower: &str, value: Option<&str>) {
-        match value {
-            Some(v) if !v.is_empty() => unsafe {
-                std::env::set_var(upper, v);
-                std::env::set_var(lower, v);
+        if let Some(v) = value {
+            if !v.is_empty() {
+                unsafe {
+                    std::env::set_var(upper, v);
+                    std::env::set_var(lower, v);
+                }
                 log::info!("network: {upper} set from config");
-            },
-            Some(_empty) => unsafe {
-                // Explicitly cleared by the user (empty string) — remove any inherited value.
-                std::env::remove_var(upper);
-                std::env::remove_var(lower);
-                log::info!("network: {upper} cleared from config");
-            },
-            None => {
-                // Not configured — leave the environment untouched.
             }
         }
+        // None or empty string → leave the environment untouched.
     }
 }
 
@@ -904,7 +897,8 @@ http_proxy = "http://proxy.example.com:8080"
 
     #[test]
     fn network_config_empty_strings_are_preserved() {
-        // Empty strings are valid TOML values; apply_to_env skips them.
+        // Empty strings are valid TOML values and deserialize to Some("").
+        // apply_to_env treats them as no-op (same as None).
         let content = r#"
 [network]
 http_proxy  = ""

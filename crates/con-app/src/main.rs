@@ -1461,7 +1461,9 @@ fn inherit_shell_env() {
     };
 
     // Drain stdout on a background thread so the pipe never fills up and
-    // deadlocks the child. The child can then exit, and we join with a timeout.
+    // deadlocks the child. We use a channel so we can abandon the reader
+    // if the deadline is reached (e.g. a background process inherits stdout
+    // and keeps the pipe open after the shell exits).
     let mut stdout_pipe = match child.stdout.take() {
         Some(p) => p,
         None => {
@@ -1469,10 +1471,11 @@ fn inherit_shell_env() {
             return;
         }
     };
-    let reader_thread = std::thread::spawn(move || {
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    std::thread::spawn(move || {
         let mut buf = Vec::new();
         stdout_pipe.read_to_end(&mut buf).ok();
-        buf
+        let _ = tx.send(buf);
     });
 
     // Wait for the child with a deadline.
@@ -1499,9 +1502,15 @@ fn inherit_shell_env() {
         }
     }
 
-    let raw = match reader_thread.join() {
+    // Collect stdout with the remaining deadline — if a background process
+    // inherited the pipe and keeps it open, we abandon after the timeout.
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    let raw = match rx.recv_timeout(remaining) {
         Ok(b) => b,
-        Err(_) => return,
+        Err(_) => {
+            log::debug!("inherit_shell_env: stdout reader timed out (background process holding pipe open)");
+            return;
+        }
     };
     let stdout = match std::str::from_utf8(&raw) {
         Ok(s) => s,
