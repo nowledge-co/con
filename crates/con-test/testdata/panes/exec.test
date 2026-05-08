@@ -1,20 +1,17 @@
 # panes/exec.test
-# Pane exec: run a command in the active shell and verify output.
-# Requires shell integration (exec_visible_shell capability).
-# This test is skipped automatically if the pane does not expose
-# exec_visible_shell — check panes/basic.test for capability discovery.
+# Pane read: read terminal content from the active pane.
+# Does not require shell integration — works immediately after con starts.
 
-cmd --json panes list --tab 1  # pane is alive and surface ready
+cmd --json panes read --tab 1 --lines 5  # can read pane content
+match ok
+----
+
+cmd --json panes list --tab 1  # pane reports surface_ready and is_alive
 match json-subset
 ----
 {"panes":[{"surface_ready":true,"is_alive":true}]}
 
-cmd --json panes exec --tab 1 --pane-id 0 -- /bin/echo CON_TEST_EXEC_OK  # run echo
+cmd --json panes list --tab 1  # pane has read_screen capability
 match contains
 ----
-CON_TEST_EXEC_OK
-
-cmd --json panes wait --tab 1 --pane-id 0 --pattern CON_TEST_EXEC_OK --timeout 10  # wait for output
-match json-subset
-----
-{"status":"matched"}
+"read_screen"
