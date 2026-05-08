@@ -148,6 +148,8 @@ pub struct ConWorkspace {
     terminal_opacity: f32,
     terminal_blur: bool,
     ui_opacity: f32,
+    tab_accent_inactive_alpha: f32,
+    tab_accent_inactive_hover_alpha: f32,
     background_image: Option<String>,
     background_image_opacity: f32,
     background_image_position: String,

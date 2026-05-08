@@ -44,6 +44,12 @@ fn default_background_image_position() -> String {
 fn default_background_image_fit() -> String {
     "contain".into()
 }
+fn default_tab_accent_inactive_alpha() -> f32 {
+    0.15
+}
+fn default_tab_accent_inactive_hover_alpha() -> f32 {
+    0.22
+}
 fn default_restore_terminal_text() -> bool {
     true
 }
@@ -112,6 +118,10 @@ pub struct AppearanceConfig {
     pub background_image_position: String,
     pub background_image_fit: String,
     pub background_image_repeat: bool,
+    /// Accent color alpha for inactive tabs, vertical-tab rows, and unfocused pane titles.
+    pub tab_accent_inactive_alpha: f32,
+    /// Accent color alpha when hovering inactive tabs and vertical-tab rows.
+    pub tab_accent_inactive_hover_alpha: f32,
     /// Keep bounded private terminal text so restart continuity can show what
     /// was on screen. This is never exported to workspace layout profiles.
     pub restore_terminal_text: bool,
@@ -137,10 +147,32 @@ impl Default for AppearanceConfig {
             background_image_position: default_background_image_position(),
             background_image_fit: default_background_image_fit(),
             background_image_repeat: false,
+            tab_accent_inactive_alpha: default_tab_accent_inactive_alpha(),
+            tab_accent_inactive_hover_alpha: default_tab_accent_inactive_hover_alpha(),
             restore_terminal_text: default_restore_terminal_text(),
             tabs_orientation: TabsOrientation::default(),
             hide_pane_title_bar: false,
         }
+    }
+}
+
+impl AppearanceConfig {
+    pub const MIN_TAB_ACCENT_ALPHA: f32 = 0.05;
+    pub const MAX_TAB_ACCENT_INACTIVE_ALPHA: f32 = 0.30;
+    pub const MAX_TAB_ACCENT_INACTIVE_HOVER_ALPHA: f32 = 0.40;
+
+    pub fn normalize(&mut self) {
+        self.tab_accent_inactive_alpha = self.tab_accent_inactive_alpha.clamp(
+            Self::MIN_TAB_ACCENT_ALPHA,
+            Self::MAX_TAB_ACCENT_INACTIVE_ALPHA,
+        );
+        self.tab_accent_inactive_hover_alpha = self
+            .tab_accent_inactive_hover_alpha
+            .clamp(
+                Self::MIN_TAB_ACCENT_ALPHA,
+                Self::MAX_TAB_ACCENT_INACTIVE_HOVER_ALPHA,
+            )
+            .max(self.tab_accent_inactive_alpha);
     }
 }
 
@@ -529,15 +561,22 @@ impl SkillsConfig {
 }
 
 impl Config {
+    pub fn normalize(&mut self) {
+        self.appearance.normalize();
+    }
+
     pub fn load() -> Result<Self> {
         let config_path = Self::config_path();
         if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
             let mut config: Config = toml::from_str(&content)?;
+            config.normalize();
             config.agent.migrate_legacy();
             Ok(config)
         } else {
-            Ok(Config::default())
+            let mut config = Config::default();
+            config.normalize();
+            Ok(config)
         }
     }
 
@@ -682,6 +721,53 @@ restore_terminal_text = false
         let config: Config = toml::from_str(content).unwrap();
 
         assert!(!config.appearance.restore_terminal_text);
+    }
+
+    #[test]
+    fn tab_accent_alpha_defaults_are_visible() {
+        let config = Config::default();
+        assert_eq!(config.appearance.tab_accent_inactive_alpha, 0.15);
+        assert_eq!(config.appearance.tab_accent_inactive_hover_alpha, 0.22);
+    }
+
+    #[test]
+    fn legacy_configs_receive_tab_accent_alpha_defaults() {
+        let content = r#"
+[appearance]
+terminal_opacity = 0.8
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+
+        assert_eq!(config.appearance.tab_accent_inactive_alpha, 0.15);
+        assert_eq!(config.appearance.tab_accent_inactive_hover_alpha, 0.22);
+    }
+
+    #[test]
+    fn tab_accent_alpha_values_are_clamped_after_load() {
+        let content = r#"
+[appearance]
+tab_accent_inactive_alpha = 0.001
+tab_accent_inactive_hover_alpha = 0.02
+"#;
+        let mut config: Config = toml::from_str(content).unwrap();
+        config.normalize();
+
+        assert_eq!(config.appearance.tab_accent_inactive_alpha, 0.05);
+        assert_eq!(config.appearance.tab_accent_inactive_hover_alpha, 0.05);
+    }
+
+    #[test]
+    fn tab_accent_hover_alpha_never_drops_below_inactive_alpha() {
+        let content = r#"
+[appearance]
+tab_accent_inactive_alpha = 0.20
+tab_accent_inactive_hover_alpha = 0.10
+"#;
+        let mut config: Config = toml::from_str(content).unwrap();
+        config.normalize();
+
+        assert_eq!(config.appearance.tab_accent_inactive_alpha, 0.20);
+        assert_eq!(config.appearance.tab_accent_inactive_hover_alpha, 0.20);
     }
 
     #[test]

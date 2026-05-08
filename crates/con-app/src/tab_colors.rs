@@ -3,8 +3,8 @@ use gpui::{App, Hsla};
 use gpui_component::ActiveTheme;
 
 pub(crate) const TAB_ACCENT_ACTIVE_ALPHA: f32 = 0.35;
-pub(crate) const TAB_ACCENT_INACTIVE_ALPHA: f32 = 0.12;
-pub(crate) const TAB_ACCENT_INACTIVE_HOVER_ALPHA: f32 = 0.20;
+pub(crate) const TAB_ACCENT_INACTIVE_ALPHA: f32 = 0.15;
+pub(crate) const TAB_ACCENT_INACTIVE_HOVER_ALPHA: f32 = 0.22;
 
 /// Map a `TabAccentColor` to an `Hsla` for rendering dots and tab backgrounds.
 pub(crate) fn tab_accent_color_hsla(color: TabAccentColor, cx: &App) -> Hsla {
@@ -34,4 +34,16 @@ pub(crate) fn tab_accent_surface_hsla(color: TabAccentColor, alpha: f32, cx: &Ap
 /// Green dot used to indicate the active tab when no explicit accent color is set.
 pub(crate) fn active_tab_indicator_color() -> Hsla {
     gpui::hsla(142.0 / 360.0, 0.60, 0.42, 1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tab_accent_inactive_alpha_stays_visible() {
+        assert_eq!(TAB_ACCENT_ACTIVE_ALPHA, 0.35);
+        assert_eq!(TAB_ACCENT_INACTIVE_ALPHA, 0.15);
+        assert_eq!(TAB_ACCENT_INACTIVE_HOVER_ALPHA, 0.22);
+    }
 }

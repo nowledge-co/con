@@ -969,6 +969,8 @@ impl ConWorkspace {
         self.terminal_opacity = next_terminal_opacity;
         self.terminal_blur = next_terminal_blur;
         self.ui_opacity = Self::clamp_ui_opacity(appearance_config.ui_opacity);
+        self.tab_accent_inactive_alpha = appearance_config.tab_accent_inactive_alpha;
+        self.tab_accent_inactive_hover_alpha = appearance_config.tab_accent_inactive_hover_alpha;
         self.background_image = next_background_image;
         self.background_image_opacity = next_background_image_opacity;
         self.background_image_position = next_background_image_position;
@@ -1018,6 +1020,13 @@ impl ConWorkspace {
             .update(cx, |bar, _cx| bar.set_ui_opacity(effective_ui_opacity));
         self.sidebar
             .update(cx, |s, cx| s.set_ui_opacity(effective_ui_opacity, cx));
+        self.sidebar.update(cx, |s, cx| {
+            s.set_tab_accent_alphas(
+                self.tab_accent_inactive_alpha,
+                self.tab_accent_inactive_hover_alpha,
+                cx,
+            )
+        });
         self.command_palette.update(cx, |palette, _cx| {
             palette.set_ui_opacity(effective_ui_opacity)
         });

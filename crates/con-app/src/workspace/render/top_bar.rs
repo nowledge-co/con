@@ -566,7 +566,7 @@ impl ConWorkspace {
                         .map(|color| {
                             crate::tab_colors::tab_accent_surface_hsla(
                                 color,
-                                crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA,
+                                self.tab_accent_inactive_alpha,
                                 cx,
                             )
                         })
@@ -575,7 +575,7 @@ impl ConWorkspace {
                         .map(|color| {
                             crate::tab_colors::tab_accent_surface_hsla(
                                 color,
-                                crate::tab_colors::TAB_ACCENT_INACTIVE_HOVER_ALPHA,
+                                self.tab_accent_inactive_hover_alpha,
                                 cx,
                             )
                         })
