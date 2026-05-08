@@ -86,33 +86,23 @@ impl Drop for ConProcess {
 // ---------------------------------------------------------------------------
 
 /// Reset con to a known baseline state before each test file:
-///   - Close all tabs except the first one (con requires at least one tab).
-///   - The surviving tab is tab index 1.
+///   1. Close all tabs except tab 1 (con requires at least one tab).
+///   2. Close all extra panes in tab 1 by sending Ctrl-D to their shells.
 ///
-/// We re-query tabs after each close because indices shift on removal.
+/// We re-query after each close because indices shift on removal.
 pub fn reset_state(con_cli: &Path, socket: &Path) -> Result<()> {
+    reset_tabs(con_cli, socket)?;
+    reset_panes(con_cli, socket)?;
+    Ok(())
+}
+
+fn reset_tabs(con_cli: &Path, socket: &Path) -> Result<()> {
     loop {
-        let output = Command::new(con_cli)
-            .args(["--socket", &socket.to_string_lossy(), "--json", "tabs", "list"])
-            .output()
-            .context("reset_state: failed to run tabs list")?;
-
-        if !output.status.success() {
-            bail!(
-                "reset_state: tabs list failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-
-        let json: Value = serde_json::from_slice(&output.stdout)
-            .context("reset_state: tabs list returned invalid JSON")?;
-
+        let json = cli_json(con_cli, socket, &["tabs", "list"])?;
         let tabs = json["tabs"]
             .as_array()
-            .context("reset_state: missing tabs array")?;
+            .context("reset_tabs: missing tabs array")?;
 
-        // Find any tab with index > 1 and close it.
-        // We close one at a time and re-query so indices stay accurate.
         let extra = tabs
             .iter()
             .filter_map(|t| t["index"].as_u64())
@@ -120,30 +110,98 @@ pub fn reset_state(con_cli: &Path, socket: &Path) -> Result<()> {
 
         match extra {
             Some(idx) => {
-                let output = Command::new(con_cli)
-                    .args([
-                        "--socket",
-                        &socket.to_string_lossy(),
-                        "tabs",
-                        "close",
-                        "--tab",
-                        &idx.to_string(),
-                    ])
-                    .output()
-                    .context("reset_state: failed to run tabs close")?;
-
-                if !output.status.success() {
-                    bail!(
-                        "reset_state: tabs close --tab {} failed: {}",
-                        idx,
-                        String::from_utf8_lossy(&output.stderr)
-                    );
-                }
-                // Small pause to let con process the close before we re-query.
+                cli_run(con_cli, socket, &["tabs", "close", "--tab", &idx.to_string()])
+                    .with_context(|| format!("reset_tabs: tabs close --tab {idx} failed"))?;
                 std::thread::sleep(Duration::from_millis(50));
             }
-            None => break, // only tab 1 remains
+            None => break,
         }
+    }
+    Ok(())
+}
+
+fn reset_panes(con_cli: &Path, socket: &Path) -> Result<()> {
+    loop {
+        let json = cli_json(con_cli, socket, &["panes", "list", "--tab", "1"])?;
+        let panes = json["panes"]
+            .as_array()
+            .context("reset_panes: missing panes array")?;
+
+        if panes.len() <= 1 {
+            break;
+        }
+
+        // Keep the pane with the lowest pane_id; send Ctrl-D to all others.
+        let min_pane_id = panes
+            .iter()
+            .filter_map(|p| p["pane_id"].as_u64())
+            .min()
+            .context("reset_panes: no pane_id found")?;
+
+        let extra_id = panes
+            .iter()
+            .filter_map(|p| p["pane_id"].as_u64())
+            .find(|&id| id != min_pane_id);
+
+        match extra_id {
+            Some(id) => {
+                // Send Ctrl-D (EOF) to close the shell in the extra pane.
+                let _ = cli_run(
+                    con_cli,
+                    socket,
+                    &[
+                        "panes",
+                        "send-keys",
+                        "--tab",
+                        "1",
+                        "--pane-id",
+                        &id.to_string(),
+                        "\x04",
+                    ],
+                );
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            None => break,
+        }
+    }
+    Ok(())
+}
+
+/// Run a con-cli command and return its stdout parsed as JSON.
+fn cli_json(con_cli: &Path, socket: &Path, args: &[&str]) -> Result<Value> {
+    let socket_str = socket.to_string_lossy().into_owned();
+    let mut full_args = vec!["--socket", &*socket_str, "--json"];
+    full_args.extend_from_slice(args);
+    let output = Command::new(con_cli)
+        .args(&full_args)
+        .output()
+        .with_context(|| format!("cli_json: failed to run con-cli {:?}", args))?;
+    if !output.status.success() {
+        bail!(
+            "cli_json: con-cli {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    serde_json::from_slice(&output.stdout)
+        .with_context(|| format!("cli_json: invalid JSON from con-cli {:?}", args))
+}
+
+/// Run a con-cli command, return error if exit code != 0.
+fn cli_run(con_cli: &Path, socket: &Path, args: &[&str]) -> Result<()> {
+    let socket_str = socket.to_string_lossy().into_owned();
+    let mut full_args = vec!["--socket", &*socket_str];
+    full_args.extend_from_slice(args);
+    let output = Command::new(con_cli)
+        .args(&full_args)
+        .output()
+        .with_context(|| format!("cli_run: failed to run con-cli {:?}", args))?;
+    if !output.status.success() {
+        bail!(
+            "cli_run: con-cli {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     Ok(())
 }

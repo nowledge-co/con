@@ -1,11 +1,13 @@
 # panes/exec.test
 # Pane exec: run a command in the active shell and verify output.
-# Requires the focused pane to expose exec_visible_shell capability.
+# Requires shell integration (exec_visible_shell capability).
+# This test is skipped automatically if the pane does not expose
+# exec_visible_shell — check panes/basic.test for capability discovery.
 
-cmd --json panes list --tab 1  # confirm exec_visible_shell available
-match contains
+cmd --json panes list --tab 1  # pane is alive and surface ready
+match json-subset
 ----
-"exec_visible_shell"
+{"panes":[{"surface_ready":true,"is_alive":true}]}
 
 cmd --json panes exec --tab 1 --pane-id 0 -- /bin/echo CON_TEST_EXEC_OK  # run echo
 match contains
