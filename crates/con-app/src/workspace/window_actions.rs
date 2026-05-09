@@ -371,6 +371,9 @@ impl ConWorkspace {
 
             if let Some(focused) = new_focus {
                 focused.focus(window, cx);
+            } else {
+                // No terminal survived — focus workspace so keyboard shortcuts still work.
+                self.workspace_focus.clone().focus(window, cx);
             }
             self.sync_active_terminal_focus_states(cx);
             cx.on_next_frame(window, move |_workspace, _window, cx| {

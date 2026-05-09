@@ -1128,12 +1128,6 @@ impl Render for ConWorkspace {
 
                 let mods = &event.keystroke.modifiers;
                 let key = event.keystroke.key.as_str();
-                if mods.platform {
-                    log::debug!(
-                        "[workspace key_down] cmd+{key} workspace_focus_focused={}",
-                        this.workspace_focus.is_focused(window)
-                    );
-                }
 
                 if key == "escape" && this.surface_rename.take().is_some() {
                     window.prevent_default();
