@@ -1,5 +1,19 @@
 use super::*;
 
+pub(super) enum FileTreeFocusSource<'a> {
+    Terminal { cwd: Option<&'a str> },
+    Editor { file_path: Option<&'a Path> },
+}
+
+pub(super) fn file_tree_root_for_focus(source: FileTreeFocusSource<'_>) -> Option<PathBuf> {
+    match source {
+        FileTreeFocusSource::Terminal { cwd } => cwd.map(PathBuf::from),
+        FileTreeFocusSource::Editor { file_path } => file_path
+            .and_then(Path::parent)
+            .map(Path::to_path_buf),
+    }
+}
+
 pub(super) fn point_in_bounds(
     p: &gpui::Point<gpui::Pixels>,
     b: &gpui::Bounds<gpui::Pixels>,

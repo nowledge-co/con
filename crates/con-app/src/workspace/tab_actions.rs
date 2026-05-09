@@ -58,6 +58,8 @@ impl ConWorkspace {
             self.sync_active_terminal_focus_states(cx);
         }
 
+        self.sync_file_tree_from_active_focus(cx);
+
         self.sync_sidebar(cx);
         // Activating a tab is a strong signal the user cares about
         // it — refresh AI label/icon if context shifted since it was
@@ -258,12 +260,7 @@ impl ConWorkspace {
             #[cfg(not(target_os = "macos"))]
             self.sync_active_tab_native_view_visibility(cx);
             terminal.focus(window, cx);
-            if let Some(cwd) = terminal.current_dir(cx) {
-                self.file_tree_view.update(cx, |tree, cx| {
-                    tree.set_root(PathBuf::from(cwd), cx);
-                    tree.set_active_path(None, cx);
-                });
-            }
+            self.sync_file_tree_from_active_focus(cx);
         } else {
             #[cfg(target_os = "macos")]
             self.sync_active_tab_native_view_visibility_now_or_after_layout(
@@ -280,6 +277,39 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    pub(super) fn sync_file_tree_from_active_focus(&mut self, cx: &mut Context<Self>) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let pane_tree = &self.tabs[self.active_tab].pane_tree;
+        let focused_pane_id = pane_tree.focused_pane_id();
+
+        let root = if let Some(path) = pane_tree.editor_active_path_for_pane(focused_pane_id, cx) {
+            file_tree_root_for_focus(FileTreeFocusSource::Editor {
+                file_path: Some(path.as_path()),
+            })
+            .map(|root| (root, Some(path)))
+        } else {
+            pane_tree
+                .try_focused_terminal()
+                .and_then(|terminal| terminal.current_dir(cx))
+                .and_then(|cwd| {
+                    file_tree_root_for_focus(FileTreeFocusSource::Terminal {
+                        cwd: Some(cwd.as_str()),
+                    })
+                    .map(|root| (root, None))
+                })
+        };
+
+        if let Some((root, active_path)) = root {
+            self.file_tree_view.update(cx, |tree, cx| {
+                tree.set_root(root, cx);
+                tree.set_active_path(active_path, cx);
+            });
+        }
+    }
+
     /// Focus an editor pane by pane_id (called from the editor pane click handler).
     pub(super) fn focus_pane_in_active_tab(
         &mut self,
@@ -291,18 +321,7 @@ impl ConWorkspace {
             return;
         }
         self.tabs[self.active_tab].pane_tree.focus_pane(pane_id);
-        if let Some(path) = self.tabs[self.active_tab]
-            .pane_tree
-            .editor_active_path_for_pane(pane_id, cx)
-        {
-            let parent = path.parent().map(Path::to_path_buf);
-            self.file_tree_view.update(cx, |tree, cx| {
-                if let Some(parent) = parent {
-                    tree.set_root(parent, cx);
-                }
-                tree.set_active_path(Some(path), cx);
-            });
-        }
+        self.sync_file_tree_from_active_focus(cx);
         // Give GPUI focus to the workspace focus handle so keyboard actions
         // (Cmd+T, Cmd+W, etc.) bubble through the ConWorkspace key context.
         self.workspace_focus.clone().focus(window, cx);
@@ -481,17 +500,8 @@ impl ConWorkspace {
         self.sync_sidebar(cx);
         self.save_session(cx);
         self.request_tab_summaries(cx);
-        // Keep file tree root in sync with the active tab's cwd.
-        if let Some(cwd) = self.tabs[self.active_tab]
-            .pane_tree
-            .try_focused_terminal()
-            .and_then(|t| t.current_dir(cx))
-        {
-            let root = std::path::PathBuf::from(&cwd);
-            self.file_tree_view.update(cx, |tree, cx| {
-                tree.set_root(root, cx);
-            });
-        }
+        // Keep file tree root in sync with the active focused pane.
+        self.sync_file_tree_from_active_focus(cx);
         cx.notify();
     }
 

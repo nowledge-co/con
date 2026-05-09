@@ -1,4 +1,5 @@
 use super::chrome::agent_panel_motion_target_for_agent_request;
+use super::{file_tree_root_for_focus, FileTreeFocusSource};
 use super::{
     ConWorkspace, SPLIT_PREVIEW_SEAM_THICKNESS, SplitDirection, SplitPlacement,
     TabRenameStateSnapshot, centered_drag_preview_origin, clamp_preview_origin_to_tab_bar,
@@ -16,6 +17,24 @@ use crate::sidebar::{
     DraggedTabPreviewConstraint, constrained_drag_preview_x_shift, constrained_drag_preview_y_shift,
 };
 use gpui::{Bounds, Point, Size, px};
+use std::path::{Path, PathBuf};
+
+#[test]
+fn file_tree_root_for_terminal_focus_uses_terminal_cwd() {
+    let root = file_tree_root_for_focus(FileTreeFocusSource::Terminal {
+        cwd: Some("/tmp/project"),
+    });
+    assert_eq!(root, Some(PathBuf::from("/tmp/project")));
+}
+
+#[test]
+fn file_tree_root_for_editor_focus_uses_file_parent_dir() {
+    let root = file_tree_root_for_focus(FileTreeFocusSource::Editor {
+        file_path: Some(Path::new("/tmp/project/src/main.rs")),
+    });
+    assert_eq!(root, Some(PathBuf::from("/tmp/project/src")));
+}
+
 
 #[test]
 fn agent_request_opening_panel_drives_panel_motion_to_visible() {
