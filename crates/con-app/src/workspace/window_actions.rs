@@ -351,12 +351,6 @@ impl ConWorkspace {
             active_tree.focused_editor_tab_count(cx),
             self.tabs.len(),
         );
-        log::warn!(
-            "[editor-close] CloseTab action: active_tab={} focused_pane={} pane_count={} intent={close_intent:?}",
-            self.active_tab,
-            active_tree.focused_pane_id(),
-            active_tree.pane_count()
-        );
         if close_intent == WorkspaceCloseIntent::CloseEditorFile {
             let pane_id = active_tree.focused_pane_id();
             let _ = self.close_pane_in_tab(self.active_tab, pane_id, window, cx);

@@ -397,15 +397,9 @@ impl Render for ConWorkspace {
             };
             let workspace = cx.weak_entity();
             let close_pane_cb = move |pane_id: usize, window: &mut Window, cx: &mut App| {
-                log::warn!("[editor-close] pane title/menu close callback pane_id={pane_id}");
                 if let Some(workspace) = workspace.upgrade() {
                     workspace.update(cx, |workspace, cx| {
                         let tab_idx = workspace.active_tab;
-                        log::warn!(
-                            "[editor-close] close callback resolved active_tab={} requested_pane={}",
-                            tab_idx,
-                            pane_id
-                        );
                         let _ = workspace.close_pane_in_tab(tab_idx, pane_id, window, cx);
                     });
                 }

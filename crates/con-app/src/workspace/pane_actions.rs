@@ -584,14 +584,6 @@ impl ConWorkspace {
         let focused_pane_id = self.tabs[self.active_tab].pane_tree.focused_pane_id();
         let contains = self.tabs[self.active_tab].pane_tree.contains_pane(focused_pane_id);
 
-        log::warn!(
-            "[editor-close] ClosePane action: active_tab={} focused_pane={} pane_count={} contains_focused={}",
-            self.active_tab,
-            focused_pane_id,
-            pane_count,
-            contains
-        );
-
         if pane_count > 1 {
             let valid_pane_id = if contains {
                 focused_pane_id
@@ -829,36 +821,16 @@ impl ConWorkspace {
         }
 
         let pane_tree = &mut self.tabs[tab_idx].pane_tree;
-        log::warn!(
-            "[editor-close] remove_pane_in_tab: tab_idx={} pane_id={} pane_count={} shutdown_terminals={}",
-            tab_idx,
-            pane_id,
-            pane_tree.pane_count(),
-            shutdown_closing_terminals
-        );
 
         if let Some(editor_view) = pane_tree.editor_view_for_pane(pane_id) {
             let should_close_pane = editor_view.update(cx, |editor, cx| {
                 let tab_count = editor.tab_count();
                 let intent = workspace_close_intent(1, Some(tab_count), 1);
-                log::warn!(
-                    "[editor-close] editor pane target: pane_id={} file_tabs={} intent={intent:?} active_path={:?}",
-                    pane_id,
-                    tab_count,
-                    editor.active_path()
-                );
                 if intent != WorkspaceCloseIntent::CloseEditorFile {
-                    log::warn!("[editor-close] editor is empty, will close pane_id={pane_id}");
                     return true;
                 }
 
                 let should_close_pane = editor.close_active_tab();
-                log::warn!(
-                    "[editor-close] closed active editor file: pane_id={} remaining_tabs={} close_pane_return={}",
-                    pane_id,
-                    editor.tab_count(),
-                    should_close_pane
-                );
                 if let Some(path) = editor.active_path().map(Path::to_path_buf) {
                     cx.emit(ActiveFileChanged { path });
                 }
@@ -866,7 +838,6 @@ impl ConWorkspace {
                 should_close_pane
             });
             if !should_close_pane {
-                log::warn!("[editor-close] consumed close as editor file close; keeping pane_id={pane_id}");
                 if tab_idx == self.active_tab {
                     self.workspace_focus.clone().focus(window, cx);
                 }
@@ -884,12 +855,6 @@ impl ConWorkspace {
             .collect::<Vec<_>>();
 
         let is_editor_pane = closing_terminals.is_empty();
-        log::warn!(
-            "[editor-close] falling through to pane close: pane_id={} is_editor_pane={} closing_terminals={}",
-            pane_id,
-            is_editor_pane,
-            closing_terminals.len()
-        );
 
         if !pane_tree.close_pane(pane_id) {
             return false;
