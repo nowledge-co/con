@@ -5,7 +5,7 @@
 
 use gpui::{
     Context, EventEmitter, IntoElement, ParentElement, Render, SharedString, Styled,
-    UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
+    UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use gpui_component::ActiveTheme;
 use std::path::PathBuf;
