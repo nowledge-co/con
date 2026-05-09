@@ -821,7 +821,8 @@ impl Render for ConWorkspace {
             .flex_col()
             .size_full()
             .bg(theme.transparent)
-            .font_family(theme.mono_font_family.clone());
+            .font_family(theme.mono_font_family.clone())
+            .track_focus(&self.workspace_focus);
 
         // Linux: con paints its own client-side decorations, so we
         // also have to clip the window to a rounded rectangle the

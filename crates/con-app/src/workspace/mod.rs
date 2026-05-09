@@ -299,7 +299,9 @@ pub struct ConWorkspace {
     /// When true, the per-pane title bar is hidden even in split layouts.
     hide_pane_title_bar: bool,
 
-    // ── Code editor (Phase 1) ──────────────────────────────────────────────
+    /// Workspace-level focus handle — focused when an editor pane is active
+    /// so keyboard actions (Cmd+T, Cmd+W, etc.) still reach the workspace.
+    workspace_focus: gpui::FocusHandle,
     /// Activity bar — always-visible 40 px icon rail on the far left.
     activity_bar: Entity<ActivityBar>,
     /// Which slot is active in the activity bar.

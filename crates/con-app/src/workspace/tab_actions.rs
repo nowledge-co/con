@@ -278,13 +278,16 @@ impl ConWorkspace {
     pub(super) fn focus_pane_in_active_tab(
         &mut self,
         pane_id: usize,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if !self.has_active_tab() {
             return;
         }
         self.tabs[self.active_tab].pane_tree.focus_pane(pane_id);
+        // Give GPUI focus to the workspace focus handle so keyboard actions
+        // (Cmd+T, Cmd+W, etc.) bubble through the ConWorkspace key context.
+        self.workspace_focus.clone().focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
         cx.notify();
     }

@@ -834,6 +834,7 @@ impl ConWorkspace {
             ),
             left_panel_open: session.left_panel_open.unwrap_or(true),
             file_tree_view: file_tree_entity,
+            workspace_focus: cx.focus_handle(),
         }
     }
 
