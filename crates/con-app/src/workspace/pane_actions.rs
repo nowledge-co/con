@@ -624,8 +624,18 @@ impl ConWorkspace {
         #[cfg(target_os = "macos")]
         self.mark_active_tab_terminal_native_layout_pending(cx);
         self.notify_active_tab_terminal_views(cx);
-        if let Some(t) = self.try_active_terminal() {
-            t.focus(window, cx);
+        // Only focus the terminal if the focused pane is a terminal pane.
+        // For editor panes, skip terminal focus so the correct pane stays zoomed.
+        let focused_pane_id = self.tabs[self.active_tab].pane_tree.focused_pane_id();
+        let focused_is_terminal = self.tabs[self.active_tab]
+            .pane_tree
+            .pane_terminals()
+            .iter()
+            .any(|(id, _)| *id == focused_pane_id);
+        if focused_is_terminal {
+            if let Some(t) = self.try_active_terminal() {
+                t.focus(window, cx);
+            }
         }
         self.sync_active_terminal_focus_states(cx);
         self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);

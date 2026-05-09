@@ -907,6 +907,7 @@ impl PaneTree {
         session_id: u64,
         begin_drag_cb: impl Fn(SplitId, f32) + 'static,
         focus_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
+        focus_pane_cb: impl Fn(PaneId, &mut Window, &mut App) + 'static,
         rename_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
         close_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
         close_pane_cb: impl Fn(PaneId, &mut Window, &mut App) + 'static,
@@ -919,6 +920,7 @@ impl PaneTree {
         cx: &App,
     ) -> AnyElement {
         let focus_surface_cb = std::sync::Arc::new(focus_surface_cb);
+        let focus_pane_cb = std::sync::Arc::new(focus_pane_cb);
         let rename_surface_cb = std::sync::Arc::new(rename_surface_cb);
         let close_surface_cb = std::sync::Arc::new(close_surface_cb);
         let close_pane_cb = std::sync::Arc::new(close_pane_cb);
@@ -932,6 +934,7 @@ impl PaneTree {
                 zoomed_id,
                 self.focused_pane_id,
                 focus_surface_cb.clone(),
+                focus_pane_cb.clone(),
                 rename_surface_cb.clone(),
                 close_surface_cb.clone(),
                 close_pane_cb.clone(),
@@ -955,6 +958,7 @@ impl PaneTree {
             has_splits,
             std::sync::Arc::new(begin_drag_cb),
             focus_surface_cb,
+            focus_pane_cb,
             rename_surface_cb,
             close_surface_cb,
             close_pane_cb,
@@ -1620,6 +1624,7 @@ impl PaneTree {
         has_splits: bool,
         begin_drag_cb: std::sync::Arc<dyn Fn(SplitId, f32) + 'static>,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        focus_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
@@ -1642,6 +1647,7 @@ impl PaneTree {
                 content,
                 focused_id,
                 focus_surface_cb,
+                focus_pane_cb,
                 rename_surface_cb,
                 close_surface_cb,
                 close_pane_cb,
@@ -1671,6 +1677,8 @@ impl PaneTree {
                 let cb_divider = begin_drag_cb.clone();
                 let focus_cb_first = focus_surface_cb.clone();
                 let focus_cb_second = focus_surface_cb.clone();
+                let focus_pane_cb_first = focus_pane_cb.clone();
+                let focus_pane_cb_second = focus_pane_cb.clone();
                 let rename_cb_first = rename_surface_cb.clone();
                 let rename_cb_second = rename_surface_cb.clone();
                 let close_cb_first = close_surface_cb.clone();
@@ -1688,6 +1696,7 @@ impl PaneTree {
                     has_splits,
                     cb_first,
                     focus_cb_first,
+                    focus_pane_cb_first,
                     rename_cb_first,
                     close_cb_first,
                     close_pane_cb_first,
@@ -1708,6 +1717,7 @@ impl PaneTree {
                     has_splits,
                     cb_second,
                     focus_cb_second,
+                    focus_pane_cb_second,
                     rename_cb_second,
                     close_cb_second,
                     close_pane_cb_second,
@@ -1874,6 +1884,7 @@ impl PaneTree {
         target_id: PaneId,
         focused_id: PaneId,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        focus_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
@@ -1895,6 +1906,7 @@ impl PaneTree {
                 content,
                 focused_id,
                 focus_surface_cb,
+                focus_pane_cb,
                 rename_surface_cb,
                 close_surface_cb,
                 close_pane_cb,
@@ -1914,6 +1926,7 @@ impl PaneTree {
                 target_id,
                 focused_id,
                 focus_surface_cb.clone(),
+                focus_pane_cb.clone(),
                 rename_surface_cb.clone(),
                 close_surface_cb.clone(),
                 close_pane_cb.clone(),
@@ -1933,6 +1946,7 @@ impl PaneTree {
                     target_id,
                     focused_id,
                     focus_surface_cb,
+                    focus_pane_cb,
                     rename_surface_cb,
                     close_surface_cb,
                     close_pane_cb,
@@ -2153,6 +2167,7 @@ impl PaneTree {
         content: &PaneContent,
         focused_id: PaneId,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
+        focus_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         close_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
@@ -2175,7 +2190,29 @@ impl PaneTree {
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "Editor".to_string());
 
-            let mut col = div().flex().flex_col().size_full();
+            // Click anywhere on the editor body to focus this pane
+            let focus_cb_click = focus_pane_cb.clone();
+            let close_pane_cb_menu = close_pane_cb.clone();
+            let toggle_zoom_cb_menu = toggle_zoom_cb.clone();
+
+            let mut col = div()
+                .id(ElementId::Name(format!("editor-pane-{pane_id}").into()))
+                .flex()
+                .flex_col()
+                .size_full()
+                .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                    focus_cb_click(pane_id, window, cx);
+                })
+                .context_menu(move |menu, _window, _cx| {
+                    let close_cb = close_pane_cb_menu.clone();
+                    let zoom_cb = toggle_zoom_cb_menu.clone();
+                    menu.item(PopupMenuItem::new(if is_zoomed { "Exit Fullscreen" } else { "Fullscreen" }).on_click(
+                        move |_, window, cx| zoom_cb(pane_id, window, cx),
+                    ))
+                    .item(PopupMenuItem::new("Close Pane").on_click(
+                        move |_, window, cx| close_cb(pane_id, window, cx),
+                    ))
+                });
 
             if tree_has_splits && !hide_pane_title_bar {
                 let title_bar = Self::render_pane_title_bar(

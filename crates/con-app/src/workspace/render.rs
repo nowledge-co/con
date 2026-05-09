@@ -372,6 +372,14 @@ impl Render for ConWorkspace {
                 }
             };
             let workspace = cx.weak_entity();
+            let focus_pane_cb = move |pane_id: usize, window: &mut Window, cx: &mut App| {
+                if let Some(workspace) = workspace.upgrade() {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.focus_pane_in_active_tab(pane_id, window, cx);
+                    });
+                }
+            };
+            let workspace = cx.weak_entity();
             let rename_surface_cb = move |surface_id: usize, window: &mut Window, cx: &mut App| {
                 if let Some(workspace) = workspace.upgrade() {
                     workspace.update(cx, |workspace, cx| {
@@ -410,6 +418,7 @@ impl Render for ConWorkspace {
                 session_id,
                 begin_drag_cb,
                 focus_surface_cb,
+                focus_pane_cb,
                 rename_surface_cb,
                 close_surface_cb,
                 close_pane_cb,

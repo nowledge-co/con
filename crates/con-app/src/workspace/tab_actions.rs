@@ -274,6 +274,21 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    /// Focus an editor pane by pane_id (called from the editor pane click handler).
+    pub(super) fn focus_pane_in_active_tab(
+        &mut self,
+        pane_id: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_active_tab() {
+            return;
+        }
+        self.tabs[self.active_tab].pane_tree.focus_pane(pane_id);
+        self.sync_active_terminal_focus_states(cx);
+        cx.notify();
+    }
+
     pub(super) fn restore_terminal_focus_after_modal(
         &mut self,
         window: &mut Window,
