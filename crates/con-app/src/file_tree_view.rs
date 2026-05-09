@@ -62,7 +62,7 @@ impl FileTreeView {
             return;
         }
         self.root = Some(root.clone());
-        self.entries = build_entries(&root, 0, true);
+        self.entries = build_root_entries(&root);
         cx.notify();
     }
 
@@ -107,9 +107,28 @@ impl FileTreeView {
     }
 }
 
+/// Build the visible tree starting at `root` itself. The root row is shown as
+/// an expanded directory so the sidebar has a clear parent label and can be
+/// collapsed/expanded like any other folder.
+fn build_root_entries(root: &Path) -> Vec<FileEntry> {
+    let name = root
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| root.display().to_string());
+    let mut entries = vec![FileEntry {
+        path: root.to_path_buf(),
+        name,
+        depth: 0,
+        is_dir: true,
+        is_expanded: true,
+    }];
+    entries.extend(build_entries(root, 1, false));
+    entries
+}
+
 /// Build a flat entry list for `dir` at `depth`. Only one level deep
 /// (children of expanded dirs are inserted lazily by `toggle_dir`).
-fn build_entries(dir: &Path, depth: usize, expand_root: bool) -> Vec<FileEntry> {
+fn build_entries(dir: &Path, depth: usize, _expand_root: bool) -> Vec<FileEntry> {
     let Ok(read_dir) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -145,11 +164,6 @@ fn build_entries(dir: &Path, depth: usize, expand_root: bool) -> Vec<FileEntry> 
     let mut result = Vec::new();
     result.extend(dirs);
     result.extend(files);
-
-    // If expand_root, pre-expand the first level (root itself is not an entry).
-    if expand_root {
-        // entries are already the root's children — nothing extra to do.
-    }
 
     result
 }
@@ -192,6 +206,16 @@ impl Render for FileTreeView {
 
                 let indent = INDENT_PER_LEVEL * depth as f32 + 8.0;
 
+                let disclosure_icon = if is_dir {
+                    Some(if is_expanded {
+                        "phosphor/caret-down.svg"
+                    } else {
+                        "phosphor/caret-right.svg"
+                    })
+                } else {
+                    None
+                };
+
                 let icon = if is_dir {
                     if is_expanded {
                         "phosphor/folder-open.svg"
@@ -233,6 +257,16 @@ impl Render for FileTreeView {
                             s.bg(hover_bg)
                         }
                     })
+                    .child(if let Some(disclosure_icon) = disclosure_icon {
+                        svg()
+                            .path(disclosure_icon)
+                            .size(px(10.0))
+                            .flex_shrink_0()
+                            .text_color(theme.muted_foreground.opacity(0.62))
+                            .into_any_element()
+                    } else {
+                        div().w(px(10.0)).flex_shrink_0().into_any_element()
+                    })
                     .child(
                         svg()
                             .path(icon)
@@ -272,5 +306,47 @@ impl Render for FileTreeView {
             .flex_col()
             .children(rows)
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_tree() -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "con-file-tree-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("README.md"), "readme").unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        root
+    }
+
+    #[test]
+    fn root_directory_is_rendered_as_first_expanded_entry() {
+        let root = temp_tree();
+        let entries = build_root_entries(&root);
+
+        assert_eq!(entries.first().unwrap().path, root);
+        assert_eq!(entries.first().unwrap().depth, 0);
+        assert!(entries.first().unwrap().is_dir);
+        assert!(entries.first().unwrap().is_expanded);
+    }
+
+    #[test]
+    fn root_children_start_at_depth_one() {
+        let root = temp_tree();
+        let entries = build_root_entries(&root);
+
+        assert!(entries.iter().skip(1).all(|entry| entry.depth == 1));
+        assert!(entries.iter().any(|entry| entry.name == "src"));
+        assert!(entries.iter().any(|entry| entry.name == "README.md"));
     }
 }
