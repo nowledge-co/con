@@ -877,6 +877,7 @@ impl ConWorkspace {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn active_terminal(&self) -> &TerminalPane {
         self.tabs[self.active_tab].pane_tree.focused_terminal()
     }

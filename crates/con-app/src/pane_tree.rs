@@ -45,7 +45,7 @@ pub type SurfaceId = usize;
 pub type SplitId = usize;
 
 #[derive(Clone)]
-struct PaneSurface {
+pub(crate) struct PaneSurface {
     id: SurfaceId,
     terminal: TerminalPane,
     title: Option<String>,
@@ -187,10 +187,12 @@ impl PaneContent {
         }
     }
 
+    #[allow(dead_code)]
     fn is_terminal(&self) -> bool {
         matches!(self, PaneContent::Terminal { .. })
     }
 
+    #[allow(dead_code)]
     fn is_editor(&self) -> bool {
         matches!(self, PaneContent::Editor { .. })
     }
@@ -295,6 +297,7 @@ impl PaneTree {
     }
 
     /// Get the focused terminal
+    #[allow(dead_code)]
     pub fn focused_terminal(&self) -> &TerminalPane {
         Self::find_terminal(&self.root, self.focused_pane_id)
             .unwrap_or_else(|| Self::first_terminal(&self.root))
