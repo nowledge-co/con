@@ -795,20 +795,43 @@ impl ConWorkspace {
             return false;
         }
 
+        let pane_tree = &mut self.tabs[tab_idx].pane_tree;
+
+        // Check if this is an editor pane (no terminal surfaces).
+        // Editor panes close directly without terminal shutdown.
+        let closing_terminals = pane_tree
+            .surface_infos(Some(pane_id))
+            .into_iter()
+            .map(|surface| surface.terminal)
+            .collect::<Vec<_>>();
+
+        let is_editor_pane = closing_terminals.is_empty();
+
+        if !pane_tree.close_pane(pane_id) {
+            return false;
+        }
+
+        // Editor pane: no terminal lifecycle to manage, just re-focus.
+        if is_editor_pane {
+            let tab_is_visible = tab_idx == self.active_tab;
+            if tab_is_visible {
+                let surviving_terminals: Vec<TerminalPane> =
+                    pane_tree.all_terminals().into_iter().cloned().collect();
+                for terminal in &surviving_terminals {
+                    terminal.ensure_surface(window, cx);
+                    terminal.notify(cx);
+                }
+                self.sync_active_terminal_focus_states(cx);
+            }
+            cx.notify();
+            return true;
+        }
+
+        // Terminal pane: normal shutdown flow.
         let mut focus_after_close = None;
         let mut sync_visibility_after_close = false;
         {
             let pane_tree = &mut self.tabs[tab_idx].pane_tree;
-            let closing_terminals = pane_tree
-                .surface_infos(Some(pane_id))
-                .into_iter()
-                .map(|surface| surface.terminal)
-                .collect::<Vec<_>>();
-
-            if closing_terminals.is_empty() || !pane_tree.close_pane(pane_id) {
-                return false;
-            }
-
             let surviving_terminals: Vec<TerminalPane> =
                 pane_tree.all_terminals().into_iter().cloned().collect();
             let tab_is_visible = tab_idx == self.active_tab;
