@@ -1,16 +1,13 @@
 //! Editor view — Phase 1: read-only file viewer.
 //!
-//! Renders the contents of an open file using IoskeleyMono. No editing,
-//! no syntax highlighting yet (Phase 2). Supports scrolling.
-//!
-//! The view holds the file content as a plain `Vec<String>` (one entry
-//! per line). Phase 2 will replace this with a `con-editor::Buffer`.
+//! Uses GPUI's `uniform_list` for virtualized rendering — only visible rows
+//! are laid out each frame, so large files are fast.
 
 use gpui::{
-    Context, EventEmitter, IntoElement, ParentElement, Render, SharedString, Styled, Window, div,
-    prelude::*, px,
+    Context, EventEmitter, IntoElement, ParentElement, Render, SharedString, Styled,
+    UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };
-use gpui_component::{ActiveTheme, scroll::ScrollableElement};
+use gpui_component::ActiveTheme;
 use std::path::PathBuf;
 
 const LINE_HEIGHT: f32 = 20.0;
@@ -28,6 +25,7 @@ impl EventEmitter<FileSaved> for EditorView {}
 pub struct EditorView {
     pub path: Option<PathBuf>,
     lines: Vec<SharedString>,
+    scroll_handle: UniformListScrollHandle,
 }
 
 impl EditorView {
@@ -35,6 +33,7 @@ impl EditorView {
         Self {
             path: None,
             lines: Vec::new(),
+            scroll_handle: UniformListScrollHandle::new(),
         }
     }
 
@@ -46,7 +45,6 @@ impl EditorView {
                     .lines()
                     .map(|l| SharedString::from(l.to_string()))
                     .collect();
-                // Ensure at least one line so the view isn't empty.
                 if self.lines.is_empty() {
                     self.lines.push(SharedString::from(""));
                 }
@@ -57,6 +55,8 @@ impl EditorView {
                 self.path = Some(path);
             }
         }
+        // Reset scroll to top on new file.
+        self.scroll_handle = UniformListScrollHandle::new();
         cx.notify();
     }
 
@@ -91,90 +91,12 @@ impl Render for EditorView {
         let gutter_color = theme.muted_foreground.opacity(0.30);
         let gutter_bg = theme.muted.opacity(0.04);
         let mono_font = theme.mono_font_family.clone();
-
-        // Header: file name
-        let file_name: SharedString = self
-            .path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default()
-            .into();
-
-        let header = div()
-            .h(px(28.0))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .px(px(12.0))
-            .bg(theme.muted.opacity(0.05))
-            .child(
-                div()
-                    .text_size(px(11.5))
-                    .text_color(theme.foreground.opacity(0.70))
-                    .font_family(mono_font.clone())
-                    .truncate()
-                    .child(file_name),
-            );
-
-        // Line rows
-        let rows: Vec<_> = self
-            .lines
-            .iter()
-            .enumerate()
-            .map(|(i, line)| {
-                let line_num: SharedString = format!("{}", i + 1).into();
-                let line_text = line.clone();
-                div()
-                    .h(px(LINE_HEIGHT))
-                    .w_full()
-                    .flex()
-                    .flex_row()
-                    .items_start()
-                    // Gutter
-                    .child(
-                        div()
-                            .w(px(GUTTER_WIDTH))
-                            .flex_shrink_0()
-                            .h(px(LINE_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .justify_end()
-                            .pr(px(10.0))
-                            .bg(gutter_bg)
-                            .child(
-                                div()
-                                    .text_size(px(EDITOR_FONT_SIZE - 1.0))
-                                    .text_color(gutter_color)
-                                    .font_family(mono_font.clone())
-                                    .child(line_num),
-                            ),
-                    )
-                    // Line content
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .h(px(LINE_HEIGHT))
-                            .flex()
-                            .items_center()
-                            .pl(px(12.0))
-                            .child(
-                                div()
-                                    .text_size(px(EDITOR_FONT_SIZE))
-                                    .text_color(theme.foreground.opacity(0.90))
-                                    .font_family(mono_font.clone())
-                                    .whitespace_nowrap()
-                                    .child(line_text),
-                            ),
-                    )
-                    .into_any_element()
-            })
-            .collect();
+        let fg = theme.foreground;
+        let bg = theme.background;
+        let lines = self.lines.clone();
 
         // Status bar
-        let status_text: SharedString =
-            format!("{} lines", line_count).into();
+        let status_text: SharedString = format!("{} lines", line_count).into();
         let status_bar = div()
             .h(px(22.0))
             .flex_shrink_0()
@@ -190,22 +112,74 @@ impl Render for EditorView {
                     .child(status_text),
             );
 
+        let mono_font_list = mono_font.clone();
+        let list = uniform_list(
+            "editor-lines",
+            line_count,
+            move |range, _window, _cx| {
+                range
+                    .map(|i| {
+                        let line_num: SharedString = format!("{}", i + 1).into();
+                        let line_text = lines[i].clone();
+                        div()
+                            .h(px(LINE_HEIGHT))
+                            .w_full()
+                            .flex()
+                            .flex_row()
+                            .items_start()
+                            .bg(bg)
+                            // Gutter
+                            .child(
+                                div()
+                                    .w(px(GUTTER_WIDTH))
+                                    .flex_shrink_0()
+                                    .h(px(LINE_HEIGHT))
+                                    .flex()
+                                    .items_center()
+                                    .justify_end()
+                                    .pr(px(10.0))
+                                    .bg(gutter_bg)
+                                    .child(
+                                        div()
+                                            .text_size(px(EDITOR_FONT_SIZE - 1.0))
+                                            .text_color(gutter_color)
+                                            .font_family(mono_font_list.clone())
+                                            .child(line_num),
+                                    ),
+                            )
+                            // Line content
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .h(px(LINE_HEIGHT))
+                                    .flex()
+                                    .items_center()
+                                    .pl(px(12.0))
+                                    .child(
+                                        div()
+                                            .text_size(px(EDITOR_FONT_SIZE))
+                                            .text_color(fg.opacity(0.90))
+                                            .font_family(mono_font_list.clone())
+                                            .whitespace_nowrap()
+                                            .child(line_text),
+                                    ),
+                            )
+                    })
+                    .collect()
+            },
+        )
+        .flex_1()
+        .min_h_0()
+        .track_scroll(&self.scroll_handle);
+
         div()
             .id("editor-view")
             .size_full()
             .flex()
             .flex_col()
             .bg(theme.background)
-            .child(header)
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scrollbar()
-                    .flex()
-                    .flex_col()
-                    .children(rows),
-            )
+            .child(list)
             .child(status_bar)
             .into_any_element()
     }

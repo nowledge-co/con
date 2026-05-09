@@ -573,24 +573,28 @@ impl PaneTree {
         if self.pane_count() <= 1 {
             return false;
         }
-        let placeholder_terminal = Self::first_terminal(&self.root).clone();
-        let old_root = std::mem::replace(
-            &mut self.root,
+        // Use a placeholder only if there's a terminal to borrow from.
+        // Editor-only trees don't have a terminal to clone.
+        let placeholder = if let Some(t) = Self::try_first_terminal(&self.root) {
             PaneNode::Leaf {
                 id: 0,
-                surfaces: vec![PaneSurface::new(0, placeholder_terminal)],
+                surfaces: vec![PaneSurface::new(0, t.clone())],
                 active_surface_id: 0,
                 kind: PaneLeafKind::Terminal,
-            },
-        );
+            }
+        } else {
+            Self::empty_placeholder_node()
+        };
+        let old_root = std::mem::replace(&mut self.root, placeholder);
         self.root = Self::remove_leaf(old_root, pane_id);
-        if Self::find_terminal(&self.root, self.focused_pane_id).is_none() {
+        // Re-focus to any surviving pane (not just terminals).
+        if !Self::contains_leaf(&self.root, self.focused_pane_id) {
             self.focused_pane_id = Self::first_pane_id(&self.root);
         }
         if self.pane_count() <= 1
             || self
                 .zoomed_pane_id
-                .is_some_and(|zoomed_id| Self::find_terminal(&self.root, zoomed_id).is_none())
+                .is_some_and(|zoomed_id| !Self::contains_leaf(&self.root, zoomed_id))
         {
             self.zoomed_pane_id = None;
         }
@@ -968,17 +972,20 @@ impl PaneTree {
     }
 
     fn first_terminal(node: &PaneNode) -> &TerminalPane {
+        Self::try_first_terminal(node).expect("pane tree must have at least one terminal")
+    }
+
+    fn try_first_terminal(node: &PaneNode) -> Option<&TerminalPane> {
         match node {
             PaneNode::Leaf {
                 surfaces,
-                active_surface_id,
+                kind: PaneLeafKind::Terminal,
                 ..
-            } => {
-                &Self::active_surface(surfaces, *active_surface_id)
-                    .unwrap_or_else(|| surfaces.first().expect("pane leaf must have a surface"))
-                    .terminal
+            } => surfaces.first().map(|s| &s.terminal),
+            PaneNode::Leaf { .. } => None,
+            PaneNode::Split { first, second, .. } => {
+                Self::try_first_terminal(first).or_else(|| Self::try_first_terminal(second))
             }
-            PaneNode::Split { first, .. } => Self::first_terminal(first),
         }
     }
 
