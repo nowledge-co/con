@@ -582,7 +582,17 @@ impl ConWorkspace {
 
         if self.tabs[self.active_tab].pane_tree.pane_count() > 1 {
             let pane_id = self.tabs[self.active_tab].pane_tree.focused_pane_id();
-            let _ = self.close_pane_in_tab(self.active_tab, pane_id, window, cx);
+            // Validate the focused pane id still exists (editor-only tabs may have
+            // a stale focused_pane_id if sync_focus never ran for editor panes).
+            let valid_pane_id = if self.tabs[self.active_tab]
+                .pane_tree
+                .contains_pane(pane_id)
+            {
+                pane_id
+            } else {
+                self.tabs[self.active_tab].pane_tree.first_pane_id_pub()
+            };
+            let _ = self.close_pane_in_tab(self.active_tab, valid_pane_id, window, cx);
             return;
         }
 

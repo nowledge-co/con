@@ -1014,6 +1014,14 @@ impl PaneTree {
         }
     }
 
+    pub fn first_pane_id_pub(&self) -> PaneId {
+        Self::first_pane_id(&self.root)
+    }
+
+    pub fn contains_pane(&self, pane_id: PaneId) -> bool {
+        Self::contains_leaf(&self.root, pane_id)
+    }
+
     fn collect_pane_bounds(
         node: &PaneNode,
         bounds: Bounds<Pixels>,
