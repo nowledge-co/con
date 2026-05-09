@@ -544,6 +544,11 @@ impl SessionSidebar {
     }
 
     pub fn occupied_width_with_max(&self, effective_max_width: f32) -> f32 {
+        // Collapsed mode no longer shows a rail — the activity bar handles
+        // navigation, so a collapsed vertical-tabs panel takes zero width.
+        if matches!(self.mode, PanelMode::Collapsed) {
+            return 0.0;
+        }
         let t = self.width_motion.current().clamp(0.0, 1.0);
         let panel_width = Self::clamped_panel_width(self.panel_width, effective_max_width);
         RAIL_WIDTH + (panel_width - RAIL_WIDTH) * t
@@ -1703,7 +1708,8 @@ impl Render for SessionSidebar {
                     .child(panel)
                     .into_any_element()
             }
-            PanelMode::Collapsed => self.render_rail(window, cx).into_any_element(),
+            // Collapsed mode: no rail — activity bar handles navigation.
+            PanelMode::Collapsed => div().into_any_element(),
         }
     }
 }
