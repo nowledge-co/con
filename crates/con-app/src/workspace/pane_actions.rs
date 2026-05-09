@@ -822,6 +822,24 @@ impl ConWorkspace {
 
         let pane_tree = &mut self.tabs[tab_idx].pane_tree;
 
+        if let Some(editor_view) = pane_tree.editor_view_for_pane(pane_id) {
+            let should_close_pane = editor_view.update(cx, |editor, cx| {
+                let should_close_pane = editor.close_active_tab();
+                if let Some(path) = editor.active_path().map(Path::to_path_buf) {
+                    cx.emit(ActiveFileChanged { path });
+                }
+                cx.notify();
+                should_close_pane
+            });
+            if !should_close_pane {
+                if tab_idx == self.active_tab {
+                    self.workspace_focus.clone().focus(window, cx);
+                }
+                cx.notify();
+                return true;
+            }
+        }
+
         // Check if this is an editor pane (no terminal surfaces).
         // Editor panes close directly without terminal shutdown.
         let closing_terminals = pane_tree

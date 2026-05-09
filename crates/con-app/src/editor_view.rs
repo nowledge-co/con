@@ -117,10 +117,13 @@ impl EditorView {
         cx.notify();
     }
 
-    fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index >= self.tabs.len() {
-            return;
+    /// Close the active file tab. Returns true when no file tabs remain and
+    /// the containing editor pane should be closed.
+    pub fn close_active_tab(&mut self) -> bool {
+        if self.tabs.is_empty() {
+            return true;
         }
+        let index = self.active_tab;
         self.tabs.remove(index);
         if self.tabs.is_empty() {
             self.active_tab = 0;
@@ -130,6 +133,15 @@ impl EditorView {
             self.active_tab -= 1;
         }
         self.scroll_handle = UniformListScrollHandle::new();
+        self.tabs.is_empty()
+    }
+
+    fn close_tab(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        self.active_tab = index;
+        self.close_active_tab();
         if let Some(path) = self.active_path().map(Path::to_path_buf) {
             cx.emit(ActiveFileChanged { path });
         }
@@ -360,6 +372,24 @@ mod tests {
 
         assert_eq!(editor.tab_count(), 2);
         assert_eq!(editor.active_path(), Some(first.as_path()));
+    }
+
+    #[test]
+    fn close_active_tab_removes_only_current_file_until_empty() {
+        let mut editor = EditorView::new();
+        let first = PathBuf::from("/tmp/project-a/src/main.rs");
+        let second = PathBuf::from("/tmp/project-b/README.md");
+
+        editor.open_file_from_content(first.clone(), "fn main() {}".into());
+        editor.open_file_from_content(second.clone(), "# Project B".into());
+
+        assert!(!editor.close_active_tab());
+        assert_eq!(editor.tab_count(), 1);
+        assert_eq!(editor.active_path(), Some(first.as_path()));
+
+        assert!(editor.close_active_tab());
+        assert_eq!(editor.tab_count(), 0);
+        assert_eq!(editor.active_path(), None);
     }
 
     #[test]
