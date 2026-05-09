@@ -2156,75 +2156,34 @@ impl PaneTree {
         hide_pane_title_bar: bool,
         cx: &App,
     ) -> AnyElement {
-        // ── Editor pane ───────────────────────────────────────────────────
+        // ── Editor pane — reuses the same title bar as terminal panes ─────
         if let PaneContent::Editor { view, path } = content {
-            let theme = cx.theme();
             let is_focused = pane_id == focused_id;
-            let file_name: gpui::SharedString = path
+            let is_zoomed = zoomed_pane_id == Some(pane_id);
+            let title = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Editor".to_string())
-                .into();
-            let title_bg = if is_focused {
-                theme.title_bar
-            } else {
-                theme.title_bar.opacity(0.85)
-            };
-            let close_pane_cb = close_pane_cb.clone();
+                .unwrap_or_else(|| "Editor".to_string());
+
             let mut col = div().flex().flex_col().size_full();
+
             if tree_has_splits && !hide_pane_title_bar {
-                col = col.child(
-                    div()
-                        .id(("editor-pane-title", pane_id))
-                        .h(px(28.0))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .px(px(10.0))
-                        .gap(px(6.0))
-                        .bg(title_bg)
-                        .child(
-                            gpui::svg()
-                                .path("phosphor/file-text.svg")
-                                .size(px(12.0))
-                                .flex_shrink_0()
-                                .text_color(theme.muted_foreground.opacity(0.7)),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(px(12.0))
-                                .font_family(theme.font_family.clone())
-                                .text_color(theme.foreground.opacity(0.85))
-                                .child(file_name),
-                        )
-                        .child(
-                            div()
-                                .id(("editor-pane-close", pane_id))
-                                .size(px(16.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(4.0))
-                                .cursor_pointer()
-                                .hover(|s| s.bg(theme.muted.opacity(0.15)))
-                                .child(
-                                    gpui::svg()
-                                        .path("phosphor/x.svg")
-                                        .size(px(10.0))
-                                        .text_color(theme.muted_foreground.opacity(0.7)),
-                                )
-                                .on_mouse_down(
-                                    gpui::MouseButton::Left,
-                                    move |_: &gpui::MouseDownEvent, _window, cx| {
-                                        close_pane_cb(pane_id, _window, cx);
-                                    },
-                                ),
-                        ),
+                let title_bar = Self::render_pane_title_bar(
+                    pane_id,
+                    session_id,
+                    title,
+                    is_focused,
+                    tree_has_splits,
+                    is_zoomed,
+                    tab_accent_color,
+                    tab_accent_inactive_alpha,
+                    close_pane_cb,
+                    toggle_zoom_cb,
+                    cx,
                 );
+                col = col.child(title_bar);
             }
+
             col = col.child(
                 div()
                     .flex_1()
