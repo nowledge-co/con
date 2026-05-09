@@ -1999,6 +1999,11 @@ impl PaneTree {
         };
         // The whole title bar is draggable. The visible pane drag preview is
         // rendered by Workspace, centred at the live cursor position.
+        let bar_bg = if is_focused {
+            theme.title_bar.opacity(1.0)
+        } else {
+            theme.title_bar.opacity(0.72)
+        };
         let mut bar = div()
             .id(ElementId::Name(format!("pane-title-bar-{pane_id}").into()))
             .flex()
@@ -2007,6 +2012,7 @@ impl PaneTree {
             .h(px(24.0))
             .w_full()
             .px(px(6.0))
+            .bg(bar_bg)
             .cursor_grab()
             .on_drag(
                 dragged,
