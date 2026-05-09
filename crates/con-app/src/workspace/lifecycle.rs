@@ -446,19 +446,8 @@ impl ConWorkspace {
                     cx.subscribe_in(
                         &editor_view,
                         window,
-                        |this, _editor, event: &ActiveFileChanged, _window, cx| {
-                            let path = event.path.clone();
-                            let parent = path.parent().map(Path::to_path_buf);
-                            if let Some(parent) = parent {
-                                this.file_tree_view.update(cx, |tree, cx| {
-                                    tree.set_root(parent, cx);
-                                    tree.set_active_path(Some(path), cx);
-                                });
-                            } else {
-                                this.file_tree_view.update(cx, |tree, cx| {
-                                    tree.set_active_path(Some(path), cx);
-                                });
-                            }
+                        |this, _editor, _event: &ActiveFileChanged, _window, cx| {
+                            this.sync_file_tree_from_active_focus(cx);
                         },
                     )
                     .detach();
@@ -476,17 +465,7 @@ impl ConWorkspace {
                 editor_view.update(cx, |editor: &mut EditorView, cx| {
                     editor.open_file(path.clone(), cx);
                 });
-                let parent = path.parent().map(Path::to_path_buf);
-                if let Some(parent) = parent {
-                    this.file_tree_view.update(cx, |tree, cx| {
-                        tree.set_root(parent, cx);
-                        tree.set_active_path(Some(path), cx);
-                    });
-                } else {
-                    this.file_tree_view.update(cx, |tree, cx| {
-                        tree.set_active_path(Some(path), cx);
-                    });
-                }
+                this.sync_file_tree_from_active_focus(cx);
                 cx.notify();
             },
         )

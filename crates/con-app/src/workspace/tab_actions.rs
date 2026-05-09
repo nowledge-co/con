@@ -285,19 +285,26 @@ impl ConWorkspace {
         let pane_tree = &self.tabs[self.active_tab].pane_tree;
         let focused_pane_id = pane_tree.focused_pane_id();
 
+        let current_root = self.file_tree_view.read(cx).root().map(Path::to_path_buf);
         let root = if let Some(path) = pane_tree.editor_active_path_for_pane(focused_pane_id, cx) {
-            file_tree_root_for_focus(FileTreeFocusSource::Editor {
-                file_path: Some(path.as_path()),
-            })
+            file_tree_root_for_focus(
+                FileTreeFocusSource::Editor {
+                    file_path: Some(path.as_path()),
+                },
+                current_root.as_deref(),
+            )
             .map(|root| (root, Some(path)))
         } else {
             pane_tree
                 .try_focused_terminal()
                 .and_then(|terminal| terminal.current_dir(cx))
                 .and_then(|cwd| {
-                    file_tree_root_for_focus(FileTreeFocusSource::Terminal {
-                        cwd: Some(cwd.as_str()),
-                    })
+                    file_tree_root_for_focus(
+                        FileTreeFocusSource::Terminal {
+                            cwd: Some(cwd.as_str()),
+                        },
+                        current_root.as_deref(),
+                    )
                     .map(|root| (root, None))
                 })
         };

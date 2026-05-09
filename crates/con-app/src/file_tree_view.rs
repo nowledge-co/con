@@ -73,6 +73,10 @@ impl FileTreeView {
         }
     }
 
+    pub fn root(&self) -> Option<&Path> {
+        self.root.as_deref()
+    }
+
     /// Toggle expand/collapse for a directory entry.
     fn toggle_dir(&mut self, path: &Path, cx: &mut Context<Self>) {
         let Some(idx) = self.entries.iter().position(|e| e.path == path) else {

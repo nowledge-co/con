@@ -1,5 +1,5 @@
 use super::chrome::agent_panel_motion_target_for_agent_request;
-use super::{file_tree_root_for_focus, FileTreeFocusSource};
+use super::{file_tree_root_for_focus, editor_file_close_outcome, EditorFileCloseOutcome, FileTreeFocusSource};
 use super::{
     ConWorkspace, SPLIT_PREVIEW_SEAM_THICKNESS, SplitDirection, SplitPlacement,
     TabRenameStateSnapshot, centered_drag_preview_origin, clamp_preview_origin_to_tab_bar,
@@ -21,18 +21,42 @@ use std::path::{Path, PathBuf};
 
 #[test]
 fn file_tree_root_for_terminal_focus_uses_terminal_cwd() {
-    let root = file_tree_root_for_focus(FileTreeFocusSource::Terminal {
-        cwd: Some("/tmp/project"),
-    });
+    let root = file_tree_root_for_focus(
+        FileTreeFocusSource::Terminal {
+            cwd: Some("/tmp/project"),
+        },
+        Some(Path::new("/tmp/old")),
+    );
     assert_eq!(root, Some(PathBuf::from("/tmp/project")));
 }
 
 #[test]
-fn file_tree_root_for_editor_focus_uses_file_parent_dir() {
-    let root = file_tree_root_for_focus(FileTreeFocusSource::Editor {
-        file_path: Some(Path::new("/tmp/project/src/main.rs")),
-    });
+fn file_tree_root_for_editor_focus_uses_file_parent_dir_without_existing_root() {
+    let root = file_tree_root_for_focus(
+        FileTreeFocusSource::Editor {
+            file_path: Some(Path::new("/tmp/project/src/main.rs")),
+        },
+        None,
+    );
     assert_eq!(root, Some(PathBuf::from("/tmp/project/src")));
+}
+
+#[test]
+fn file_tree_root_for_editor_focus_preserves_existing_root_that_contains_file() {
+    let root = file_tree_root_for_focus(
+        FileTreeFocusSource::Editor {
+            file_path: Some(Path::new("/a/b/c/d/e.txt")),
+        },
+        Some(Path::new("/a/b")),
+    );
+    assert_eq!(root, Some(PathBuf::from("/a/b")));
+}
+
+#[test]
+fn editor_cmd_w_closes_file_tabs_before_requesting_pane_close() {
+    assert_eq!(editor_file_close_outcome(2), EditorFileCloseOutcome::CloseFileTab);
+    assert_eq!(editor_file_close_outcome(1), EditorFileCloseOutcome::ClosePane);
+    assert_eq!(editor_file_close_outcome(0), EditorFileCloseOutcome::ClosePane);
 }
 
 

@@ -5,12 +5,35 @@ pub(super) enum FileTreeFocusSource<'a> {
     Editor { file_path: Option<&'a Path> },
 }
 
-pub(super) fn file_tree_root_for_focus(source: FileTreeFocusSource<'_>) -> Option<PathBuf> {
+pub(super) fn file_tree_root_for_focus(
+    source: FileTreeFocusSource<'_>,
+    current_root: Option<&Path>,
+) -> Option<PathBuf> {
     match source {
         FileTreeFocusSource::Terminal { cwd } => cwd.map(PathBuf::from),
-        FileTreeFocusSource::Editor { file_path } => file_path
-            .and_then(Path::parent)
-            .map(Path::to_path_buf),
+        FileTreeFocusSource::Editor { file_path } => {
+            let file_path = file_path?;
+            if let Some(root) = current_root {
+                if file_path.starts_with(root) {
+                    return Some(root.to_path_buf());
+                }
+            }
+            file_path.parent().map(Path::to_path_buf)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EditorFileCloseOutcome {
+    CloseFileTab,
+    ClosePane,
+}
+
+pub(super) fn editor_file_close_outcome(tab_count: usize) -> EditorFileCloseOutcome {
+    if tab_count > 1 {
+        EditorFileCloseOutcome::CloseFileTab
+    } else {
+        EditorFileCloseOutcome::ClosePane
     }
 }
 
