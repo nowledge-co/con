@@ -2004,7 +2004,7 @@ impl PaneTree {
         // background regardless of the accent slider position.
         let max_accent = con_core::config::AppearanceConfig::MAX_TAB_ACCENT_INACTIVE_ALPHA;
         let t = (tab_accent_inactive_alpha / max_accent.max(f32::EPSILON)).clamp(0.0, 1.0);
-        let inactive_bar_opacity = 0.55 + t * 0.30; // 0.55 at min → 0.85 at max
+        let inactive_bar_opacity = (0.55 + t * 0.30).clamp(0.55, 0.85); // 0.55 at min → 0.85 at max
         let bar_bg = if is_focused {
             theme.title_bar.opacity(1.0)
         } else {
