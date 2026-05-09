@@ -174,7 +174,6 @@ impl Render for EditorView {
         .track_scroll(&self.scroll_handle);
 
         div()
-            .id("editor-view")
             .size_full()
             .flex()
             .flex_col()
