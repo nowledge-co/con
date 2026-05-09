@@ -428,17 +428,33 @@ impl ConWorkspace {
             window,
             |this, _tree, event: &OpenFile, _window, cx| {
                 let path = event.path.clone();
-                this.editor_view.update(cx, |editor, cx| {
-                    editor.open_file(path.clone(), cx);
-                });
-                this.file_tree_view.update(cx, |tree, cx| {
-                    tree.set_active_path(Some(path), cx);
-                });
-                // Open editor area if collapsed.
-                if this.editor_area_height < 1.0 {
-                    this.editor_area_height = 300.0;
+                // If this file is already open in an editor pane, just focus it.
+                let existing = this.tabs[this.active_tab]
+                    .pane_tree
+                    .find_editor_pane_for_path(&path);
+                if let Some(pane_id) = existing {
+                    this.tabs[this.active_tab].pane_tree.focus_pane(pane_id);
+                    this.file_tree_view.update(cx, |tree, cx| {
+                        tree.set_active_path(Some(path), cx);
+                    });
+                    cx.notify();
+                    return;
                 }
-                this.save_session(cx);
+                // Create a new editor view entity and split the pane tree.
+                let editor_view = cx.new(|_cx| EditorView::new());
+                let path_for_open = path.clone();
+                let editor_view_for_open = editor_view.clone();
+                let new_pane_id = this.tabs[this.active_tab]
+                    .pane_tree
+                    .split_with_editor(path.clone(), editor_view);
+                if new_pane_id.is_some() {
+                    editor_view_for_open.update(cx, |editor: &mut EditorView, cx| {
+                        editor.open_file(path_for_open, cx);
+                    });
+                    this.file_tree_view.update(cx, |tree, cx| {
+                        tree.set_active_path(Some(path), cx);
+                    });
+                }
                 cx.notify();
             },
         )
@@ -815,9 +831,6 @@ impl ConWorkspace {
             ),
             left_panel_open: session.left_panel_open.unwrap_or(true),
             file_tree_view: file_tree_entity,
-            editor_view: cx.new(|_cx| EditorView::new()),
-            editor_area_height: session.editor_area_height.unwrap_or(0.0),
-            editor_area_drag: None,
         }
     }
 

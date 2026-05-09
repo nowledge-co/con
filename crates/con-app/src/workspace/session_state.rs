@@ -105,7 +105,7 @@ impl ConWorkspace {
             vertical_tabs_width: Some(self.sidebar.read(cx).panel_width()),
             activity_slot: Some(self.activity_slot.as_str().to_string()),
             left_panel_open: Some(self.left_panel_open),
-            editor_area_height: Some(self.editor_area_height),
+            editor_area_height: None,
         }
     }
 

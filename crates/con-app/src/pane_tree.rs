@@ -8,6 +8,7 @@ use gpui_component::{
     tooltip::Tooltip,
 };
 
+use crate::editor_view::EditorView;
 use crate::sidebar::{DraggedTab, DraggedTabOrigin};
 use crate::terminal_pane::TerminalPane;
 
@@ -158,12 +159,25 @@ struct SurfaceCloseCandidate {
     close_pane_when_last: bool,
 }
 
+/// The content kind of a leaf pane.
+#[derive(Clone)]
+pub enum PaneLeafKind {
+    /// A terminal pane with one or more surfaces.
+    Terminal,
+    /// A code editor pane showing a single file.
+    Editor {
+        view: Entity<EditorView>,
+        path: std::path::PathBuf,
+    },
+}
+
 /// A node in the pane tree — either a pane slot or a split.
 enum PaneNode {
     Leaf {
         id: PaneId,
         surfaces: Vec<PaneSurface>,
         active_surface_id: SurfaceId,
+        kind: PaneLeafKind,
     },
     Split {
         split_id: SplitId,
@@ -212,6 +226,7 @@ impl PaneTree {
                 id: 0,
                 surfaces: vec![surface],
                 active_surface_id: 0,
+                kind: PaneLeafKind::Terminal,
             },
             focused_pane_id: 0,
             zoomed_pane_id: None,
@@ -375,6 +390,96 @@ impl PaneTree {
         }
     }
 
+    /// Split the focused pane to the right and open an editor pane showing `path`.
+    /// Returns the new pane id, or `None` if the split failed.
+    /// The caller is responsible for calling `editor_view.update(cx, |e, cx| e.open_file(path, cx))`.
+    pub fn split_with_editor(
+        &mut self,
+        path: std::path::PathBuf,
+        editor_view: Entity<EditorView>,
+    ) -> Option<PaneId> {
+        let new_id = self.next_id;
+        self.next_id += 1;
+        let new_split_id = self.next_split_id;
+        self.next_split_id += 1;
+
+        let new_leaf = PaneNode::Leaf {
+            id: new_id,
+            surfaces: Vec::new(),
+            active_surface_id: 0,
+            kind: PaneLeafKind::Editor {
+                view: editor_view,
+                path: path.clone(),
+            },
+        };
+
+        let focused = self.focused_pane_id;
+        if !Self::insert_editor_leaf(&mut self.root, focused, new_leaf, new_split_id) {
+            return None;
+        }
+
+        self.focused_pane_id = new_id;
+        self.zoomed_pane_id = None;
+        Some(new_id)
+    }
+
+    /// Find an existing editor pane that has `path` open.
+    pub fn find_editor_pane_for_path(&self, path: &std::path::Path) -> Option<PaneId> {
+        Self::find_editor_pane_node(&self.root, path)
+    }
+
+    fn find_editor_pane_node(node: &PaneNode, path: &std::path::Path) -> Option<PaneId> {
+        match node {
+            PaneNode::Leaf {
+                id,
+                kind: PaneLeafKind::Editor { path: p, .. },
+                ..
+            } if p == path => Some(*id),
+            PaneNode::Leaf { .. } => None,
+            PaneNode::Split { first, second, .. } => {
+                Self::find_editor_pane_node(first, path)
+                    .or_else(|| Self::find_editor_pane_node(second, path))
+            }
+        }
+    }
+
+    /// Focus an existing pane by id (used to re-focus an already-open editor pane).
+    pub fn focus_pane(&mut self, pane_id: PaneId) {
+        if Self::contains_leaf(&self.root, pane_id) {
+            self.focused_pane_id = pane_id;
+            self.zoomed_pane_id = None;
+        }
+    }
+
+    fn insert_editor_leaf(
+        node: &mut PaneNode,
+        target_id: PaneId,
+        new_leaf: PaneNode,
+        new_split_id: SplitId,
+    ) -> bool {
+        match node {
+            PaneNode::Leaf { id, .. } if *id == target_id => {
+                let old = std::mem::replace(node, Self::empty_placeholder_node());
+                *node = PaneNode::Split {
+                    split_id: new_split_id,
+                    direction: SplitDirection::Horizontal,
+                    first: Box::new(old),
+                    second: Box::new(new_leaf),
+                    ratio: 0.5,
+                };
+                true
+            }
+            PaneNode::Leaf { .. } => false,
+            PaneNode::Split { first, second, .. } => {
+                if Self::contains_leaf(first, target_id) {
+                    Self::insert_editor_leaf(first, target_id, new_leaf, new_split_id)
+                } else {
+                    Self::insert_editor_leaf(second, target_id, new_leaf, new_split_id)
+                }
+            }
+        }
+    }
+
     pub fn create_surface_in_pane(
         &mut self,
         pane_id: PaneId,
@@ -475,6 +580,7 @@ impl PaneTree {
                 id: 0,
                 surfaces: vec![PaneSurface::new(0, placeholder_terminal)],
                 active_surface_id: 0,
+                kind: PaneLeafKind::Terminal,
             },
         );
         self.root = Self::remove_leaf(old_root, pane_id);
@@ -851,6 +957,7 @@ impl PaneTree {
                 id,
                 surfaces,
                 active_surface_id,
+                ..
             } if *id == target_id => {
                 Self::active_surface(surfaces, *active_surface_id).map(|surface| &surface.terminal)
             }
@@ -1103,12 +1210,14 @@ impl PaneTree {
                         id: new_id,
                         surfaces: vec![surface.clone()],
                         active_surface_id: new_surface_id,
+                        kind: PaneLeafKind::Terminal,
                     },
                 );
                 let new_leaf = PaneNode::Leaf {
                     id: new_id,
                     surfaces: vec![surface],
                     active_surface_id: new_surface_id,
+                    kind: PaneLeafKind::Terminal,
                 };
                 let (first, second) = match placement {
                     SplitPlacement::Before => (Box::new(new_leaf), Box::new(old_node)),
@@ -1156,6 +1265,7 @@ impl PaneTree {
                 id,
                 surfaces,
                 active_surface_id,
+                ..
             } if *id == pane_id => {
                 let surface_id = surface.id;
                 surfaces.push(surface);
@@ -1176,6 +1286,7 @@ impl PaneTree {
                 id,
                 surfaces,
                 active_surface_id,
+                ..
             } => {
                 if surfaces.iter().any(|surface| surface.id == surface_id) {
                     let changed = *active_surface_id != surface_id;
@@ -1221,6 +1332,7 @@ impl PaneTree {
                 id,
                 surfaces,
                 active_surface_id,
+                ..
             } => {
                 if surfaces.len() <= 1 {
                     return None;
@@ -1298,6 +1410,7 @@ impl PaneTree {
             id: PaneId::MAX,
             surfaces: Vec::new(),
             active_surface_id: 0,
+            kind: PaneLeafKind::Terminal,
         }
     }
 
@@ -1529,10 +1642,12 @@ impl PaneTree {
                 id,
                 surfaces,
                 active_surface_id,
+                kind,
             } => Self::render_leaf(
                 *id,
                 surfaces,
                 *active_surface_id,
+                kind,
                 focused_id,
                 focus_surface_cb,
                 rename_surface_cb,
@@ -1785,10 +1900,12 @@ impl PaneTree {
                 id,
                 surfaces,
                 active_surface_id,
+                kind,
             } if *id == target_id => Some(Self::render_leaf(
                 *id,
                 surfaces,
                 *active_surface_id,
+                kind,
                 focused_id,
                 focus_surface_cb,
                 rename_surface_cb,
@@ -2046,6 +2163,7 @@ impl PaneTree {
         pane_id: PaneId,
         surfaces: &[PaneSurface],
         active_surface_id: SurfaceId,
+        kind: &PaneLeafKind,
         focused_id: PaneId,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
@@ -2061,6 +2179,86 @@ impl PaneTree {
         hide_pane_title_bar: bool,
         cx: &App,
     ) -> AnyElement {
+        // ── Editor pane ───────────────────────────────────────────────────
+        if let PaneLeafKind::Editor { view, path } = kind {
+            let theme = cx.theme();
+            let is_focused = pane_id == focused_id;
+            let file_name: gpui::SharedString = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Editor".to_string())
+                .into();
+            let title_bg = if is_focused {
+                theme.title_bar
+            } else {
+                theme.title_bar.opacity(0.85)
+            };
+            let close_pane_cb = close_pane_cb.clone();
+            let mut col = div().flex().flex_col().size_full();
+            if tree_has_splits && !hide_pane_title_bar {
+                col = col.child(
+                    div()
+                        .id(("editor-pane-title", pane_id))
+                        .h(px(28.0))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .px(px(10.0))
+                        .gap(px(6.0))
+                        .bg(title_bg)
+                        .child(
+                            gpui::svg()
+                                .path("phosphor/file-text.svg")
+                                .size(px(12.0))
+                                .flex_shrink_0()
+                                .text_color(theme.muted_foreground.opacity(0.7)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(12.0))
+                                .font_family(theme.font_family.clone())
+                                .text_color(theme.foreground.opacity(0.85))
+                                .child(file_name),
+                        )
+                        .child(
+                            div()
+                                .id(("editor-pane-close", pane_id))
+                                .size(px(16.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(4.0))
+                                .cursor_pointer()
+                                .hover(|s| s.bg(theme.muted.opacity(0.15)))
+                                .child(
+                                    gpui::svg()
+                                        .path("phosphor/x.svg")
+                                        .size(px(10.0))
+                                        .text_color(theme.muted_foreground.opacity(0.7)),
+                                )
+                                .on_mouse_down(
+                                    gpui::MouseButton::Left,
+                                    move |_: &gpui::MouseDownEvent, _window, cx| {
+                                        close_pane_cb(pane_id, _window, cx);
+                                    },
+                                ),
+                        ),
+                );
+            }
+            col = col.child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(view.clone()),
+            );
+            return col.into_any_element();
+        }
+
+        // ── Terminal pane (existing logic) ────────────────────────────────
         let theme = cx.theme();
         let is_focused = pane_id == focused_id;
         let active = Self::active_surface(surfaces, active_surface_id)
@@ -2353,6 +2551,7 @@ impl PaneTree {
                 id,
                 surfaces,
                 active_surface_id,
+                ..
             } => {
                 if let Some(surface) = Self::active_surface(surfaces, *active_surface_id)
                     && surface.terminal.is_focused(window, cx)
@@ -2407,6 +2606,7 @@ impl PaneTree {
                 id,
                 surfaces,
                 active_surface_id,
+                ..
             } => {
                 if let Some(surface) = Self::active_surface(surfaces, *active_surface_id) {
                     result.push((*id, surface.terminal.clone()));
@@ -2425,6 +2625,7 @@ impl PaneTree {
                 id,
                 surfaces,
                 active_surface_id,
+                ..
             } => {
                 result.extend(surfaces.iter().map(|surface| {
                     (
@@ -2453,6 +2654,7 @@ impl PaneTree {
                 id,
                 surfaces,
                 active_surface_id,
+                ..
             } => {
                 *pane_index += 1;
                 if target_pane_id.is_some_and(|target| target != *id) {
@@ -2521,6 +2723,7 @@ impl PaneTree {
                 id,
                 surfaces,
                 active_surface_id,
+                ..
             } => {
                 let surface_states = surfaces
                     .iter()
@@ -2594,6 +2797,7 @@ impl PaneTree {
                             make_terminal(cwd.as_deref(), None, false),
                         )],
                         active_surface_id: surface_id,
+                        kind: PaneLeafKind::Terminal,
                     };
                 }
 
@@ -2643,6 +2847,7 @@ impl PaneTree {
                     id: *pane_id,
                     surfaces: restored_surfaces,
                     active_surface_id,
+                    kind: PaneLeafKind::Terminal,
                 }
             }
             PaneLayoutState::Split {
@@ -2706,6 +2911,7 @@ mod tests {
             id,
             surfaces: Vec::new(),
             active_surface_id: 0,
+            kind: PaneLeafKind::Terminal,
         }
     }
 

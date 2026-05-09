@@ -78,8 +78,8 @@ use crate::{
     NewSurfaceSplitDown, NewSurfaceSplitRight, NewTab, NextSurface, NextTab,
     OpenWorkspaceLayoutWindow, PreviousSurface, PreviousTab, Quit, RenameSurface, SelectTab1,
     SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8, SelectTab9,
-    SplitDown, SplitLeft, SplitRight, SplitUp, ToggleAgentPanel, ToggleEditorArea,
-    ToggleLeftPanel, TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs,
+    SplitDown, SplitLeft, SplitRight, SplitUp, ToggleAgentPanel, ToggleLeftPanel,
+    TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs,
 };
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
@@ -308,11 +308,4 @@ pub struct ConWorkspace {
     left_panel_open: bool,
     /// File tree view — global singleton, root follows active tab cwd.
     file_tree_view: Entity<FileTreeView>,
-    /// Editor view — read-only file viewer (Phase 1).
-    editor_view: Entity<EditorView>,
-    /// Height of the editor area in pixels. 0.0 = collapsed.
-    editor_area_height: f32,
-    /// Drag state for the editor/terminal vertical resize handle:
-    /// (start_y, start_height).
-    editor_area_drag: Option<(f32, f32)>,
 }

@@ -664,45 +664,9 @@ impl Render for ConWorkspace {
             );
         }
 
-        // ── Main column: editor area (optional) + terminal area ───────────
-        let editor_area_height = self.editor_area_height;
-        let show_editor = editor_area_height > 0.5;
-
-        let mut main_column = div().flex().flex_col().flex_1().min_w_0().min_h_0();
-
-        if show_editor {
-            let editor_drag_start = self.editor_area_drag;
-            main_column = main_column
-                .child(
-                    div()
-                        .h(px(editor_area_height))
-                        .flex_shrink_0()
-                        .overflow_hidden()
-                        .child(self.editor_view.clone()),
-                )
-                .child(
-                    // Vertical resize handle between editor and terminal
-                    div()
-                        .id("editor-resize-handle")
-                        .h(px(6.0))
-                        .w_full()
-                        .flex_shrink_0()
-                        .cursor_row_resize()
-                        .bg(theme.transparent)
-                        .hover(|s| s.bg(theme.muted.opacity(0.08)))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
-                                this.release_active_terminal_mouse_selection(cx);
-                                this.editor_area_drag =
-                                    Some((f32::from(event.position.y), this.editor_area_height));
-                                let _ = editor_drag_start;
-                            }),
-                        ),
-                );
-        }
-
-        main_column = main_column.child(terminal_area);
+        // ── Main column: terminal area only (editor panes live inside pane tree) ──
+        let main_column = div().flex().flex_col().flex_1().min_w_0().min_h_0()
+            .child(terminal_area);
 
         main_area = main_area.child(main_column);
 
@@ -906,20 +870,6 @@ impl Render for ConWorkspace {
                         return;
                     }
 
-                    // Editor area vertical resize drag
-                    if let Some((start_y, start_height)) = this.editor_area_drag {
-                        let delta = f32::from(event.position.y) - start_y;
-                        let win_h = win.bounds().size.height.as_f32();
-                        let top_bar_h = this.current_top_bar_height();
-                        let max_h = (win_h - top_bar_h - 120.0).max(120.0);
-                        let new_height = (start_height + delta).clamp(60.0, max_h);
-                        if (this.editor_area_height - new_height).abs() > 0.5 {
-                            this.editor_area_height = new_height;
-                            cx.notify();
-                        }
-                        return;
-                    }
-
                     if let Some(preview) = this
                         .tab_drag_preview
                         .lock()
@@ -1044,12 +994,6 @@ impl Render for ConWorkspace {
                         cx.notify();
                         return;
                     }
-                    if this.editor_area_drag.is_some() {
-                        this.editor_area_drag = None;
-                        this.save_session(cx);
-                        cx.notify();
-                        return;
-                    }
                     if this.agent_panel_drag.is_some() {
                         this.agent_panel_drag = None;
                         this.save_session(cx);
@@ -1131,7 +1075,6 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::cycle_input_mode))
             .on_action(cx.listener(Self::toggle_pane_scope_picker))
             .on_action(cx.listener(Self::toggle_left_panel))
-            .on_action(cx.listener(Self::toggle_editor_area))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.pane_scope_picker_open {
                     return;
