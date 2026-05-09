@@ -424,6 +424,15 @@ impl GhosttyView {
                 let superview: id = msg_send![host_view, superview];
                 if !superview.is_null() {
                     let _: () = msg_send![host_view, removeFromSuperview];
+                    // After removing the Ghostty NSView, restore first responder to
+                    // the GPUI content view so keyboard events reach GPUI again.
+                    let window: id = msg_send![superview, window];
+                    if !window.is_null() {
+                        let content_view: id = msg_send![window, contentView];
+                        if !content_view.is_null() {
+                            let _: () = msg_send![window, makeFirstResponder: content_view];
+                        }
+                    }
                 }
             }
         }

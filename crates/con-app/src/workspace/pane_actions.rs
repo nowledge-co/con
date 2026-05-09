@@ -577,26 +577,28 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         if !self.has_active_tab() {
+            log::debug!("[close_pane] no active tab, returning");
             return;
         }
 
-        if self.tabs[self.active_tab].pane_tree.pane_count() > 1 {
-            let pane_id = self.tabs[self.active_tab].pane_tree.focused_pane_id();
-            // Validate the focused pane id still exists (editor-only tabs may have
-            // a stale focused_pane_id if sync_focus never ran for editor panes).
-            let valid_pane_id = if self.tabs[self.active_tab]
-                .pane_tree
-                .contains_pane(pane_id)
-            {
-                pane_id
+        let pane_count = self.tabs[self.active_tab].pane_tree.pane_count();
+        let focused_pane_id = self.tabs[self.active_tab].pane_tree.focused_pane_id();
+        let contains = self.tabs[self.active_tab].pane_tree.contains_pane(focused_pane_id);
+        log::debug!("[close_pane] pane_count={pane_count} focused_pane_id={focused_pane_id} contains={contains}");
+
+        if pane_count > 1 {
+            let valid_pane_id = if contains {
+                focused_pane_id
             } else {
                 self.tabs[self.active_tab].pane_tree.first_pane_id_pub()
             };
+            log::debug!("[close_pane] closing pane_id={valid_pane_id}");
             let _ = self.close_pane_in_tab(self.active_tab, valid_pane_id, window, cx);
             return;
         }
 
         if self.tabs.len() > 1 {
+            log::debug!("[close_pane] single pane, closing tab (tabs={})", self.tabs.len());
             self.close_tab_by_index(self.active_tab, window, cx);
             return;
         }
@@ -606,6 +608,7 @@ impl ConWorkspace {
             return;
         }
 
+        log::debug!("[close_pane] single pane, single tab — closing window");
         self.close_window_from_last_tab(window, cx);
     }
 

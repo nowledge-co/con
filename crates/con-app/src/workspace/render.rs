@@ -1119,15 +1119,19 @@ impl Render for ConWorkspace {
                 }
             }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let mods = &event.keystroke.modifiers;
+                let key = event.keystroke.key.as_str();
+                log::debug!(
+                    "[workspace key_down] key={key} cmd={} workspace_focus_focused={}",
+                    mods.platform,
+                    this.workspace_focus.is_focused(window)
+                );
                 // Don't handle workspace shortcuts when a modal overlay is open
                 if this.settings_panel.read(cx).is_overlay_visible()
                     || this.command_palette.read(cx).is_visible()
                 {
                     return;
                 }
-
-                let mods = &event.keystroke.modifiers;
-                let key = event.keystroke.key.as_str();
 
                 if key == "escape" && this.surface_rename.take().is_some() {
                     window.prevent_default();
