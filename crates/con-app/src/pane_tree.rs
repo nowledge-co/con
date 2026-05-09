@@ -797,6 +797,12 @@ impl PaneTree {
         Self::find_active_surface_id(&self.root, pane_id)
     }
 
+    pub fn focused_editor_tab_count(&self, cx: &App) -> Option<usize> {
+        let pane_id = self.focused_pane_id;
+        self.editor_view_for_pane(pane_id)
+            .map(|view| view.read(cx).tab_count())
+    }
+
     pub fn focused_pane_id(&self) -> PaneId {
         self.focused_pane_id
     }

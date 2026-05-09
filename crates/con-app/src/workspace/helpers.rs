@@ -24,17 +24,28 @@ pub(super) fn file_tree_root_for_focus(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EditorPaneCloseIntent {
-    CloseActiveFile,
+pub(super) enum WorkspaceCloseIntent {
+    CloseEditorFile,
     ClosePane,
+    CloseTab,
+    CloseWindow,
 }
 
-pub(super) fn editor_pane_close_intent(tab_count: usize) -> EditorPaneCloseIntent {
-    if tab_count > 0 {
-        EditorPaneCloseIntent::CloseActiveFile
-    } else {
-        EditorPaneCloseIntent::ClosePane
+pub(super) fn workspace_close_intent(
+    pane_count: usize,
+    editor_file_tabs: Option<usize>,
+    tab_count: usize,
+) -> WorkspaceCloseIntent {
+    if matches!(editor_file_tabs, Some(count) if count > 0) {
+        return WorkspaceCloseIntent::CloseEditorFile;
     }
+    if pane_count > 1 {
+        return WorkspaceCloseIntent::ClosePane;
+    }
+    if tab_count > 1 {
+        return WorkspaceCloseIntent::CloseTab;
+    }
+    WorkspaceCloseIntent::CloseWindow
 }
 
 pub(super) fn point_in_bounds(

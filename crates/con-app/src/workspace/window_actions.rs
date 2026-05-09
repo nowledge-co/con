@@ -343,6 +343,26 @@ impl ConWorkspace {
     }
 
     pub(super) fn close_tab(&mut self, _: &CloseTab, window: &mut Window, cx: &mut Context<Self>) {
+        // Cmd+W maps to CloseTab, but for a focused EditorPane it should close
+        // the active editor file first. Only empty editors fall through to pane/tab close.
+        let active_tree = &self.tabs[self.active_tab].pane_tree;
+        let close_intent = workspace_close_intent(
+            active_tree.pane_count(),
+            active_tree.focused_editor_tab_count(cx),
+            self.tabs.len(),
+        );
+        log::warn!(
+            "[editor-close] CloseTab action: active_tab={} focused_pane={} pane_count={} intent={close_intent:?}",
+            self.active_tab,
+            active_tree.focused_pane_id(),
+            active_tree.pane_count()
+        );
+        if close_intent == WorkspaceCloseIntent::CloseEditorFile {
+            let pane_id = active_tree.focused_pane_id();
+            let _ = self.close_pane_in_tab(self.active_tab, pane_id, window, cx);
+            return;
+        }
+
         // If the active tab has multiple panes, close the focused pane first.
         // Only close the entire tab when it's down to a single pane.
         if self.tabs[self.active_tab].pane_tree.pane_count() > 1 {
