@@ -577,14 +577,12 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         if !self.has_active_tab() {
-            log::debug!("[close_pane] no active tab, returning");
             return;
         }
 
         let pane_count = self.tabs[self.active_tab].pane_tree.pane_count();
         let focused_pane_id = self.tabs[self.active_tab].pane_tree.focused_pane_id();
         let contains = self.tabs[self.active_tab].pane_tree.contains_pane(focused_pane_id);
-        log::debug!("[close_pane] pane_count={pane_count} focused_pane_id={focused_pane_id} contains={contains}");
 
         if pane_count > 1 {
             let valid_pane_id = if contains {
@@ -592,7 +590,6 @@ impl ConWorkspace {
             } else {
                 self.tabs[self.active_tab].pane_tree.first_pane_id_pub()
             };
-            log::debug!("[close_pane] closing pane_id={valid_pane_id}");
             let _ = self.close_pane_in_tab(self.active_tab, valid_pane_id, window, cx);
             return;
         }

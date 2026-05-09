@@ -429,9 +429,23 @@ impl GhosttyView {
                     let window: id = msg_send![superview, window];
                     if !window.is_null() {
                         let content_view: id = msg_send![window, contentView];
+                        log::debug!(
+                            "[detach_host_view] window={:p} content_view={:p}",
+                            window,
+                            content_view
+                        );
                         if !content_view.is_null() {
                             let _: () = msg_send![window, makeFirstResponder: content_view];
+                            let first_responder: id = msg_send![window, firstResponder];
+                            log::debug!(
+                                "[detach_host_view] after makeFirstResponder: first_responder={:p} content_view={:p} same={}",
+                                first_responder,
+                                content_view,
+                                first_responder == content_view
+                            );
                         }
+                    } else {
+                        log::debug!("[detach_host_view] window is null after removeFromSuperview");
                     }
                 }
             }
