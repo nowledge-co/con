@@ -1886,7 +1886,7 @@ impl PaneTree {
         has_splits: bool,
         is_zoomed: bool,
         tab_accent_color: Option<con_core::session::TabAccentColor>,
-        _tab_accent_inactive_alpha: f32,
+        tab_accent_inactive_alpha: f32,
         close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         cx: &App,
@@ -2002,7 +2002,7 @@ impl PaneTree {
         let bar_bg = if is_focused {
             theme.title_bar.opacity(1.0)
         } else {
-            theme.title_bar.opacity(0.72)
+            theme.title_bar.opacity(tab_accent_inactive_alpha.clamp(0.0, 1.0))
         };
         let mut bar = div()
             .id(ElementId::Name(format!("pane-title-bar-{pane_id}").into()))
