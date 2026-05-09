@@ -168,7 +168,6 @@ pub enum PaneContent {
     },
     Editor {
         view: Entity<EditorView>,
-        path: std::path::PathBuf,
     },
 }
 
@@ -418,20 +417,15 @@ impl PaneTree {
         }
     }
 
-    /// Split the focused pane to the right and open an editor pane showing `path`.
+    /// Split the focused pane to the right and create an editor pane.
     /// Returns the new pane id, or `None` if the split failed.
-    /// The caller is responsible for calling `editor_view.update(cx, |e, cx| e.open_file(path, cx))`.
-    pub fn split_with_editor(
-        &mut self,
-        path: std::path::PathBuf,
-        editor_view: Entity<EditorView>,
-    ) -> Option<PaneId> {
+    pub fn split_with_editor(&mut self, editor_view: Entity<EditorView>) -> Option<PaneId> {
         let new_id = self.next_id;
         self.next_id += 1;
         let new_split_id = self.next_split_id;
         self.next_split_id += 1;
 
-        let new_leaf = PaneNode::Leaf { id: new_id, content: PaneContent::Editor { view: editor_view, path: path.clone() } };
+        let new_leaf = PaneNode::Leaf { id: new_id, content: PaneContent::Editor { view: editor_view } };
 
         let focused = self.focused_pane_id;
         if !Self::insert_editor_leaf(&mut self.root, focused, new_leaf, new_split_id) {
@@ -443,20 +437,39 @@ impl PaneTree {
         Some(new_id)
     }
 
-    /// Find an existing editor pane that has `path` open.
-    pub fn find_editor_pane_for_path(&self, path: &std::path::Path) -> Option<PaneId> {
-        Self::find_editor_pane_node(&self.root, path)
+    /// Find the editor pane in this workspace tab, if one exists.
+    pub fn find_editor_pane(&self) -> Option<PaneId> {
+        Self::find_editor_pane_node(&self.root)
     }
 
-    fn find_editor_pane_node(node: &PaneNode, path: &std::path::Path) -> Option<PaneId> {
+    fn find_editor_pane_node(node: &PaneNode) -> Option<PaneId> {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Editor { path: p, .. }, ..
-            } if p == path => Some(*id),
+            PaneNode::Leaf { id, content: PaneContent::Editor { .. }, .. } => Some(*id),
             PaneNode::Leaf { .. } => None,
             PaneNode::Split { first, second, .. } => {
-                Self::find_editor_pane_node(first, path)
-                    .or_else(|| Self::find_editor_pane_node(second, path))
+                Self::find_editor_pane_node(first)
+                    .or_else(|| Self::find_editor_pane_node(second))
             }
+        }
+    }
+
+    pub fn editor_view_for_pane(&self, pane_id: PaneId) -> Option<Entity<EditorView>> {
+        Self::editor_view_for_pane_node(&self.root, pane_id)
+    }
+
+    pub fn editor_active_path_for_pane(&self, pane_id: PaneId, cx: &App) -> Option<std::path::PathBuf> {
+        self.editor_view_for_pane(pane_id)
+            .and_then(|view| view.read(cx).active_path().map(std::path::Path::to_path_buf))
+    }
+
+    fn editor_view_for_pane_node(node: &PaneNode, pane_id: PaneId) -> Option<Entity<EditorView>> {
+        match node {
+            PaneNode::Leaf { id, content: PaneContent::Editor { view }, .. } if *id == pane_id => {
+                Some(view.clone())
+            }
+            PaneNode::Leaf { .. } => None,
+            PaneNode::Split { first, second, .. } => Self::editor_view_for_pane_node(first, pane_id)
+                .or_else(|| Self::editor_view_for_pane_node(second, pane_id)),
         }
     }
 
@@ -2190,11 +2203,13 @@ impl PaneTree {
         cx: &App,
     ) -> AnyElement {
         // ── Editor pane — reuses the same title bar as terminal panes ─────
-        if let PaneContent::Editor { view, path } = content {
+        if let PaneContent::Editor { view } = content {
             let is_focused = pane_id == focused_id;
             let is_zoomed = zoomed_pane_id == Some(pane_id);
-            let title = path
-                .file_name()
+            let title = view
+                .read(cx)
+                .active_path()
+                .and_then(|path| path.file_name())
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "Editor".to_string());
 

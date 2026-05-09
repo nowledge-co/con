@@ -258,6 +258,12 @@ impl ConWorkspace {
             #[cfg(not(target_os = "macos"))]
             self.sync_active_tab_native_view_visibility(cx);
             terminal.focus(window, cx);
+            if let Some(cwd) = terminal.current_dir(cx) {
+                self.file_tree_view.update(cx, |tree, cx| {
+                    tree.set_root(PathBuf::from(cwd), cx);
+                    tree.set_active_path(None, cx);
+                });
+            }
         } else {
             #[cfg(target_os = "macos")]
             self.sync_active_tab_native_view_visibility_now_or_after_layout(
@@ -285,6 +291,18 @@ impl ConWorkspace {
             return;
         }
         self.tabs[self.active_tab].pane_tree.focus_pane(pane_id);
+        if let Some(path) = self.tabs[self.active_tab]
+            .pane_tree
+            .editor_active_path_for_pane(pane_id, cx)
+        {
+            let parent = path.parent().map(Path::to_path_buf);
+            self.file_tree_view.update(cx, |tree, cx| {
+                if let Some(parent) = parent {
+                    tree.set_root(parent, cx);
+                }
+                tree.set_active_path(Some(path), cx);
+            });
+        }
         // Give GPUI focus to the workspace focus handle so keyboard actions
         // (Cmd+T, Cmd+W, etc.) bubble through the ConWorkspace key context.
         self.workspace_focus.clone().focus(window, cx);

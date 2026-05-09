@@ -666,6 +666,7 @@ impl SessionSidebar {
         });
     }
 
+    #[allow(dead_code)]
     fn render_rail(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = cx.theme();
         let rail_bg = sidebar_surface(theme, self.ui_opacity, 0.035);
@@ -1747,6 +1748,7 @@ fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
 /// 2-px horizontal drop indicator drawn above (`above=true`) or
 /// below the rail pill it's attached to. Used during a drag to mark
 /// the slot the dragged tab will land in if the user releases now.
+#[allow(dead_code)]
 fn rail_drop_indicator(theme: &gpui_component::Theme, above: bool) -> Div {
     let bar = div()
         .absolute()
@@ -1781,6 +1783,7 @@ fn point_in_bounds(p: &gpui::Point<gpui::Pixels>, b: &gpui::Bounds<gpui::Pixels>
 /// "drag-to-last-position" gesture work — without the bottom-half
 /// rule, the deepest reachable slot was N-1 and there was no way
 /// to land below the last row.
+#[allow(dead_code)]
 fn rail_slot_for_cursor(
     event: &gpui::DragMoveEvent<DraggedTab>,
     session_count: usize,
@@ -1796,6 +1799,7 @@ fn rail_slot_for_cursor(
 /// On-drop fallback — GPUI gives us the cursor's window-coords
 /// position here, so subtract the rail origin cached during
 /// `on_drag_move` before applying the rail-local layout math.
+#[allow(dead_code)]
 fn rail_slot_for_cursor_position(
     cursor: gpui::Point<gpui::Pixels>,
     rail_origin_y: Option<f32>,
@@ -1806,6 +1810,7 @@ fn rail_slot_for_cursor_position(
     rail_slot_from_local_y(local_y, session_count, leading_top_pad)
 }
 
+#[allow(dead_code)]
 fn rail_slot_from_local_y(
     local_y: f32,
     session_count: usize,
@@ -1838,6 +1843,7 @@ fn rail_slot_from_local_y(
     Some(slot.min(session_count))
 }
 
+#[allow(dead_code)]
 fn rail_icon_button<F>(
     id: &'static str,
     icon: &'static str,
@@ -2115,6 +2121,7 @@ pub fn vertical_drag_overlay_probe_position(
     )
 }
 
+#[allow(dead_code)]
 fn event_probe_y_from_vertical_preview(
     mouse: Point<Pixels>,
     dragged: &DraggedTab,

@@ -58,7 +58,7 @@ use crate::settings_panel::{
     self, AppearancePreview, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
 };
 use crate::activity_bar::{ACTIVITY_BAR_WIDTH, ActivityBar, ActivitySlot, ActivitySlotChanged, ActivityTogglePanel};
-use crate::editor_view::EditorView;
+use crate::editor_view::{ActiveFileChanged, EditorView};
 use crate::file_tree_view::{FileTreeView, OpenFile};
 use crate::sidebar::{
     DraggedTab, DraggedTabOrigin, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry,
