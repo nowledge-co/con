@@ -3,6 +3,7 @@
 //! Uses GPUI's `uniform_list` for virtualized rendering — only visible rows
 //! are laid out each frame, so large files are fast.
 
+use crate::editor_buffer::EditorBuffer;
 use gpui::{
     Context, EventEmitter, InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
     SharedString, Styled, UniformListScrollHandle, Window, div, px, svg, uniform_list,
@@ -32,7 +33,7 @@ impl EventEmitter<ActiveFileChanged> for EditorView {}
 #[derive(Clone)]
 pub struct EditorTab {
     pub path: PathBuf,
-    lines: Vec<SharedString>,
+    buffer: EditorBuffer,
 }
 
 pub struct EditorView {
@@ -70,15 +71,9 @@ impl EditorView {
             return;
         }
 
-        let mut lines = content
-            .lines()
-            .map(|l| SharedString::from(l.to_string()))
-            .collect::<Vec<_>>();
-        if lines.is_empty() {
-            lines.push(SharedString::from(""));
-        }
+        let buffer = EditorBuffer::from_text(content);
 
-        self.tabs.push(EditorTab { path, lines });
+        self.tabs.push(EditorTab { path, buffer });
         self.active_tab = self.tabs.len().saturating_sub(1);
         self.scroll_handle = UniformListScrollHandle::new();
     }
@@ -182,14 +177,20 @@ impl Render for EditorView {
         let active_index = self.active_tab;
         let tabs = self.tabs.clone();
         let active = tabs[active_index].clone();
-        let line_count = active.lines.len();
+        let line_count = active.buffer.lines().len();
         let gutter_color = theme.muted_foreground.opacity(0.30);
         let gutter_bg = theme.muted.opacity(0.04);
         let mono_font = theme.mono_font_family.clone();
         let ui_font = theme.font_family.clone();
         let fg = theme.foreground;
         let bg = theme.background;
-        let lines = active.lines.clone();
+        let lines = active
+            .buffer
+            .lines()
+            .iter()
+            .cloned()
+            .map(SharedString::from)
+            .collect::<Vec<_>>();
 
         let mut tab_bar = div()
             .h(px(28.0))
