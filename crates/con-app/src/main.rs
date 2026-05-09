@@ -52,6 +52,9 @@ mod ghostty_view;
 #[path = "stub_view.rs"]
 mod ghostty_view;
 
+mod activity_bar;
+mod editor_view;
+mod file_tree_view;
 mod input_bar;
 mod keycaps;
 mod model_registry;
@@ -133,6 +136,8 @@ actions!(
         FocusInput,
         CycleInputMode,
         TogglePaneScopePicker,
+        ToggleLeftPanel,
+        ToggleEditorArea,
         CheckForUpdates,
         HideApp,
         HideOtherApps,

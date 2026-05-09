@@ -345,7 +345,14 @@ impl Render for ConWorkspace {
         let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
         #[cfg(not(target_os = "macos"))]
         let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
-        let terminal_content_left = vertical_tabs_width;
+        let left_panel_width = if self.left_panel_open
+            && (self.vertical_tabs_active() || self.activity_slot == ActivitySlot::Files)
+        {
+            vertical_tabs_width.max(crate::sidebar::PANEL_MIN_WIDTH)
+        } else {
+            0.0
+        };
+        let terminal_content_left = ACTIVITY_BAR_WIDTH + left_panel_width;
         let terminal_content_width =
             (window_width - terminal_content_left - agent_panel_outer_width).max(0.0);
 
@@ -608,26 +615,46 @@ impl Render for ConWorkspace {
 
         let mut main_area = div().relative().flex().flex_1().min_h_0();
 
-        if self.vertical_tabs_active() {
-            #[cfg(target_os = "macos")]
-            {
-                main_area = main_area.child(
-                    div()
-                        .h_full()
-                        .flex_shrink_0()
-                        .overflow_hidden()
-                        .bg(elevated_panel_surface_color)
-                        .child(self.sidebar.clone()),
-                );
-            }
+        // ── Activity bar (always visible, 40 px) ──────────────────────────
+        main_area = main_area.child(
+            div()
+                .h_full()
+                .flex_shrink_0()
+                .overflow_hidden()
+                .bg(elevated_panel_surface_color)
+                .child(self.activity_bar.clone()),
+        );
 
-            #[cfg(not(target_os = "macos"))]
-            {
-                main_area = main_area.child(self.sidebar.clone());
-            }
+        // ── Left panel: sidebar (tabs) or file tree (files) ───────────────
+        let show_left_panel = self.left_panel_open
+            && (self.vertical_tabs_active()
+                || self.activity_slot == ActivitySlot::Files);
+
+        if show_left_panel {
+            let panel_content: gpui::AnyElement = match self.activity_slot {
+                ActivitySlot::Files => self.file_tree_view.clone().into_any_element(),
+                ActivitySlot::Tabs => {
+                    #[cfg(target_os = "macos")]
+                    {
+                        self.sidebar.clone().into_any_element()
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        self.sidebar.clone().into_any_element()
+                    }
+                }
+            };
+            main_area = main_area.child(
+                div()
+                    .h_full()
+                    .flex_shrink_0()
+                    .overflow_hidden()
+                    .bg(elevated_panel_surface_color)
+                    .child(panel_content),
+            );
         }
         #[cfg(target_os = "macos")]
-        if !self.vertical_tabs_active() && sidebar_snap_guard_active && vertical_tabs_width > 0.0 {
+        if !show_left_panel && sidebar_snap_guard_active && vertical_tabs_width > 0.0 {
             main_area = main_area.child(
                 div()
                     .w(px(vertical_tabs_width))
@@ -637,15 +664,55 @@ impl Render for ConWorkspace {
             );
         }
 
-        main_area = main_area.child(terminal_area);
+        // ── Main column: editor area (optional) + terminal area ───────────
+        let editor_area_height = self.editor_area_height;
+        let show_editor = editor_area_height > 0.5;
 
-        if self.vertical_tabs_active() && vertical_tabs_width > 0.0 {
+        let mut main_column = div().flex().flex_col().flex_1().min_w_0().min_h_0();
+
+        if show_editor {
+            let editor_drag_start = self.editor_area_drag;
+            main_column = main_column
+                .child(
+                    div()
+                        .h(px(editor_area_height))
+                        .flex_shrink_0()
+                        .overflow_hidden()
+                        .child(self.editor_view.clone()),
+                )
+                .child(
+                    // Vertical resize handle between editor and terminal
+                    div()
+                        .id("editor-resize-handle")
+                        .h(px(6.0))
+                        .w_full()
+                        .flex_shrink_0()
+                        .cursor_row_resize()
+                        .bg(theme.transparent)
+                        .hover(|s| s.bg(theme.muted.opacity(0.08)))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                                this.release_active_terminal_mouse_selection(cx);
+                                this.editor_area_drag =
+                                    Some((f32::from(event.position.y), this.editor_area_height));
+                                let _ = editor_drag_start;
+                            }),
+                        ),
+                );
+        }
+
+        main_column = main_column.child(terminal_area);
+
+        main_area = main_area.child(main_column);
+
+        if show_left_panel && vertical_tabs_width > 0.0 && self.activity_slot == ActivitySlot::Tabs {
             main_area = main_area.child(
                 div()
                     .absolute()
                     .top_0()
                     .bottom_0()
-                    .left(px((vertical_tabs_width - 1.0).max(0.0)))
+                    .left(px((ACTIVITY_BAR_WIDTH + vertical_tabs_width - 1.0).max(0.0)))
                     .w(px(1.0))
                     .bg(chrome_static_seam_color),
             );
@@ -839,6 +906,20 @@ impl Render for ConWorkspace {
                         return;
                     }
 
+                    // Editor area vertical resize drag
+                    if let Some((start_y, start_height)) = this.editor_area_drag {
+                        let delta = f32::from(event.position.y) - start_y;
+                        let win_h = win.bounds().size.height.as_f32();
+                        let top_bar_h = this.current_top_bar_height();
+                        let max_h = (win_h - top_bar_h - 120.0).max(120.0);
+                        let new_height = (start_height + delta).clamp(60.0, max_h);
+                        if (this.editor_area_height - new_height).abs() > 0.5 {
+                            this.editor_area_height = new_height;
+                            cx.notify();
+                        }
+                        return;
+                    }
+
                     if let Some(preview) = this
                         .tab_drag_preview
                         .lock()
@@ -963,6 +1044,12 @@ impl Render for ConWorkspace {
                         cx.notify();
                         return;
                     }
+                    if this.editor_area_drag.is_some() {
+                        this.editor_area_drag = None;
+                        this.save_session(cx);
+                        cx.notify();
+                        return;
+                    }
                     if this.agent_panel_drag.is_some() {
                         this.agent_panel_drag = None;
                         this.save_session(cx);
@@ -1043,6 +1130,8 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::focus_input))
             .on_action(cx.listener(Self::cycle_input_mode))
             .on_action(cx.listener(Self::toggle_pane_scope_picker))
+            .on_action(cx.listener(Self::toggle_left_panel))
+            .on_action(cx.listener(Self::toggle_editor_area))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if !this.pane_scope_picker_open {
                     return;

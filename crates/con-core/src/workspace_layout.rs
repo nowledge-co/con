@@ -369,6 +369,9 @@ impl WorkspaceLayout {
             conversation_id: None,
             vertical_tabs_pinned: false,
             vertical_tabs_width: None,
+            activity_slot: None,
+            left_panel_open: None,
+            editor_area_height: None,
         };
 
         if session.global_shell_history.is_empty() && !session.input_history.is_empty() {
@@ -1165,6 +1168,9 @@ mod tests {
             conversation_id: Some("legacy-private".to_string()),
             vertical_tabs_pinned: true,
             vertical_tabs_width: Some(250.0),
+            activity_slot: None,
+            left_panel_open: None,
+            editor_area_height: None,
         };
 
         let layout = WorkspaceLayout::from_session(&session, "/tmp/project");
@@ -1333,6 +1339,9 @@ panes = []
             conversation_id: None,
             vertical_tabs_pinned: false,
             vertical_tabs_width: None,
+            activity_slot: None,
+            left_panel_open: None,
+            editor_area_height: None,
         };
 
         let layout = WorkspaceLayout::from_session(&session, "/tmp/project");

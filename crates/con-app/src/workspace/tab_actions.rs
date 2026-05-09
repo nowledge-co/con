@@ -420,6 +420,13 @@ impl ConWorkspace {
         self.sync_sidebar(cx);
         self.save_session(cx);
         self.request_tab_summaries(cx);
+        // Keep file tree root in sync with the active tab's cwd.
+        if let Some(cwd) = self.active_terminal().current_dir(cx) {
+            let root = std::path::PathBuf::from(&cwd);
+            self.file_tree_view.update(cx, |tree, cx| {
+                tree.set_root(root, cx);
+            });
+        }
         cx.notify();
     }
 

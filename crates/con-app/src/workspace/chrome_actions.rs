@@ -88,6 +88,36 @@ impl ConWorkspace {
         self.apply_tabs_orientation(next, true, cx);
     }
 
+    pub(super) fn toggle_left_panel(
+        &mut self,
+        _: &ToggleLeftPanel,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.left_panel_open = !self.left_panel_open;
+        self.activity_bar.update(cx, |bar, _cx| {
+            bar.left_panel_open = self.left_panel_open;
+        });
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    pub(super) fn toggle_editor_area(
+        &mut self,
+        _: &ToggleEditorArea,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.editor_area_height > 0.0 {
+            self.editor_area_height = 0.0;
+        } else {
+            // Default to 40% of a typical window height when first opened.
+            self.editor_area_height = 300.0;
+        }
+        self.save_session(cx);
+        cx.notify();
+    }
+
     pub(super) fn collapse_sidebar(
         &mut self,
         _: &CollapseSidebar,

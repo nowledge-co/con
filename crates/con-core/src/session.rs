@@ -32,6 +32,17 @@ pub struct Session {
     /// consulted when `vertical_tabs_pinned` is true.
     #[serde(default)]
     pub vertical_tabs_width: Option<f32>,
+
+    // ── Code editor (Phase 1) ──────────────────────────────────────────────
+    /// Active activity bar slot: "tabs" | "files".
+    #[serde(default)]
+    pub activity_slot: Option<String>,
+    /// Whether the left panel is open.
+    #[serde(default)]
+    pub left_panel_open: Option<bool>,
+    /// Height of the editor area in pixels. None / 0.0 = collapsed.
+    #[serde(default)]
+    pub editor_area_height: Option<f32>,
 }
 
 /// App-wide command history, stored separately from window layout so it survives
@@ -208,6 +219,9 @@ impl Default for Session {
             conversation_id: None,
             vertical_tabs_pinned: false,
             vertical_tabs_width: None,
+            activity_slot: None,
+            left_panel_open: None,
+            editor_area_height: None,
         }
     }
 }

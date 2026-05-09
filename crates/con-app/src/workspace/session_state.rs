@@ -103,6 +103,9 @@ impl ConWorkspace {
             conversation_id: None, // deprecated — per-tab now
             vertical_tabs_pinned: self.sidebar.read(cx).is_pinned(),
             vertical_tabs_width: Some(self.sidebar.read(cx).panel_width()),
+            activity_slot: Some(self.activity_slot.as_str().to_string()),
+            left_panel_open: Some(self.left_panel_open),
+            editor_area_height: Some(self.editor_area_height),
         }
     }
 

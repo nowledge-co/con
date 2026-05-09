@@ -387,6 +387,63 @@ impl ConWorkspace {
             cx.notify();
         })
         .detach();
+
+        // Activity bar: sync slot + panel state back to workspace on click.
+        let activity_bar_entity = cx.new(|_cx| ActivityBar::new());
+        // Sync initial state from session.
+        {
+            let initial_slot = ActivitySlot::from_str(session.activity_slot.as_deref().unwrap_or("tabs"));
+            let initial_open = session.left_panel_open.unwrap_or(true);
+            activity_bar_entity.update(cx, |bar, _cx| {
+                bar.active_slot = initial_slot;
+                bar.left_panel_open = initial_open;
+            });
+        }
+        cx.subscribe_in(
+            &activity_bar_entity,
+            window,
+            |this, _bar, event: &ActivitySlotChanged, _window, cx| {
+                this.activity_slot = event.slot;
+                this.left_panel_open = true;
+                this.save_session(cx);
+                cx.notify();
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            &activity_bar_entity,
+            window,
+            |this, _bar, _event: &ActivityTogglePanel, _window, cx| {
+                this.left_panel_open = !this.left_panel_open;
+                this.save_session(cx);
+                cx.notify();
+            },
+        )
+        .detach();
+
+        // File tree: open file in editor when user clicks a file row.
+        let file_tree_entity = cx.new(|_cx| FileTreeView::new());
+        cx.subscribe_in(
+            &file_tree_entity,
+            window,
+            |this, _tree, event: &OpenFile, _window, cx| {
+                let path = event.path.clone();
+                this.editor_view.update(cx, |editor, cx| {
+                    editor.open_file(path.clone(), cx);
+                });
+                this.file_tree_view.update(cx, |tree, cx| {
+                    tree.set_active_path(Some(path), cx);
+                });
+                // Open editor area if collapsed.
+                if this.editor_area_height < 1.0 {
+                    this.editor_area_height = 300.0;
+                }
+                this.save_session(cx);
+                cx.notify();
+            },
+        )
+        .detach();
+
         let workspace_handle = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             // Two shutdown paths, two behaviours:
@@ -750,6 +807,17 @@ impl ConWorkspace {
             tab_strip_tab_bounds: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             pane_title_drag_tab_bounds: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             hide_pane_title_bar: config.appearance.hide_pane_title_bar,
+
+            // ── Code editor (Phase 1) ──────────────────────────────────────
+            activity_bar: activity_bar_entity,
+            activity_slot: ActivitySlot::from_str(
+                session.activity_slot.as_deref().unwrap_or("tabs"),
+            ),
+            left_panel_open: session.left_panel_open.unwrap_or(true),
+            file_tree_view: file_tree_entity,
+            editor_view: cx.new(|_cx| EditorView::new()),
+            editor_area_height: session.editor_area_height.unwrap_or(0.0),
+            editor_area_drag: None,
         }
     }
 

@@ -57,6 +57,9 @@ use crate::pane_tree::{
 use crate::settings_panel::{
     self, AppearancePreview, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
 };
+use crate::activity_bar::{ACTIVITY_BAR_WIDTH, ActivityBar, ActivitySlot, ActivitySlotChanged, ActivityTogglePanel};
+use crate::editor_view::EditorView;
+use crate::file_tree_view::{FileTreeView, OpenFile};
 use crate::sidebar::{
     DraggedTab, DraggedTabOrigin, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry,
     SessionSidebar, SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate, SidebarPaneToTab,
@@ -75,8 +78,8 @@ use crate::{
     NewSurfaceSplitDown, NewSurfaceSplitRight, NewTab, NextSurface, NextTab,
     OpenWorkspaceLayoutWindow, PreviousSurface, PreviousTab, Quit, RenameSurface, SelectTab1,
     SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8, SelectTab9,
-    SplitDown, SplitLeft, SplitRight, SplitUp, ToggleAgentPanel, TogglePaneScopePicker,
-    TogglePaneZoom, ToggleVerticalTabs,
+    SplitDown, SplitLeft, SplitRight, SplitUp, ToggleAgentPanel, ToggleEditorArea,
+    ToggleLeftPanel, TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs,
 };
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
@@ -295,4 +298,21 @@ pub struct ConWorkspace {
     pane_title_drag_tab_bounds: std::sync::Arc<std::sync::Mutex<Vec<Bounds<Pixels>>>>,
     /// When true, the per-pane title bar is hidden even in split layouts.
     hide_pane_title_bar: bool,
+
+    // ── Code editor (Phase 1) ──────────────────────────────────────────────
+    /// Activity bar — always-visible 40 px icon rail on the far left.
+    activity_bar: Entity<ActivityBar>,
+    /// Which slot is active in the activity bar.
+    activity_slot: ActivitySlot,
+    /// Whether the left panel (sidebar / file tree) is open.
+    left_panel_open: bool,
+    /// File tree view — global singleton, root follows active tab cwd.
+    file_tree_view: Entity<FileTreeView>,
+    /// Editor view — read-only file viewer (Phase 1).
+    editor_view: Entity<EditorView>,
+    /// Height of the editor area in pixels. 0.0 = collapsed.
+    editor_area_height: f32,
+    /// Drag state for the editor/terminal vertical resize handle:
+    /// (start_y, start_height).
+    editor_area_drag: Option<(f32, f32)>,
 }
