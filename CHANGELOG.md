@@ -4,7 +4,55 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.68` - unreleased
+## `v0.1.0-beta.68` - 2026-05-09
+
+### Added
+
+**Developer Experience**
+
+- Added `con-test`, a sqllogictest-style E2E runner for driving real Con
+  sessions through `con-cli`, with inline match modes, rewrite support, macOS
+  E2E CI, and initial control-plane coverage for system, tab, pane, workspace,
+  and agent-panel flows. _(PR
+  [#170](https://github.com/nowledge-co/con-terminal/pull/170) by
+  [@sundy-li](https://github.com/sundy-li), PR
+  [#173](https://github.com/nowledge-co/con-terminal/pull/173) by
+  [@sundy-li](https://github.com/sundy-li))_
+
+**Agent and Settings**
+
+- Added control-plane commands for opening the agent panel for a request and
+  reading panel state, plus `[network]` proxy settings that can override or
+  clear shell-inherited `HTTP_PROXY` / `HTTPS_PROXY` values. _(PR
+  [#173](https://github.com/nowledge-co/con-terminal/pull/173) by
+  [@sundy-li](https://github.com/sundy-li))_
+
+### Changed
+
+**Panes**
+
+- Refined split-pane chrome so the active pane gets a compact accent-colored
+  dot and pane title bars use the theme title-bar surface instead of
+  transparency, keeping them readable over translucent windows. _(PR
+  [#173](https://github.com/nowledge-co/con-terminal/pull/173) by
+  [@sundy-li](https://github.com/sundy-li), PR
+  [#176](https://github.com/nowledge-co/con-terminal/pull/176) by
+  [@sundy-li](https://github.com/sundy-li))_
+
+**Docs**
+
+- Added the code editor integration design for the activity bar, file tree,
+  and editor area layout that will host future editor work.
+
+### Fixed
+
+**Startup Environment**
+
+- macOS and Linux GUI launches now inherit the user's login-shell environment
+  before applying Con config, so PATH, language toolchains, and proxy variables
+  match terminal-launched sessions more closely. _(PR
+  [#173](https://github.com/nowledge-co/con-terminal/pull/173) by
+  [@sundy-li](https://github.com/sundy-li))_
 
 ## `v0.1.0-beta.67` - 2026-05-08
 
