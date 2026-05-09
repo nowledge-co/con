@@ -378,10 +378,12 @@ impl ConWorkspace {
                         }
                         self.sync_active_tab_native_view_visibility(cx);
                         if closing_was_focused || close_outcome.closed_pane {
-                            let replacement =
-                                self.tabs[tab_idx].pane_tree.focused_terminal().clone();
-                            replacement.ensure_surface(window, cx);
-                            replacement.focus(window, cx);
+                            if let Some(replacement) =
+                                self.tabs[tab_idx].pane_tree.try_focused_terminal().cloned()
+                            {
+                                replacement.ensure_surface(window, cx);
+                                replacement.focus(window, cx);
+                            }
                         }
                         self.sync_active_terminal_focus_states(cx);
                     }
@@ -534,8 +536,8 @@ impl ConWorkspace {
     ) -> Result<ResolvedPaneTarget, String> {
         let pane_tree = &self.tabs[tab_idx].pane_tree;
         let all_terminals = pane_tree.all_terminals();
-        let focused_pane = pane_tree.focused_terminal().clone();
         let focused_pane_id = pane_tree.focused_pane_id();
+        let focused_pane = pane_tree.try_focused_terminal().cloned();
         let focused_pane_index = all_terminals
             .iter()
             .enumerate()
@@ -629,11 +631,16 @@ impl ConWorkspace {
             }
             (Some(target), None) => Ok(target),
             (None, Some(target)) => Ok(target),
-            (None, None) => Ok(ResolvedPaneTarget {
-                pane: focused_pane,
-                pane_index: focused_pane_index,
-                pane_id: focused_pane_id,
-            }),
+            (None, None) => {
+                let pane = focused_pane.ok_or_else(|| {
+                    "No terminal pane is focused in this tab. Use list_panes to select a target.".to_string()
+                })?;
+                Ok(ResolvedPaneTarget {
+                    pane,
+                    pane_index: focused_pane_index,
+                    pane_id: focused_pane_id,
+                })
+            }
         }
     }
 
@@ -945,7 +952,6 @@ impl ConWorkspace {
     ) -> con_agent::TerminalContext {
         self.reconcile_runtime_trackers_for_tab(tab_idx);
         let pane_tree = &self.tabs[tab_idx].pane_tree;
-        let focused = pane_tree.focused_terminal();
 
         // Determine focused pane's 1-based index and hostname
         let all_terminals = pane_tree.all_terminals();
@@ -956,6 +962,18 @@ impl ConWorkspace {
             .find(|(_, t)| pane_tree.pane_id_for_terminal(t) == Some(focused_pid))
             .map(|(i, _)| i + 1)
             .unwrap_or(1);
+
+        // If there's no terminal pane (editor-only tab), return an empty context
+        let Some(focused) = pane_tree.try_focused_terminal() else {
+            return self.harness.build_context_from_snapshot(
+                focused_pane_index,
+                focused_pid,
+                &Default::default(),
+                &Default::default(),
+                vec![],
+            );
+        };
+
         let (focused_observation, focused_runtime) =
             self.observe_terminal_runtime_for_tab(tab_idx, focused, 50, cx);
 

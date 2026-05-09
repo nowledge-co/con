@@ -303,14 +303,20 @@ impl ConWorkspace {
                 let tab = &self.tabs[index];
                 let is_active = index == self.active_tab;
                 let needs_attention = tab.needs_attention && !is_active;
-                let terminal = tab.pane_tree.focused_terminal();
                 let session_id = tab.summary_id;
                 let tab_id = session_id;
                 let tab_color = tab.color;
                 let is_dragged_source = is_dragged_tab_source(dragged_source_id, session_id);
-                let hostname_for_tab = self.effective_remote_host_for_tab(index, terminal, cx);
-                let title_for_tab = terminal.title(cx);
-                let dir_for_tab = terminal.current_dir(cx);
+                let (hostname_for_tab, title_for_tab, dir_for_tab) =
+                    if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
+                        (
+                            self.effective_remote_host_for_tab(index, terminal, cx),
+                            terminal.title(cx),
+                            terminal.current_dir(cx),
+                        )
+                    } else {
+                        (None, None, None)
+                    };
                 let presentation = smart_tab_presentation(
                     tab.user_label.as_deref(),
                     tab.ai_label.as_deref(),

@@ -300,6 +300,13 @@ impl PaneTree {
             .unwrap_or_else(|| Self::first_terminal(&self.root))
     }
 
+    /// Like `focused_terminal` but returns `None` if no terminal exists
+    /// (e.g. the tab contains only editor panes).
+    pub fn try_focused_terminal(&self) -> Option<&TerminalPane> {
+        Self::find_terminal(&self.root, self.focused_pane_id)
+            .or_else(|| Self::try_first_terminal(&self.root))
+    }
+
     /// Get all terminals in the tree
     pub fn all_terminals(&self) -> Vec<&TerminalPane> {
         let mut result = Vec::new();

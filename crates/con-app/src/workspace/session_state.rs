@@ -42,9 +42,15 @@ impl ConWorkspace {
             .tabs
             .iter()
             .map(|tab| {
-                let terminal = tab.pane_tree.focused_terminal();
-                let cwd = terminal.current_dir(cx);
-                let title = terminal.title(cx).unwrap_or_else(|| tab.title.clone());
+                let cwd = tab
+                    .pane_tree
+                    .try_focused_terminal()
+                    .and_then(|t| t.current_dir(cx));
+                let title = tab
+                    .pane_tree
+                    .try_focused_terminal()
+                    .and_then(|t| t.title(cx))
+                    .unwrap_or_else(|| tab.title.clone());
                 let pane_layout = tab.pane_tree.to_state(cx, capture_screen_text);
                 let pane_states = tab
                     .pane_tree

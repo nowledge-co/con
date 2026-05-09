@@ -11,7 +11,7 @@ impl Render for ConWorkspace {
             return div().size_full().into_any_element();
         }
 
-        let active_terminal = self.active_terminal().clone();
+        let active_terminal = self.try_active_terminal().cloned();
 
         // If a modal was dismissed internally (escape/backdrop), restore terminal focus
         let is_modal_open = self.is_modal_open(cx);
@@ -79,7 +79,7 @@ impl Render for ConWorkspace {
             })
             .collect();
 
-        let cwd = active_terminal.current_dir(cx);
+        let cwd = active_terminal.as_ref().and_then(|t| t.current_dir(cx));
         // Scan skills when cwd changes (project-local + platform global skills path).
         if let Some(ref raw_cwd) = cwd {
             self.harness.scan_skills(raw_cwd);

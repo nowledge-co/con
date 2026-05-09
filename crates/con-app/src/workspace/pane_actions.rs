@@ -79,8 +79,8 @@ impl ConWorkspace {
         let pane_id = self.tabs[tab_idx].pane_tree.focused_pane_id();
         let cwd = self.tabs[tab_idx]
             .pane_tree
-            .focused_terminal()
-            .current_dir(cx);
+            .try_focused_terminal()
+            .and_then(|t| t.current_dir(cx));
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
         let next_surface_index = self.tabs[tab_idx]
             .pane_tree
@@ -137,8 +137,8 @@ impl ConWorkspace {
         let source_pane_id = self.tabs[tab_idx].pane_tree.focused_pane_id();
         let cwd = self.tabs[tab_idx]
             .pane_tree
-            .focused_terminal()
-            .current_dir(cx);
+            .try_focused_terminal()
+            .and_then(|t| t.current_dir(cx));
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
         let was_zoomed = self.tabs[tab_idx].pane_tree.zoomed_pane_id().is_some();
         let options = SurfaceCreateOptions {
@@ -343,9 +343,10 @@ impl ConWorkspace {
         self.mark_tab_terminal_native_layout_pending(tab_idx, cx);
         self.notify_tab_terminal_views(tab_idx, cx);
         self.sync_active_tab_native_view_visibility(cx);
-        let replacement = self.tabs[tab_idx].pane_tree.focused_terminal().clone();
-        replacement.ensure_surface(window, cx);
-        replacement.focus(window, cx);
+        if let Some(replacement) = self.tabs[tab_idx].pane_tree.try_focused_terminal().cloned() {
+            replacement.ensure_surface(window, cx);
+            replacement.focus(window, cx);
+        }
         self.sync_active_terminal_focus_states(cx);
         self.sync_sidebar(cx);
         self.save_session(cx);
@@ -386,7 +387,7 @@ impl ConWorkspace {
         if !self.has_active_tab() {
             return;
         }
-        let cwd = self.active_terminal().current_dir(cx);
+        let cwd = self.try_active_terminal().and_then(|t| t.current_dir(cx));
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
         let was_zoomed = self.tabs[self.active_tab]
             .pane_tree
@@ -477,7 +478,9 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         if self.has_active_tab() {
-            self.active_terminal().clear_scrollback(cx);
+            if let Some(t) = self.try_active_terminal() {
+                t.clear_scrollback(cx);
+            }
         }
     }
 
@@ -621,7 +624,9 @@ impl ConWorkspace {
         #[cfg(target_os = "macos")]
         self.mark_active_tab_terminal_native_layout_pending(cx);
         self.notify_active_tab_terminal_views(cx);
-        self.active_terminal().focus(window, cx);
+        if let Some(t) = self.try_active_terminal() {
+            t.focus(window, cx);
+        }
         self.sync_active_terminal_focus_states(cx);
         self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
         cx.notify();
@@ -861,7 +866,12 @@ impl ConWorkspace {
             }
 
             if tab_idx == self.active_tab {
-                focus_after_close = Some(pane_tree.focused_terminal().clone());
+                // Only try to focus a terminal if one still exists.
+                // The tab may now contain only editor panes.
+                focus_after_close = self.tabs[tab_idx]
+                    .pane_tree
+                    .try_focused_terminal()
+                    .cloned();
             }
         }
         if tab_idx == self.active_tab {

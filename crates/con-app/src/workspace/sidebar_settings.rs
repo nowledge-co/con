@@ -306,10 +306,16 @@ impl ConWorkspace {
         // Seed from the rendered tab label so focus→blur without edits
         // preserves AI/SSH/CWD-derived naming instead of materializing the
         // raw terminal title as a new explicit label.
-        let terminal = tab.pane_tree.focused_terminal();
-        let hostname = self.effective_remote_host_for_tab(index, terminal, cx);
-        let title = terminal.title(cx);
-        let current_dir = terminal.current_dir(cx);
+        let (hostname, title, current_dir) =
+            if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
+                (
+                    self.effective_remote_host_for_tab(index, terminal, cx),
+                    terminal.title(cx),
+                    terminal.current_dir(cx),
+                )
+            } else {
+                (None, None, None)
+            };
         let initial = tab_rename_initial_label(
             tab.user_label.as_deref(),
             tab.ai_label.as_deref(),
@@ -506,10 +512,16 @@ impl ConWorkspace {
             .iter()
             .enumerate()
             .map(|(i, tab)| {
-                let terminal = tab.pane_tree.focused_terminal();
-                let hostname = self.effective_remote_host_for_tab(i, terminal, cx);
-                let title = terminal.title(cx);
-                let current_dir = terminal.current_dir(cx);
+                let (hostname, title, current_dir) =
+                    if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
+                        (
+                            self.effective_remote_host_for_tab(i, terminal, cx),
+                            terminal.title(cx),
+                            terminal.current_dir(cx),
+                        )
+                    } else {
+                        (None, None, None)
+                    };
                 let presentation = smart_tab_presentation(
                     tab.user_label.as_deref(),
                     tab.ai_label.as_deref(),
@@ -638,7 +650,9 @@ impl ConWorkspace {
             }
             "clear-terminal" => {
                 if self.has_active_tab() {
-                    self.active_terminal().clear_scrollback(cx);
+                    if let Some(t) = self.try_active_terminal() {
+                        t.clear_scrollback(cx);
+                    }
                 }
             }
             "clear-restored-terminal-history" => {
@@ -646,7 +660,9 @@ impl ConWorkspace {
             }
             "focus-terminal" => {
                 if self.has_active_tab() {
-                    self.active_terminal().focus(window, cx);
+                    if let Some(t) = self.try_active_terminal() {
+                        t.focus(window, cx);
+                    }
                 }
             }
             "toggle-input-bar" => {
@@ -753,7 +769,7 @@ impl ConWorkspace {
         let skills_config = full_config.skills.clone();
         self.harness.update_skills_config(skills_config);
         if self.has_active_tab() {
-            if let Some(cwd) = self.active_terminal().current_dir(cx) {
+            if let Some(cwd) = self.try_active_terminal().and_then(|t| t.current_dir(cx)) {
                 self.harness.scan_skills(&cwd);
             }
         }

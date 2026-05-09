@@ -43,16 +43,20 @@ impl ConWorkspace {
                 terminal.set_native_view_visible(false, cx);
             }
         });
-        let focused = self.tabs[index].pane_tree.focused_terminal();
-        focused.focus(window, cx);
-        self.sync_active_terminal_focus_states(cx);
-        Self::schedule_terminal_bootstrap_reassert(
-            focused,
-            true,
-            self.window_handle,
-            self.workspace_handle.clone(),
-            cx,
-        );
+        let focused = self.tabs[index].pane_tree.try_focused_terminal();
+        if let Some(focused) = focused {
+            focused.focus(window, cx);
+            self.sync_active_terminal_focus_states(cx);
+            Self::schedule_terminal_bootstrap_reassert(
+                focused,
+                true,
+                self.window_handle,
+                self.workspace_handle.clone(),
+                cx,
+            );
+        } else {
+            self.sync_active_terminal_focus_states(cx);
+        }
 
         self.sync_sidebar(cx);
         // Activating a tab is a strong signal the user cares about
@@ -194,7 +198,12 @@ impl ConWorkspace {
 
     /// Focus the active terminal (used after modal close, etc.)
     pub(super) fn focus_terminal(&self, window: &mut Window, cx: &mut App) {
-        self.active_terminal().focus(window, cx);
+        if let Some(terminal) = self.tabs[self.active_tab]
+            .pane_tree
+            .try_focused_terminal()
+        {
+            terminal.focus(window, cx);
+        }
         self.sync_active_terminal_focus_states(cx);
     }
 
@@ -236,20 +245,31 @@ impl ConWorkspace {
         self.mark_active_tab_terminal_native_layout_pending(cx);
         #[cfg(target_os = "macos")]
         self.notify_active_tab_terminal_views(cx);
-        let terminal = self.tabs[self.active_tab]
+        if let Some(terminal) = self.tabs[self.active_tab]
             .pane_tree
-            .focused_terminal()
-            .clone();
-        terminal.ensure_surface(window, cx);
-        #[cfg(target_os = "macos")]
-        self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
-        #[cfg(not(target_os = "macos"))]
-        self.sync_active_tab_native_view_visibility(cx);
+            .try_focused_terminal()
+            .cloned()
+        {
+            terminal.ensure_surface(window, cx);
+            #[cfg(target_os = "macos")]
+            self.sync_active_tab_native_view_visibility_now_or_after_layout(
+                was_zoomed, window, cx,
+            );
+            #[cfg(not(target_os = "macos"))]
+            self.sync_active_tab_native_view_visibility(cx);
+            terminal.focus(window, cx);
+        } else {
+            #[cfg(target_os = "macos")]
+            self.sync_active_tab_native_view_visibility_now_or_after_layout(
+                was_zoomed, window, cx,
+            );
+            #[cfg(not(target_os = "macos"))]
+            self.sync_active_tab_native_view_visibility(cx);
+        }
         if changed {
             self.sync_sidebar(cx);
             self.save_session(cx);
         }
-        terminal.focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
         cx.notify();
     }
@@ -360,9 +380,12 @@ impl ConWorkspace {
             if tab_idx == self.active_tab {
                 self.sync_active_tab_native_view_visibility(cx);
                 if should_focus_replacement {
-                    let replacement = self.tabs[tab_idx].pane_tree.focused_terminal().clone();
-                    replacement.ensure_surface(window, cx);
-                    replacement.focus(window, cx);
+                    if let Some(replacement) =
+                        self.tabs[tab_idx].pane_tree.try_focused_terminal().cloned()
+                    {
+                        replacement.ensure_surface(window, cx);
+                        replacement.focus(window, cx);
+                    }
                 }
                 self.sync_active_terminal_focus_states(cx);
             }
@@ -373,6 +396,8 @@ impl ConWorkspace {
 
         if self.tabs[tab_idx].pane_tree.pane_count() > 1 {
             let _ = self.close_pane_in_tab(tab_idx, surface.pane_id, window, cx);
+            // After closing the terminal pane, the tab may still have editor
+            // panes alive. Only close the tab/window if no panes remain.
         } else if self.tabs.len() > 1 {
             // Last pane in this tab — close the tab.
             self.close_tab_by_index(tab_idx, window, cx);
@@ -421,7 +446,11 @@ impl ConWorkspace {
         self.save_session(cx);
         self.request_tab_summaries(cx);
         // Keep file tree root in sync with the active tab's cwd.
-        if let Some(cwd) = self.active_terminal().current_dir(cx) {
+        if let Some(cwd) = self.tabs[self.active_tab]
+            .pane_tree
+            .try_focused_terminal()
+            .and_then(|t| t.current_dir(cx))
+        {
             let root = std::path::PathBuf::from(&cwd);
             self.file_tree_view.update(cx, |tree, cx| {
                 tree.set_root(root, cx);

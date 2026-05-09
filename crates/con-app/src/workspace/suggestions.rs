@@ -603,7 +603,9 @@ impl ConWorkspace {
         let tx = self.tab_summary_tx.clone();
         let generation = self.tab_summary_generation;
         for (i, tab) in self.tabs.iter().enumerate() {
-            let terminal = tab.pane_tree.focused_terminal();
+            let Some(terminal) = tab.pane_tree.try_focused_terminal().cloned() else {
+                continue;
+            };
             // The terminal's recent scrollback is the only signal we
             // get for commands the user typed *directly* into the
             // pane (Con doesn't intercept those into shell_history).
@@ -614,7 +616,7 @@ impl ConWorkspace {
                 tab_id: tab.summary_id,
                 cwd: terminal.current_dir(cx),
                 title: terminal.title(cx),
-                ssh_host: self.effective_remote_host_for_tab(i, terminal, cx),
+                ssh_host: self.effective_remote_host_for_tab(i, &terminal, cx),
                 recent_commands: {
                     let mut histories: Vec<_> = tab.shell_history.iter().collect();
                     histories.sort_by_key(|(pane_id, _)| *pane_id);

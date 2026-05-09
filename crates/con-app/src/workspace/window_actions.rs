@@ -281,7 +281,7 @@ impl ConWorkspace {
     pub(super) fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         let cwd = self
             .has_active_tab()
-            .then(|| self.active_terminal().current_dir(cx))
+            .then(|| self.try_active_terminal().and_then(|t| t.current_dir(cx)))
             .flatten();
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
         let tab_number = self.tabs.len() + 1;
@@ -346,21 +346,20 @@ impl ConWorkspace {
         // If the active tab has multiple panes, close the focused pane first.
         // Only close the entire tab when it's down to a single pane.
         if self.tabs[self.active_tab].pane_tree.pane_count() > 1 {
-            let (closing_terminals, surviving_terminals, new_focus) = {
-                let tab = &mut self.tabs[self.active_tab];
-                let pane_id = tab.pane_tree.focused_pane_id();
-                let closing_terminals = tab
-                    .pane_tree
-                    .surface_infos(Some(pane_id))
-                    .into_iter()
-                    .map(|surface| surface.terminal)
-                    .collect::<Vec<_>>();
-                tab.pane_tree.close_focused();
-                let surviving_terminals: Vec<TerminalPane> =
-                    tab.pane_tree.all_terminals().into_iter().cloned().collect();
-                let new_focus = tab.pane_tree.focused_terminal().clone();
-                (closing_terminals, surviving_terminals, new_focus)
-            };
+            let tab = &mut self.tabs[self.active_tab];
+            let pane_id = tab.pane_tree.focused_pane_id();
+            let closing_terminals = tab
+                .pane_tree
+                .surface_infos(Some(pane_id))
+                .into_iter()
+                .map(|surface| surface.terminal)
+                .collect::<Vec<_>>();
+            tab.pane_tree.close_focused();
+            let surviving_terminals: Vec<TerminalPane> =
+                tab.pane_tree.all_terminals().into_iter().cloned().collect();
+            // Safe: may be None if only editor panes remain after close.
+            let new_focus = tab.pane_tree.try_focused_terminal().cloned();
+
             #[cfg(target_os = "macos")]
             self.mark_active_tab_terminal_native_layout_pending(cx);
 
@@ -370,7 +369,9 @@ impl ConWorkspace {
             }
             self.sync_active_tab_native_view_visibility(cx);
 
-            new_focus.focus(window, cx);
+            if let Some(focused) = new_focus {
+                focused.focus(window, cx);
+            }
             self.sync_active_terminal_focus_states(cx);
             cx.on_next_frame(window, move |_workspace, _window, cx| {
                 for terminal in &closing_terminals {
@@ -454,16 +455,20 @@ impl ConWorkspace {
                 terminal.shutdown_surface(cx);
             }
         });
-        let focused = self.tabs[self.active_tab].pane_tree.focused_terminal();
-        focused.focus(window, cx);
-        self.sync_active_terminal_focus_states(cx);
-        Self::schedule_terminal_bootstrap_reassert(
-            focused,
-            true,
-            self.window_handle,
-            self.workspace_handle.clone(),
-            cx,
-        );
+        let focused = self.tabs[self.active_tab].pane_tree.try_focused_terminal();
+        if let Some(focused) = focused {
+            focused.focus(window, cx);
+            self.sync_active_terminal_focus_states(cx);
+            Self::schedule_terminal_bootstrap_reassert(
+                focused,
+                true,
+                self.window_handle,
+                self.workspace_handle.clone(),
+                cx,
+            );
+        } else {
+            self.sync_active_terminal_focus_states(cx);
+        }
         self.sync_sidebar(cx);
         self.save_session(cx);
         cx.notify();

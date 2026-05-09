@@ -648,15 +648,16 @@ impl ConWorkspace {
         .detach();
 
         // Focus the initial terminal so the user can start typing immediately
-        let initial_terminal = tabs[active_tab].pane_tree.focused_terminal().clone();
-        initial_terminal.focus(window, cx);
-        Self::schedule_terminal_bootstrap_reassert(
-            &initial_terminal,
-            true,
-            window.window_handle(),
-            cx.weak_entity(),
-            cx,
-        );
+        if let Some(initial_terminal) = tabs[active_tab].pane_tree.try_focused_terminal().cloned() {
+            initial_terminal.focus(window, cx);
+            Self::schedule_terminal_bootstrap_reassert(
+                &initial_terminal,
+                true,
+                window.window_handle(),
+                cx.weak_entity(),
+                cx,
+            );
+        }
 
         // Hide non-active tabs' ghostty NSViews so only the active tab is visible
         for (i, tab) in tabs.iter().enumerate() {
@@ -684,7 +685,9 @@ impl ConWorkspace {
         {
             let tx = tab_summary_tx.clone();
             for (i, tab) in tabs.iter_mut().enumerate() {
-                let terminal = tab.pane_tree.focused_terminal();
+                let Some(terminal) = tab.pane_tree.try_focused_terminal().cloned() else {
+                    continue;
+                };
                 let cwd = terminal.current_dir(cx).or_else(|| {
                     session
                         .tabs
@@ -694,7 +697,7 @@ impl ConWorkspace {
                 let title = Some(tab.title.clone()).filter(|t| !t.is_empty());
                 let pane_id = tab
                     .pane_tree
-                    .pane_id_for_terminal(terminal)
+                    .pane_id_for_terminal(&terminal)
                     .unwrap_or(usize::MAX);
                 let observation = terminal.observation_frame(12, cx);
                 let runtime = {
@@ -876,6 +879,10 @@ impl ConWorkspace {
 
     pub(super) fn active_terminal(&self) -> &TerminalPane {
         self.tabs[self.active_tab].pane_tree.focused_terminal()
+    }
+
+    pub(super) fn try_active_terminal(&self) -> Option<&TerminalPane> {
+        self.tabs[self.active_tab].pane_tree.try_focused_terminal()
     }
 
     pub(super) fn refocus_active_terminal(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1221,19 +1228,21 @@ impl ConWorkspace {
                         if !workspace.has_active_tab() {
                             return;
                         }
-                        let terminal = workspace.tabs[workspace.active_tab]
+                        if let Some(terminal) = workspace.tabs[workspace.active_tab]
                             .pane_tree
-                            .focused_terminal()
-                            .clone();
-                        terminal.ensure_surface(window, cx);
-                        #[cfg(target_os = "macos")]
-                        workspace.sync_active_tab_native_view_visibility_now_or_after_layout(
-                            was_zoomed, window, cx,
-                        );
-                        #[cfg(not(target_os = "macos"))]
-                        workspace.sync_active_tab_native_view_visibility(cx);
-                        terminal.focus(window, cx);
-                        workspace.sync_active_terminal_focus_states(cx);
+                            .try_focused_terminal()
+                            .cloned()
+                        {
+                            terminal.ensure_surface(window, cx);
+                            #[cfg(target_os = "macos")]
+                            workspace.sync_active_tab_native_view_visibility_now_or_after_layout(
+                                was_zoomed, window, cx,
+                            );
+                            #[cfg(not(target_os = "macos"))]
+                            workspace.sync_active_tab_native_view_visibility(cx);
+                            terminal.focus(window, cx);
+                            workspace.sync_active_terminal_focus_states(cx);
+                        }
                         cx.notify();
                     });
                 }

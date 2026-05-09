@@ -68,7 +68,9 @@ impl ConWorkspace {
                 self.focus_agent_inline_input_next_frame(window, cx);
             }
         } else {
-            self.active_terminal().focus(window, cx);
+            if let Some(t) = self.try_active_terminal() {
+                t.focus(window, cx);
+            }
         }
         self.save_session(cx);
         cx.notify();
@@ -239,8 +241,8 @@ impl ConWorkspace {
     }
 
     pub(super) fn layout_profile_export_root(&self, cx: &App) -> std::path::PathBuf {
-        self.active_terminal()
-            .current_dir(cx)
+        self.try_active_terminal()
+            .and_then(|t| t.current_dir(cx))
             .map(std::path::PathBuf::from)
             .and_then(|path| {
                 let path = std::fs::canonicalize(&path).unwrap_or(path);
@@ -432,10 +434,12 @@ impl ConWorkspace {
             terminal.ensure_surface(window, cx);
         }
         self.sync_active_tab_native_view_visibility(cx);
-        self.tabs[self.active_tab]
+        if let Some(terminal) = self.tabs[self.active_tab]
             .pane_tree
-            .focused_terminal()
-            .focus(window, cx);
+            .try_focused_terminal()
+        {
+            terminal.focus(window, cx);
+        }
         self.sync_active_terminal_focus_states(cx);
         self.sync_sidebar(cx);
         self.request_tab_summaries(cx);

@@ -855,37 +855,10 @@ impl SessionSidebar {
             };
 
             let tab_bounds = self.tab_bounds.clone();
-            let accent_color = session.color;
-            let pill_bg = if is_active {
-                accent_color
-                    .map(|color| {
-                        crate::tab_colors::tab_accent_surface_hsla(
-                            color,
-                            crate::tab_colors::TAB_ACCENT_ACTIVE_ALPHA,
-                            cx,
-                        )
-                    })
-                    .unwrap_or(active_bg)
-            } else {
-                accent_color
-                    .map(|color| {
-                        crate::tab_colors::tab_accent_surface_hsla(
-                            color,
-                            self.tab_accent_inactive_alpha,
-                            cx,
-                        )
-                    })
-                    .unwrap_or(gpui::transparent_black())
-            };
-            let inactive_hover_bg = accent_color
-                .map(|color| {
-                    crate::tab_colors::tab_accent_surface_hsla(
-                        color,
-                        self.tab_accent_inactive_hover_alpha,
-                        cx,
-                    )
-                })
-                .unwrap_or(hover_bg);
+            // No accent-color background fill — keep pills monochrome.
+            // Accent color is expressed only via the active dot below.
+            let pill_bg = if is_active { active_bg } else { gpui::transparent_black() };
+            let inactive_hover_bg = hover_bg;
             let mut pill = div()
                 .id(SharedString::from(format!("rail-tab-{i}")))
                 .relative()
@@ -905,8 +878,14 @@ impl SessionSidebar {
                 })
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |_this, _, _, cx| {
-                        cx.emit(SidebarSelect { index: i });
+                    cx.listener(move |this, _, _, cx| {
+                        if is_active && this.is_pinned() {
+                            // Clicking the active tab collapses the panel
+                            // (VS Code-style toggle behaviour).
+                            this.toggle_pinned(cx);
+                        } else {
+                            cx.emit(SidebarSelect { index: i });
+                        }
                     }),
                 )
                 .on_mouse_down(
