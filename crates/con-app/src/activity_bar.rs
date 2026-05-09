@@ -102,7 +102,7 @@ impl Render for ActivityBar {
             .bg(bg)
             .child(activity_slot_button(
                 "activity-tabs",
-                "phosphor/terminal-window.svg",
+                "phosphor/terminal.svg",
                 active_slot == ActivitySlot::Tabs && left_panel_open,
                 theme,
                 cx.listener(|this, _: &MouseDownEvent, _window, cx| {
