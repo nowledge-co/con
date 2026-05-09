@@ -824,17 +824,16 @@ impl ConWorkspace {
 
         if let Some(editor_view) = pane_tree.editor_view_for_pane(pane_id) {
             let should_close_pane = editor_view.update(cx, |editor, cx| {
-                let close_outcome = editor_file_close_outcome(editor.tab_count());
-                if close_outcome == EditorFileCloseOutcome::ClosePane {
+                if editor_pane_close_intent(editor.tab_count()) == EditorPaneCloseIntent::ClosePane {
                     return true;
                 }
 
-                editor.close_active_tab();
+                let should_close_pane = editor.close_active_tab();
                 if let Some(path) = editor.active_path().map(Path::to_path_buf) {
                     cx.emit(ActiveFileChanged { path });
                 }
                 cx.notify();
-                false
+                should_close_pane
             });
             if !should_close_pane {
                 if tab_idx == self.active_tab {

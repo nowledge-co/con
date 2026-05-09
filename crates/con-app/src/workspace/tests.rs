@@ -1,5 +1,5 @@
 use super::chrome::agent_panel_motion_target_for_agent_request;
-use super::{file_tree_root_for_focus, editor_file_close_outcome, EditorFileCloseOutcome, FileTreeFocusSource};
+use super::{EditorPaneCloseIntent, FileTreeFocusSource, editor_pane_close_intent, file_tree_root_for_focus};
 use super::{
     ConWorkspace, SPLIT_PREVIEW_SEAM_THICKNESS, SplitDirection, SplitPlacement,
     TabRenameStateSnapshot, centered_drag_preview_origin, clamp_preview_origin_to_tab_bar,
@@ -53,10 +53,10 @@ fn file_tree_root_for_editor_focus_preserves_existing_root_that_contains_file() 
 }
 
 #[test]
-fn editor_cmd_w_closes_file_tabs_before_requesting_pane_close() {
-    assert_eq!(editor_file_close_outcome(2), EditorFileCloseOutcome::CloseFileTab);
-    assert_eq!(editor_file_close_outcome(1), EditorFileCloseOutcome::ClosePane);
-    assert_eq!(editor_file_close_outcome(0), EditorFileCloseOutcome::ClosePane);
+fn editor_cmd_w_closes_active_file_before_closing_editor_pane() {
+    assert_eq!(editor_pane_close_intent(2), EditorPaneCloseIntent::CloseActiveFile);
+    assert_eq!(editor_pane_close_intent(1), EditorPaneCloseIntent::CloseActiveFile);
+    assert_eq!(editor_pane_close_intent(0), EditorPaneCloseIntent::ClosePane);
 }
 
 

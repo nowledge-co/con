@@ -24,16 +24,16 @@ pub(super) fn file_tree_root_for_focus(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EditorFileCloseOutcome {
-    CloseFileTab,
+pub(super) enum EditorPaneCloseIntent {
+    CloseActiveFile,
     ClosePane,
 }
 
-pub(super) fn editor_file_close_outcome(tab_count: usize) -> EditorFileCloseOutcome {
-    if tab_count > 1 {
-        EditorFileCloseOutcome::CloseFileTab
+pub(super) fn editor_pane_close_intent(tab_count: usize) -> EditorPaneCloseIntent {
+    if tab_count > 0 {
+        EditorPaneCloseIntent::CloseActiveFile
     } else {
-        EditorFileCloseOutcome::ClosePane
+        EditorPaneCloseIntent::ClosePane
     }
 }
 
