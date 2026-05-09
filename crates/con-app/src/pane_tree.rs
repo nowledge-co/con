@@ -1886,7 +1886,7 @@ impl PaneTree {
         has_splits: bool,
         is_zoomed: bool,
         tab_accent_color: Option<con_core::session::TabAccentColor>,
-        _tab_accent_inactive_alpha: f32,
+        tab_accent_inactive_alpha: f32,
         close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         cx: &App,
@@ -1999,6 +1999,17 @@ impl PaneTree {
         };
         // The whole title bar is draggable. The visible pane drag preview is
         // rendered by Workspace, centred at the live cursor position.
+        // Map tab_accent_inactive_alpha (0.0..=MAX ~0.30) to a title-bar-friendly
+        // opacity range (0.55..=0.85) so the bar always has a solid themed
+        // background regardless of the accent slider position.
+        let max_accent = con_core::config::AppearanceConfig::MAX_TAB_ACCENT_INACTIVE_ALPHA;
+        let t = (tab_accent_inactive_alpha / max_accent.max(f32::EPSILON)).clamp(0.0, 1.0);
+        let inactive_bar_opacity = (0.55 + t * 0.30).clamp(0.55, 0.85); // 0.55 at min → 0.85 at max
+        let bar_bg = if is_focused {
+            theme.title_bar.opacity(1.0)
+        } else {
+            theme.title_bar.opacity(inactive_bar_opacity)
+        };
         let mut bar = div()
             .id(ElementId::Name(format!("pane-title-bar-{pane_id}").into()))
             .flex()
@@ -2007,6 +2018,7 @@ impl PaneTree {
             .h(px(24.0))
             .w_full()
             .px(px(6.0))
+            .bg(bar_bg)
             .cursor_grab()
             .on_drag(
                 dragged,
