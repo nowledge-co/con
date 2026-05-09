@@ -842,8 +842,14 @@ impl ConWorkspace {
             if tab_is_visible {
                 let surviving_terminals: Vec<TerminalPane> =
                     pane_tree.all_terminals().into_iter().cloned().collect();
-                for terminal in &surviving_terminals {
+                if let Some(terminal) = surviving_terminals.first() {
                     terminal.ensure_surface(window, cx);
+                    terminal.focus(window, cx);
+                } else {
+                    // No terminals left — keep keyboard focus on workspace
+                    self.workspace_focus.clone().focus(window, cx);
+                }
+                for terminal in &surviving_terminals {
                     terminal.notify(cx);
                 }
                 self.sync_active_terminal_focus_states(cx);
@@ -904,6 +910,11 @@ impl ConWorkspace {
                 self.sync_active_tab_native_view_visibility(cx);
             }
             focused.focus(window, cx);
+            self.sync_active_terminal_focus_states(cx);
+        } else if tab_idx == self.active_tab {
+            // No terminal survived (editor-only tab) — keep keyboard focus on workspace
+            // so Cmd+T, Cmd+W etc. still work without requiring a click.
+            self.workspace_focus.clone().focus(window, cx);
             self.sync_active_terminal_focus_states(cx);
         }
 
