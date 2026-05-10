@@ -1,0 +1,15 @@
+# con development environment
+# https://mise.jdx.dev/
+#
+# Usage:
+#   mise install    # Install pinned tool versions
+#   just build      # Build the project
+#   just run        # Run from source
+#
+# Note: mise manages tool versions only. Task running is delegated to
+# the justfile to keep a single source of truth for build commands.
+
+[tools]
+cmake = "latest"
+rust = "stable"
+zig = "0.15.2"
