@@ -1360,7 +1360,6 @@ impl Render for EditorView {
                     this.focus_handle.focus(window, cx);
                     this.mouse_down(event);
                     window.prevent_default();
-                    cx.stop_propagation();
                     cx.notify();
                 }),
             )

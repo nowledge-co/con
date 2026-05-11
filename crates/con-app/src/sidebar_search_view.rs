@@ -228,9 +228,12 @@ fn search_dir(
         if name.starts_with('.') || matches!(name.as_str(), "target" | "node_modules" | "dist") {
             continue;
         }
-        if path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
             search_dir(&path, matcher, files_seen, results);
-        } else {
+        } else if file_type.is_file() {
             *files_seen += 1;
             search_file(&path, matcher, results);
         }
@@ -723,6 +726,20 @@ mod tests {
 
         assert_eq!(results.len(), 1);
         assert!(results[0].path.ends_with("main.rs"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn search_files_does_not_recurse_into_directory_symlinks() {
+        let root = temp_search_tree();
+        std::os::unix::fs::symlink(&root, root.join("src/loop")).unwrap();
+
+        let results = search_files(&root, "hello", SearchOptions::default());
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].path.ends_with("README.md"));
 
         let _ = fs::remove_dir_all(root);
     }
