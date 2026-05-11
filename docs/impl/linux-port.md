@@ -70,6 +70,9 @@ What that gives you:
 - the user's `TerminalColors` (foreground / background / 16-color
   ANSI palette) plumbed into `VtScreen::set_theme` at session spawn
   and live whenever the user picks a theme in settings
+- OSC 7 cwd updates are captured by Con's Rust VT wrapper instead of
+  relying on libghostty-vt's terminal-only stream handler, so Linux
+  pane/session state can follow shell-reported directory changes
 - transparent ARGB window with rounded corners (14 px on Linux, no
   corners from `NSWindow` or DWM here so we clip the GPUI root
   ourselves) and per-pane / per-surface opacity that composites

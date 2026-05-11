@@ -381,8 +381,10 @@ Phase 3c details now covered by the beta baseline:
   stdout/stderr handles, starts from a valid absolute cwd when provided, then
   falls back to the user's home directory and finally `%TEMP%`.
   PowerShell/pwsh shells are launched with a lightweight prompt hook that emits
-  OSC 7 cwd updates, so restored sessions and new panes can follow `cd`
-  changes instead of only remembering the process launch directory.
+  OSC 7 cwd updates, and Con's Rust VT wrapper captures OSC 7 directly because
+  libghostty-vt's terminal-only handler does not mutate pwd for that report.
+  Restored sessions and new panes can therefore follow `cd` changes instead of
+  only remembering the process launch directory.
 - Profiling uses `CON_LOG_FILE` instead of shell redirection so the child shell never sees redirected log handles.
 
 Phases 0-3e are **substantially complete** for the current Windows beta

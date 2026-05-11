@@ -140,6 +140,8 @@ pub enum GhosttyTerminalOption {
     Size = 6,
     ColorScheme = 7,
     DeviceAttributes = 8,
+    Title = 9,
+    Pwd = 10,
     ColorForeground = 11,
     ColorBackground = 12,
     ColorCursor = 13,
@@ -289,6 +291,13 @@ pub struct GhosttyColorRgb {
 pub struct GhosttyString {
     pub ptr: *const u8,
     pub len: usize,
+}
+
+fn ghostty_string_from_bytes(bytes: &[u8]) -> GhosttyString {
+    GhosttyString {
+        ptr: bytes.as_ptr(),
+        len: bytes.len(),
+    }
 }
 
 #[repr(C)]
@@ -673,9 +682,23 @@ struct VtInner {
     scratch_rows: u16,
     scratch: Vec<Cell>,
     last_cursor: Cursor,
+    osc_state: OscParseState,
+    osc_command: Vec<u8>,
+    osc7_buffer: Vec<u8>,
 }
 
 unsafe impl Send for VtInner {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OscParseState {
+    Ground,
+    Esc,
+    Command,
+    Ignore,
+    IgnoreEsc,
+    Osc7,
+    Osc7Esc,
+}
 
 fn default_device_attributes() -> GhosttyDeviceAttributes {
     let mut features = [0_u16; 64];
@@ -696,6 +719,181 @@ fn default_device_attributes() -> GhosttyDeviceAttributes {
             rom_cartridge: 0,
         },
         tertiary: GhosttyDeviceAttributesTertiary { unit_id: 0 },
+    }
+}
+
+fn ingest_osc7_cwd(inner: &mut VtInner, bytes: &[u8]) {
+    for &byte in bytes {
+        match inner.osc_state {
+            OscParseState::Ground => {
+                if byte == 0x1b {
+                    inner.osc_state = OscParseState::Esc;
+                }
+            }
+            OscParseState::Esc => {
+                if byte == b']' {
+                    inner.osc_command.clear();
+                    inner.osc_state = OscParseState::Command;
+                } else if byte != 0x1b {
+                    inner.osc_state = OscParseState::Ground;
+                }
+            }
+            OscParseState::Command => match byte {
+                b';' => {
+                    if inner.osc_command.as_slice() == b"7" {
+                        inner.osc7_buffer.clear();
+                        inner.osc_state = OscParseState::Osc7;
+                    } else {
+                        inner.osc_state = OscParseState::Ignore;
+                    }
+                }
+                0x07 => inner.osc_state = OscParseState::Ground,
+                0x1b => inner.osc_state = OscParseState::IgnoreEsc,
+                _ if inner.osc_command.len() < 16 => inner.osc_command.push(byte),
+                _ => inner.osc_state = OscParseState::Ignore,
+            },
+            OscParseState::Ignore => match byte {
+                0x07 => inner.osc_state = OscParseState::Ground,
+                0x1b => inner.osc_state = OscParseState::IgnoreEsc,
+                _ => {}
+            },
+            OscParseState::IgnoreEsc => {
+                inner.osc_state = OscParseState::Ground;
+                if byte == 0x1b {
+                    inner.osc_state = OscParseState::Esc;
+                } else if byte != b'\\' {
+                    // The ESC did not terminate the OSC. Resume ignoring
+                    // until the real BEL/ST terminator.
+                    inner.osc_state = OscParseState::Ignore;
+                }
+            }
+            OscParseState::Osc7 => match byte {
+                0x07 => finish_osc7_cwd(inner),
+                0x1b => inner.osc_state = OscParseState::Osc7Esc,
+                _ if inner.osc7_buffer.len() < 4096 => inner.osc7_buffer.push(byte),
+                _ => {
+                    inner.osc7_buffer.clear();
+                    inner.osc_state = OscParseState::Ignore;
+                }
+            },
+            OscParseState::Osc7Esc => {
+                if byte == b'\\' {
+                    finish_osc7_cwd(inner);
+                } else {
+                    if inner.osc7_buffer.len() + 2 <= 4096 {
+                        inner.osc7_buffer.push(0x1b);
+                        inner.osc7_buffer.push(byte);
+                        inner.osc_state = OscParseState::Osc7;
+                    } else {
+                        inner.osc7_buffer.clear();
+                        inner.osc_state = OscParseState::Ignore;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn finish_osc7_cwd(inner: &mut VtInner) {
+    if let Ok(url) = std::str::from_utf8(&inner.osc7_buffer)
+        && let Some(cwd) = parse_osc7_cwd(url)
+    {
+        let pwd = ghostty_string_from_bytes(cwd.as_bytes());
+        // SAFETY: `ghostty_terminal_set(PWD)` copies the string during
+        // the call; `cwd` stays alive until the call returns.
+        let rc = unsafe {
+            ghostty_terminal_set(
+                inner.terminal,
+                GhosttyTerminalOption::Pwd,
+                &pwd as *const _ as *const c_void,
+            )
+        };
+        if rc != 0 {
+            log::warn!("ghostty_terminal_set(Pwd) failed: rc={rc}");
+        }
+    }
+
+    inner.osc7_buffer.clear();
+    inner.osc_state = OscParseState::Ground;
+}
+
+fn parse_osc7_cwd(url: &str) -> Option<String> {
+    let url = url.trim();
+    let path = url.strip_prefix("file://")?;
+    if path.is_empty() {
+        return None;
+    }
+
+    let decoded = percent_decode_lossy(path);
+    if decoded.is_empty() {
+        return None;
+    }
+
+    if let Some(without_slash) = decoded.strip_prefix('/')
+        && is_windows_drive_path(without_slash)
+    {
+        return Some(without_slash.replace('/', "\\"));
+    }
+
+    if !decoded.starts_with('/') {
+        let (host, rest) = decoded.split_once('/')?;
+        if host.is_empty() {
+            return Some(local_file_path_from_rest(rest));
+        }
+        if host.eq_ignore_ascii_case("localhost") {
+            return Some(local_file_path_from_rest(rest));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            return Some(format!("/{rest}"));
+        }
+        #[cfg(target_os = "windows")]
+        return Some(format!("\\\\{}\\{}", host, rest.replace('/', "\\")));
+    }
+
+    Some(decoded)
+}
+
+fn local_file_path_from_rest(rest: &str) -> String {
+    if is_windows_drive_path(rest) {
+        rest.replace('/', "\\")
+    } else {
+        format!("/{rest}")
+    }
+}
+
+fn is_windows_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
+}
+
+fn percent_decode_lossy(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) =
+                (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+        {
+            out.push((high << 4) | low);
+            index += 3;
+            continue;
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -856,6 +1054,9 @@ impl VtScreen {
                 scratch_rows: rows,
                 scratch: Vec::with_capacity(cols as usize * rows as usize),
                 last_cursor: Cursor::default(),
+                osc_state: OscParseState::Ground,
+                osc_command: Vec::with_capacity(8),
+                osc7_buffer: Vec::with_capacity(256),
             })),
         })
     }
@@ -888,6 +1089,7 @@ impl VtScreen {
     /// upstream: do not call from inside a registered callback.
     pub fn feed(&self, bytes: &[u8]) {
         let mut inner = self.inner.lock();
+        ingest_osc7_cwd(&mut inner, bytes);
         // SAFETY: terminal valid; bytes live for the call.
         unsafe { ghostty_terminal_vt_write(inner.terminal, bytes.as_ptr(), bytes.len()) };
         inner.generation = inner.generation.wrapping_add(1);
@@ -1657,5 +1859,43 @@ mod tests {
         screen.feed(b"\x1b]7;file:///tmp/con-vt-cwd\x07");
 
         assert_eq!(screen.current_dir().as_deref(), Some("/tmp/con-vt-cwd"));
+    }
+
+    #[test]
+    fn vt_screen_reports_windows_osc7_current_dir() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        screen.feed(b"\x1b]7;file:///C:/Users/WeyGu/dev/con-terminal\x07");
+
+        assert_eq!(
+            screen.current_dir().as_deref(),
+            Some("C:\\Users\\WeyGu\\dev\\con-terminal")
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn vt_screen_reports_localhost_windows_osc7_current_dir() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        screen.feed(b"\x1b]7;file://localhost/C:/Users/WeyGu/dev/con-terminal\x07");
+
+        assert_eq!(
+            screen.current_dir().as_deref(),
+            Some("C:\\Users\\WeyGu\\dev\\con-terminal")
+        );
+    }
+
+    #[test]
+    fn vt_screen_reports_split_osc7_current_dir() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        screen.feed(b"\x1b]7;file:///home/me/con");
+        screen.feed(b"%20terminal\x1b\\");
+
+        assert_eq!(
+            screen.current_dir().as_deref(),
+            Some("/home/me/con terminal")
+        );
     }
 }

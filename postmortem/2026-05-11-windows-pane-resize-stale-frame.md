@@ -29,6 +29,12 @@ The cwd fallback also only covered the launch directory. It could not learn
 `cd` changes in default Windows PowerShell/pwsh sessions because those shells
 do not emit OSC 7 cwd updates by default.
 
+One more layer was missed in the first fix: even after Con injected OSC 7 into
+PowerShell/pwsh, `libghostty-vt`'s terminal-only stream handler ignores
+`report_pwd`. That is correct for upstream's low-level VT helper, but it means
+the Rust wrapper must capture OSC 7 itself if portable backends want live cwd
+state.
+
 ## Fix Applied
 
 The Windows terminal view now keeps stale cached readback images at their
@@ -43,7 +49,14 @@ The Windows `RenderSession` now mirrors the Linux fallback model: it stores the
 resolved shell cwd and returns it from `current_dir()` until the VT layer reports
 a newer directory. PowerShell/pwsh launches also get a lightweight prompt hook
 that emits OSC 7 on every prompt, so cwd snapshots follow real `cd` changes
-instead of freezing at the launch directory.
+instead of freezing at the launch directory. The shared Rust `VtScreen` wrapper
+now parses OSC 7 and sets `GHOSTTY_TERMINAL_OPT_PWD` manually, which makes the
+cwd path work on both Windows and Linux.
+
+The pane divider and chrome transition path now uses terminal-colored seam
+covers across portable backends too. Divider hit areas are absolute overlays
+around a 1px visible divider instead of 5px transparent layout strips, so drag
+targets stay usable without exposing the window backdrop between panes.
 
 ## What We Learned
 

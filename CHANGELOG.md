@@ -66,13 +66,23 @@ con is still pre-release, so entries may group related beta work while the produ
   ConPTY launch/current-directory fallback until shell integration reports a
   newer path. Con now also installs a lightweight PowerShell/pwsh prompt hook
   that emits cwd updates, so restored Windows sessions follow directory
-  changes made after startup. _(Issue
+  changes made after startup; the portable VT wrapper now captures OSC 7
+  directly because libghostty-vt's terminal-only stream intentionally ignores
+  cwd reports. _(Issue
   [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
   [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
   [@wey-gu](https://github.com/wey-gu))_
 
 **Windows and Linux**
 
+- Tightened portable terminal chrome coverage so pane dividers, vertical-tab
+  edges, input bar motion, and agent-panel drag/show/hide transitions use
+  terminal-colored seam covers instead of transparent hit areas that could leak
+  the desktop/window backdrop during fast movement. _(Issues
+  [#18](https://github.com/nowledge-co/con-terminal/issues/18) and
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
 - Fixed terminal selection copy semantics on the portable backends:
   `Ctrl+C` now copies and clears the current selection when text is selected,
   while still sending interrupt when nothing is selected. The Linux preview

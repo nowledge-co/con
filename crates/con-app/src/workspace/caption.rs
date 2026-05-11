@@ -1,6 +1,5 @@
 use super::*;
 
-#[cfg(target_os = "macos")]
 pub(super) fn terminal_separator_over_backdrop(backdrop: Hsla, theme: &Theme) -> Hsla {
     let overlay_alpha = if theme.is_dark() { 0.14 } else { 0.11 };
     backdrop
