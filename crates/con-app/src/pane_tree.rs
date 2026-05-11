@@ -2122,7 +2122,14 @@ impl PaneTree {
                 surfaces.len(),
                 if surfaces.len() == 1 { "" } else { "s" }
             );
-            let strip_bg = theme.title_bar.opacity(1.0);
+            let max_accent = con_core::config::AppearanceConfig::MAX_TAB_ACCENT_INACTIVE_ALPHA;
+            let t = (tab_accent_inactive_alpha / max_accent.max(f32::EPSILON)).clamp(0.0, 1.0);
+            let inactive_bar_opacity = (0.55 + t * 0.30).clamp(0.55, 0.85);
+            let strip_bg = if is_focused {
+                theme.title_bar.opacity(1.0)
+            } else {
+                theme.title_bar.opacity(inactive_bar_opacity)
+            };
             let rail_bg = if is_focused {
                 theme.tab_bar_segmented.opacity(0.72)
             } else {
