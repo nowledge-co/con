@@ -1299,11 +1299,18 @@ pub(crate) fn fixed_app_keybinding_shortcuts() -> Vec<(&'static str, &'static st
 }
 
 fn is_fixed_configurable_app_keybinding(key: &str, action_name: &SharedString) -> bool {
+    let Some(key) = con_core::config::canonical_keybinding(key) else {
+        return false;
+    };
+    let fixed_next_tab = con_core::config::canonical_keybinding("secondary-shift-]")
+        .expect("fixed shortcut is valid");
+    let fixed_previous_tab = con_core::config::canonical_keybinding("secondary-shift-[")
+        .expect("fixed shortcut is valid");
     let next_tab: SharedString = gpui::Action::name(&NextTab).into();
     let previous_tab: SharedString = gpui::Action::name(&PreviousTab).into();
 
-    (key == "secondary-shift-]" && action_name == &next_tab)
-        || (key == "secondary-shift-[" && action_name == &previous_tab)
+    (key == fixed_next_tab && action_name == &next_tab)
+        || (key == fixed_previous_tab && action_name == &previous_tab)
 }
 
 pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {

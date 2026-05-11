@@ -571,7 +571,7 @@ impl Default for KeybindingConfig {
     }
 }
 
-fn canonical_keybinding(binding: &str) -> Option<String> {
+pub fn canonical_keybinding(binding: &str) -> Option<String> {
     let strokes = binding
         .split_whitespace()
         .filter_map(canonical_keystroke)
