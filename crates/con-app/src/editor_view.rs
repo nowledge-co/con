@@ -195,6 +195,7 @@ impl EditorTab {
 pub struct EditorView {
     tabs: Vec<EditorTab>,
     active_tab: usize,
+    open_generation: u64,
     scroll_handle: UniformListScrollHandle,
     cursor_visible: bool,
     cursor_blink: Option<Task<()>>,
@@ -215,6 +216,7 @@ impl EditorView {
         Self {
             tabs: Vec::new(),
             active_tab: 0,
+            open_generation: 0,
             scroll_handle: UniformListScrollHandle::new(),
             cursor_visible: true,
             cursor_blink: None,
@@ -242,6 +244,8 @@ impl EditorView {
     /// Load a file from disk into the editor pane. If the file is already open,
     /// it becomes the active editor tab; otherwise a new editor tab is appended.
     pub fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.open_generation = self.open_generation.wrapping_add(1);
+        let generation = self.open_generation;
         if let Some(index) = self.tabs.iter().position(|tab| tab.path == path) {
             self.active_tab = index;
             self.scroll_handle = UniformListScrollHandle::new();
@@ -257,6 +261,9 @@ impl EditorView {
                 .spawn(async move { std::fs::read_to_string(&path_for_read) })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                if this.open_generation != generation {
+                    return;
+                }
                 match content {
                     Ok(content) => {
                         this.open_file_from_content(path.clone(), content);
@@ -307,6 +314,7 @@ impl EditorView {
 
     pub fn activate_tab(&mut self, index: usize) {
         if index < self.tabs.len() && self.active_tab != index {
+            self.open_generation = self.open_generation.wrapping_add(1);
             self.active_tab = index;
             self.scroll_handle = UniformListScrollHandle::new();
             if let Some(path) = self.active_path().map(Path::to_path_buf) {
@@ -329,6 +337,7 @@ impl EditorView {
         if self.tabs.is_empty() {
             return true;
         }
+        self.open_generation = self.open_generation.wrapping_add(1);
         let closed_path = self.tabs[self.active_tab].path.clone();
         self.tabs.remove(self.active_tab);
         self.lsp_clients.remove(&closed_path);

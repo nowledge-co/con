@@ -805,10 +805,11 @@ impl ConWorkspace {
             };
 
         self.tabs[active_tab].pane_tree.focus_pane(pane_id);
-        self.workspace_focus.clone().focus(window, cx);
+        let editor_focus = editor_view.read(cx).focus_handle(cx).clone();
         editor_view.update(cx, |editor: &mut EditorView, cx| {
             editor.open_file(path.clone(), cx);
         });
+        editor_focus.focus(window, cx);
         self.sync_file_tree_from_active_focus(cx);
         cx.notify();
     }
