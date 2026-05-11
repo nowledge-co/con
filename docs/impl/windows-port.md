@@ -376,7 +376,13 @@ Phase 3c details now covered by the beta baseline:
   special-key encoding, while printable text and IME commits enter the
   PTY as text. Composition ranges report cursor-relative bounds so
   candidate windows anchor to the terminal cursor.
-- ConPTY child launch passes the pseudo-console with `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`, avoids inheriting con's unrelated stdout/stderr handles, starts from a valid absolute cwd when provided, then falls back to the user's home directory and finally `%TEMP%`.
+- ConPTY child launch passes the pseudo-console with
+  `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`, avoids inheriting con's unrelated
+  stdout/stderr handles, starts from a valid absolute cwd when provided, then
+  falls back to the user's home directory and finally `%TEMP%`.
+  PowerShell/pwsh shells are launched with a lightweight prompt hook that emits
+  OSC 7 cwd updates, so restored sessions and new panes can follow `cd`
+  changes instead of only remembering the process launch directory.
 - Profiling uses `CON_LOG_FILE` instead of shell redirection so the child shell never sees redirected log handles.
 
 Phases 0-3e are **substantially complete** for the current Windows beta
@@ -471,7 +477,10 @@ Caveats:
 - The shell is `CON_SHELL` if set, else the configured Windows Terminal
   default profile command when `%LOCALAPPDATA%` settings are readable,
   else `pwsh.exe`/`powershell.exe` if on `PATH`, else `$env:COMSPEC`,
-  else `cmd.exe`. A first-class config field is still Phase 4 work.
+  else `cmd.exe`. PowerShell/pwsh profiles without an explicit
+  `-Command`/`-File` get Con's OSC 7 cwd hook automatically; custom
+  command/file profiles are left untouched. A first-class config field is
+  still Phase 4 work.
 - The terminal still pays a GPU→CPU readback and GPUI image upload on
   dirty frames. Recent fixes made small updates row-local and removed
   avoidable extra-frame latency plus several backlog stalls, but Windows
@@ -488,9 +497,11 @@ remaining decisions are narrower:
    that lets con present a Windows composition swap chain directly in the
    GPUI tree, then remove the D3D readback + `RenderImage` re-upload
    bridge.
-2. **Shell integration scope.** Decide whether OSC 133 / OSC 7 and
-   related shell-integration features belong in the shared VT layer or in
-   per-platform shell adapters.
+2. **Shell integration scope.** Decide whether OSC 133 and non-PowerShell
+   OSC 7 support belong in the shared VT layer or in per-platform shell
+   adapters. PowerShell/pwsh cwd tracking is currently handled as a
+   Windows launch-time adapter because those shells do not emit OSC 7 by
+   default.
 3. **Windows hardening.** Broaden IME/dead-key/international-keyboard
    validation, drag-to-scroll selection polish, column selection,
    CJK font-weight tuning, extreme resize behavior, ligatures, and

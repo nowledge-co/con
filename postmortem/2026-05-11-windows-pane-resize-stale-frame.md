@@ -20,16 +20,30 @@ resolved ConPTY launch directory as a current-directory fallback. If shell
 integration had not yet reported a newer path, session snapshots could lose the
 restored cwd even though scrollback text was present.
 
+After the stretch was fixed, deleting the right pane exposed a second artifact:
+the old frame stayed correctly sized, but the newly revealed area to its right
+had no terminal-colored filler until the resized D3D frame arrived. That showed
+the transparent window backing for a few frames.
+
+The cwd fallback also only covered the launch directory. It could not learn
+`cd` changes in default Windows PowerShell/pwsh sessions because those shells
+do not emit OSC 7 cwd updates by default.
+
 ## Fix Applied
 
 The Windows terminal view now keeps stale cached readback images at their
 original logical size while the pane is resizing. The parent terminal surface
 clips overflow and paints its normal background until the renderer publishes the
-next frame, avoiding the visibly stretched text.
+next frame, avoiding the visibly stretched text. When the pane grows before the
+next frame arrives, only the uncovered stale-frame gutters are filled with the
+terminal background so glass opacity is preserved without double-compositing
+behind the old image.
 
 The Windows `RenderSession` now mirrors the Linux fallback model: it stores the
 resolved shell cwd and returns it from `current_dir()` until the VT layer reports
-a newer directory.
+a newer directory. PowerShell/pwsh launches also get a lightweight prompt hook
+that emits OSC 7 on every prompt, so cwd snapshots follow real `cd` changes
+instead of freezing at the launch directory.
 
 ## What We Learned
 
@@ -39,4 +53,7 @@ stable and letting the terminal background cover new space is less visually
 wrong than resampling text.
 
 For session continuity, every platform backend needs a reliable cwd fallback
-that survives the gap between process launch and shell-integration events.
+that survives the gap between process launch and shell-integration events. On
+Windows that fallback is not enough by itself: shells that do not emit OSC 7
+need integration at process launch, otherwise the app has no grounded way to
+know the user's current directory after `cd`.

@@ -56,13 +56,17 @@ con is still pre-release, so entries may group related beta work while the produ
   [@wey-gu](https://github.com/wey-gu))_
 - Stopped stale Windows terminal frames from stretching while panes close,
   split, or resize, so existing terminal content no longer appears briefly
-  zoomed before the next renderer frame arrives. _(Issue
+  zoomed before the next renderer frame arrives, and covered newly exposed
+  stale-frame gaps with the terminal background instead of leaking transparent
+  window content. _(Issue
   [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
   [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
   [@wey-gu](https://github.com/wey-gu))_
 - Fixed restored Windows sessions so the saved working directory remains the
   ConPTY launch/current-directory fallback until shell integration reports a
-  newer path. _(Issue
+  newer path. Con now also installs a lightweight PowerShell/pwsh prompt hook
+  that emits cwd updates, so restored Windows sessions follow directory
+  changes made after startup. _(Issue
   [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
   [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
   [@wey-gu](https://github.com/wey-gu))_

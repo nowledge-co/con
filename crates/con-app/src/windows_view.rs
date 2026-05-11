@@ -697,8 +697,8 @@ impl GhosttyView {
         self.restored_screen_text = None;
     }
 
-    fn image_children(&self) -> Vec<AnyElement> {
-        let mut children = Vec::with_capacity(usize::from(self.cached_image.is_some()));
+    fn image_children(&self, gap_background: Option<Hsla>) -> Vec<AnyElement> {
+        let mut children = Vec::with_capacity(usize::from(self.cached_image.is_some()) + 2);
         if let Some(img_arc) = self.cached_image.clone() {
             // Keep stale D3D readback frames at their original logical
             // size while pane layout is changing. Stretching the old
@@ -709,9 +709,37 @@ impl GhosttyView {
             let image = img(ImageSource::Render(img_arc)).object_fit(ObjectFit::Fill);
             let image = if let Some((frame_width, frame_height)) = self.cached_image_size {
                 let scale_factor = self.scale_factor.max(f32::EPSILON);
-                image
-                    .w(px(frame_width as f32 / scale_factor))
-                    .h(px(frame_height as f32 / scale_factor))
+                let image_width = frame_width as f32 / scale_factor;
+                let image_height = frame_height as f32 / scale_factor;
+                if let (Some(bounds), Some(background)) = (self.pane_bounds, gap_background) {
+                    let content_width = f32::from(bounds.size.width);
+                    let content_height = f32::from(bounds.size.height);
+                    if image_width + 0.5 < content_width {
+                        children.push(
+                            div()
+                                .absolute()
+                                .left(px(image_width))
+                                .right_0()
+                                .top_0()
+                                .bottom_0()
+                                .bg(background)
+                                .into_any_element(),
+                        );
+                    }
+                    if image_height + 0.5 < content_height {
+                        children.push(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .w(px(image_width.min(content_width).max(0.0)))
+                                .top(px(image_height))
+                                .bottom_0()
+                                .bg(background)
+                                .into_any_element(),
+                        );
+                    }
+                }
+                image.w(px(image_width)).h(px(image_height))
             } else {
                 // `ObjectFit::Fill` keeps each image quad exactly equal
                 // to its logical bounds. The default `Contain` applies
@@ -1502,7 +1530,7 @@ impl Render for GhosttyView {
             terminal_background.unwrap_or_else(|| cx.theme().background.opacity(0.0));
         let entity = cx.entity().downgrade();
         let input_entity = entity.clone();
-        let mut terminal_children = self.image_children();
+        let mut terminal_children = self.image_children(terminal_background);
         if let Some(overlay) = self.render_link_cursor_overlay() {
             terminal_children.push(overlay);
         }
