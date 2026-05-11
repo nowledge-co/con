@@ -77,8 +77,16 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Tightened portable terminal chrome coverage so pane dividers, vertical-tab
   edges, input bar motion, and agent-panel drag/show/hide transitions use
-  terminal-colored seam covers instead of transparent hit areas that could leak
-  the desktop/window backdrop during fast movement. _(Issues
+  terminal-colored seam covers and terminal-matched backing instead of
+  transparent hit areas that could leak the desktop/window backdrop during fast
+  movement. _(Issues
+  [#18](https://github.com/nowledge-co/con-terminal/issues/18) and
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Matched macOS terminal behavior on the portable backends: when a user has
+  scrolled back and then types or pastes input, the viewport now returns to the
+  live prompt instead of leaving the terminal parked in history. _(Issues
   [#18](https://github.com/nowledge-co/con-terminal/issues/18) and
   [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
   [#169](https://github.com/nowledge-co/con-terminal/pull/169) by

@@ -255,6 +255,7 @@ impl LinuxPtySession {
     }
 
     pub fn write_input(&self, data: &[u8]) -> Result<()> {
+        self.scroll_viewport_to_bottom();
         self.writer
             .lock()
             .write_all(data)
@@ -266,6 +267,12 @@ impl LinuxPtySession {
     pub fn clear_screen_and_scrollback(&self) {
         self.shared.screen.clear_screen_and_scrollback();
         self.mark_needs_render();
+    }
+
+    pub fn scroll_viewport_to_bottom(&self) {
+        if self.shared.screen.scroll_viewport_bottom() {
+            self.mark_needs_render();
+        }
     }
 
     pub fn title(&self) -> Option<String> {

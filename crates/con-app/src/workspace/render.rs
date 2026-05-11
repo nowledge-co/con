@@ -336,6 +336,8 @@ impl Render for ConWorkspace {
             a: 1.0,
         }
         .into();
+        let portable_terminal_backdrop_color =
+            terminal_surface_color.opacity(self.terminal_opacity);
         let chrome_transition_seam_color = terminal_surface_color;
         let chrome_static_seam_color =
             terminal_separator_over_backdrop(terminal_surface_color, theme);
@@ -431,6 +433,9 @@ impl Render for ConWorkspace {
             .min_h_0()
             .w_full()
             .overflow_hidden()
+            .when(cfg!(not(target_os = "macos")), |pane_content| {
+                pane_content.bg(portable_terminal_backdrop_color)
+            })
             .child(pane_tree_rendered)
             .on_children_prepainted(move |bounds_list, _, _| {
                 let Some(bounds) = bounds_list.first().copied() else {
@@ -610,7 +615,14 @@ impl Render for ConWorkspace {
             );
         }
 
-        let mut main_area = div().relative().flex().flex_1().min_h_0();
+        let mut main_area = div()
+            .relative()
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .when(cfg!(not(target_os = "macos")), |main_area| {
+                main_area.bg(portable_terminal_backdrop_color)
+            });
 
         if self.vertical_tabs_active() {
             main_area = main_area.child(

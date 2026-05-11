@@ -392,6 +392,7 @@ impl RenderSession {
     /// Send UTF-8 text to the child shell. Handles the ConPTY Enter
     /// quirk (shell expects CR, not LF).
     pub fn write_input(&self, text: &str) {
+        self.scroll_viewport_to_bottom();
         self.request_low_latency_after_next_generation();
         let bytes: std::borrow::Cow<[u8]> = if text.as_bytes().contains(&b'\n') {
             std::borrow::Cow::Owned(text.replace('\n', "\r").into_bytes())
@@ -404,6 +405,7 @@ impl RenderSession {
     /// Raw PTY write — no CR/LF normalization. Used for bracketed-paste
     /// wrappers (ESC [200~ / ESC [201~) whose bytes mustn't be touched.
     pub fn write_pty_raw(&self, data: &[u8]) {
+        self.scroll_viewport_to_bottom();
         self.request_low_latency_after_next_generation();
         let _ = self.conpty.write(data);
     }
@@ -592,6 +594,14 @@ impl RenderSession {
     pub fn scroll_viewport_rows(&self, rows: isize) {
         self.scroll_remainder.lock().reset();
         if self.vt.scroll_viewport_delta(rows) {
+            self.request_low_latency_present();
+        }
+    }
+
+    /// Return the viewport to the prompt before writing user input.
+    pub fn scroll_viewport_to_bottom(&self) {
+        self.scroll_remainder.lock().reset();
+        if self.vt.scroll_viewport_bottom() {
             self.request_low_latency_present();
         }
     }

@@ -1560,6 +1560,24 @@ impl VtScreen {
         true
     }
 
+    /// Snap the visible viewport to the live tail. User input should
+    /// always return a scrolled-back terminal to the prompt before it
+    /// writes to the PTY, matching native terminal behavior.
+    pub fn scroll_viewport_bottom(&self) -> bool {
+        let mut inner = self.inner.lock();
+        if inner.terminal.is_null() {
+            return false;
+        }
+        let behavior = GhosttyTerminalScrollViewport {
+            tag: GhosttyTerminalScrollViewportTag::Bottom,
+            value: GhosttyTerminalScrollViewportValue { delta: 0 },
+        };
+        unsafe { ghostty_terminal_scroll_viewport(inner.terminal, behavior) };
+        inner.force_full_snapshot = true;
+        inner.generation = inner.generation.wrapping_add(1);
+        true
+    }
+
     /// Bracketed-paste mode (2004). When `true`, paste operations
     /// should wrap the payload in `ESC[200~ … ESC[201~` so the shell
     /// can treat it as a single paste.
