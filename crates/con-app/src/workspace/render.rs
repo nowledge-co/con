@@ -153,14 +153,27 @@ impl Render for ConWorkspace {
         let agent_panel_transitioning = self.agent_panel_motion.is_animating();
         let input_bar_transitioning = self.input_bar_motion.is_animating();
         let tab_strip_transitioning = self.tab_strip_motion.is_animating();
+        #[cfg(target_os = "macos")]
         let (agent_panel_snap_guard_active, agent_panel_snap_guard_expired) =
             Self::snap_guard_state(&mut self.agent_panel_snap_guard_until, window);
+        #[cfg(target_os = "macos")]
         let (input_bar_snap_guard_active, input_bar_snap_guard_expired) =
             Self::snap_guard_state(&mut self.input_bar_snap_guard_until, window);
+        #[cfg(target_os = "macos")]
         let (top_chrome_snap_guard_active, top_chrome_snap_guard_expired) =
             Self::snap_guard_state(&mut self.top_chrome_snap_guard_until, window);
+        #[cfg(target_os = "macos")]
         let (sidebar_snap_guard_active, sidebar_snap_guard_expired) =
             Self::snap_guard_state(&mut self.sidebar_snap_guard_until, window);
+        #[cfg(not(target_os = "macos"))]
+        let agent_panel_snap_guard_active = false;
+        #[cfg(not(target_os = "macos"))]
+        let input_bar_snap_guard_active = false;
+        #[cfg(not(target_os = "macos"))]
+        let top_chrome_snap_guard_active = false;
+        #[cfg(not(target_os = "macos"))]
+        let sidebar_snap_guard_active = false;
+        #[cfg(target_os = "macos")]
         {
             let release_cover = Duration::from_millis(CHROME_RELEASE_COVER_MS);
             if agent_panel_snap_guard_expired && !self.agent_panel_open {
@@ -179,14 +192,25 @@ impl Render for ConWorkspace {
                 Self::extend_guard(&mut self.sidebar_release_cover_until, release_cover);
             }
         }
+        #[cfg(target_os = "macos")]
         let agent_panel_release_cover_active =
             Self::snap_guard_active(&mut self.agent_panel_release_cover_until, window);
+        #[cfg(target_os = "macos")]
         let input_bar_release_cover_active =
             Self::snap_guard_active(&mut self.input_bar_release_cover_until, window);
+        #[cfg(target_os = "macos")]
         let top_chrome_release_cover_active =
             Self::snap_guard_active(&mut self.top_chrome_release_cover_until, window);
+        #[cfg(target_os = "macos")]
         let sidebar_release_cover_active =
             Self::snap_guard_active(&mut self.sidebar_release_cover_until, window);
+        #[cfg(not(target_os = "macos"))]
+        let agent_panel_release_cover_active = false;
+        #[cfg(not(target_os = "macos"))]
+        let input_bar_release_cover_active = false;
+        #[cfg(not(target_os = "macos"))]
+        let top_chrome_release_cover_active = false;
+        #[cfg(target_os = "macos")]
         if !sidebar_snap_guard_active && !sidebar_release_cover_active {
             self.sidebar_snap_guard_width = 0.0;
             self.sidebar_release_cover_width = 0.0;
@@ -254,10 +278,19 @@ impl Render for ConWorkspace {
                 sidebar.set_effective_panel_max_width(max_vertical_tabs_width);
                 sidebar.occupied_width_with_max(max_vertical_tabs_width)
             })
-        } else if sidebar_snap_guard_active {
-            self.sidebar_snap_guard_width
         } else {
-            0.0
+            #[cfg(target_os = "macos")]
+            {
+                if sidebar_snap_guard_active {
+                    self.sidebar_snap_guard_width
+                } else {
+                    0.0
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                0.0
+            }
         };
         let vertical_tabs_pinned = self.vertical_tabs_active() && self.sidebar.read(cx).is_pinned();
 
@@ -1204,16 +1237,19 @@ impl Render for ConWorkspace {
             }
         }
 
-        if sidebar_release_cover_active && self.sidebar_release_cover_width > 0.0 {
-            root = root.child(
-                div()
-                    .absolute()
-                    .top(px(top_bar_height))
-                    .bottom_0()
-                    .left_0()
-                    .w(px(self.sidebar_release_cover_width))
-                    .bg(chrome_transition_seam_color),
-            );
+        #[cfg(target_os = "macos")]
+        {
+            if sidebar_release_cover_active && self.sidebar_release_cover_width > 0.0 {
+                root = root.child(
+                    div()
+                        .absolute()
+                        .top(px(top_bar_height))
+                        .bottom_0()
+                        .left_0()
+                        .w(px(self.sidebar_release_cover_width))
+                        .bg(chrome_transition_seam_color),
+                );
+            }
         }
 
         if self.sidebar_drag.is_some() && vertical_tabs_width > 0.0 {
