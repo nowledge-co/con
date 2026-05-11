@@ -362,6 +362,7 @@ impl SettingsPanel {
     fn provider_api_key_placeholder(provider: &ProviderKind) -> &'static str {
         match provider {
             ProviderKind::ChatGPT | ProviderKind::GitHubCopilot => "Override for advanced setups",
+            ProviderKind::OpenAICompatible => "Optional, or OPENAI_API_KEY",
             _ => "sk-.. or OPENAI_API_KEY",
         }
     }
@@ -378,6 +379,9 @@ impl SettingsPanel {
         match provider {
             ProviderKind::ChatGPT => "Leave blank for ChatGPT OAuth.",
             ProviderKind::GitHubCopilot => "Leave blank for GitHub OAuth.",
+            ProviderKind::OpenAICompatible => {
+                "Optional for local endpoints; use a key or env var when required."
+            }
             _ => "Key or env var name",
         }
     }
@@ -568,6 +572,38 @@ impl SettingsPanel {
             transport.unwrap_or(ProviderTransport::OpenAI),
         )
         .unwrap_or(sidebar_provider)
+    }
+
+    fn provider_for_saved_transport(config: &Config, provider: &ProviderKind) -> ProviderKind {
+        let sidebar_provider = Self::sidebar_provider_kind(provider);
+        let Some(transport) = config.agent.provider_transport_for(&sidebar_provider) else {
+            return provider.clone();
+        };
+
+        Self::provider_for_transport(&sidebar_provider, transport).unwrap_or(provider.clone())
+    }
+
+    fn normalize_active_provider_for_saved_transport(&mut self) {
+        self.config.agent.provider =
+            Self::provider_for_saved_transport(&self.config, &self.config.agent.provider);
+    }
+
+    fn set_active_provider_if_tracking(
+        &mut self,
+        source_provider: &ProviderKind,
+        target_provider: &ProviderKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if Self::sidebar_provider_kind(&self.config.agent.provider)
+            != Self::sidebar_provider_kind(source_provider)
+        {
+            return;
+        }
+
+        self.config.agent.provider = target_provider.clone();
+        self.active_model_select =
+            Self::make_active_model_select(&self.config, &self.registry, window, cx);
     }
 
     fn oauth_state(&self, provider: &ProviderKind) -> Option<&ProviderOAuthState> {
@@ -824,6 +860,16 @@ impl SettingsPanel {
         (target_presets.len() == 1).then(|| target_presets[0].base_url.to_string())
     }
 
+    fn source_endpoint_is_named_preset(
+        source_provider: &ProviderKind,
+        source_base_url: Option<&str>,
+    ) -> bool {
+        !matches!(
+            Self::endpoint_label_for_base_url(source_provider, source_base_url),
+            ENDPOINT_DEFAULT_LABEL | ENDPOINT_CUSTOM_LABEL
+        )
+    }
+
     fn seed_protocol_variant_config(
         source_provider: &ProviderKind,
         target_provider: &ProviderKind,
@@ -844,16 +890,23 @@ impl SettingsPanel {
         if seeded.max_tokens.is_none() {
             seeded.max_tokens = source.max_tokens;
         }
-        if seeded
+        let target_base_url_is_empty = seeded
             .base_url
             .as_deref()
-            .is_none_or(|value| value.trim().is_empty())
+            .is_none_or(|value| value.trim().is_empty());
+        let mapped_base_url = Self::mapped_protocol_base_url(
+            source_provider,
+            target_provider,
+            source.base_url.as_deref(),
+        );
+        if let Some(mapped_base_url) = mapped_base_url
+            && (target_base_url_is_empty
+                || Self::source_endpoint_is_named_preset(
+                    source_provider,
+                    source.base_url.as_deref(),
+                ))
         {
-            seeded.base_url = Self::mapped_protocol_base_url(
-                source_provider,
-                target_provider,
-                source.base_url.as_deref(),
-            );
+            seeded.base_url = Some(mapped_base_url);
         }
 
         seeded
@@ -916,6 +969,12 @@ impl SettingsPanel {
                                     &target_provider,
                                     Some(ProviderTransport::OpenAI),
                                 );
+                                this.set_active_provider_if_tracking(
+                                    &source_provider,
+                                    &target_provider,
+                                    window,
+                                    cx,
+                                );
                                 this.transition_provider(target_provider, window, cx);
                                 return;
                             }
@@ -974,7 +1033,7 @@ impl SettingsPanel {
 
     fn suggestion_provider_label(provider: Option<&ProviderKind>) -> String {
         provider
-            .map(provider_label)
+            .map(|provider| provider_label(&Self::sidebar_provider_kind(provider)))
             .unwrap_or("Same as active provider")
             .to_string()
     }
@@ -991,12 +1050,13 @@ impl SettingsPanel {
     }
 
     fn effective_suggestion_provider(config: &Config) -> ProviderKind {
-        config
+        let provider = config
             .agent
             .suggestion_model
             .provider
             .clone()
-            .unwrap_or_else(|| config.agent.provider.clone())
+            .unwrap_or_else(|| config.agent.provider.clone());
+        Self::provider_for_saved_transport(config, &provider)
     }
 
     fn provider_options() -> Vec<String> {
@@ -1037,15 +1097,19 @@ impl SettingsPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let mut config = config.clone();
+        let active_provider = Self::provider_for_saved_transport(&config, &config.agent.provider);
+        config.agent.provider = active_provider;
         let agent = &config.agent;
-        let pc = agent.providers.get_or_default(&agent.provider);
+        let selected_provider = Self::provider_for_saved_transport(&config, &agent.provider);
+        let pc = agent.providers.get_or_default(&selected_provider);
         let active_provider_select = Self::make_searchable_string_select(
             &Self::provider_options(),
             provider_label(&Self::sidebar_provider_kind(&agent.provider)),
             window,
             cx,
         );
-        let active_model_select = Self::make_active_model_select(config, &registry, window, cx);
+        let active_model_select = Self::make_active_model_select(&config, &registry, window, cx);
 
         let model_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
@@ -1054,7 +1118,7 @@ impl SettingsPanel {
             s
         });
         let model_select = Self::make_model_select(
-            &agent.provider,
+            &selected_provider,
             &pc.model,
             pc.base_url.as_deref(),
             &registry,
@@ -1062,11 +1126,11 @@ impl SettingsPanel {
             cx,
         );
         let endpoint_preset_select =
-            Self::make_endpoint_preset_select(&agent.provider, &pc.base_url, window, cx);
+            Self::make_endpoint_preset_select(&selected_provider, &pc.base_url, window, cx);
         let api_key_input = cx.new(|cx| {
             let mut s = InputState::new(window, cx);
             s.set_placeholder(
-                Self::provider_api_key_placeholder(&agent.provider),
+                Self::provider_api_key_placeholder(&selected_provider),
                 window,
                 cx,
             );
@@ -1123,11 +1187,11 @@ impl SettingsPanel {
             cx,
         );
         let suggestion_model_select =
-            Self::make_suggestion_model_select(config, &registry, window, cx);
+            Self::make_suggestion_model_select(&config, &registry, window, cx);
         let all_font_families = cx.text_system().all_font_names();
         let terminal_font_families =
-            Self::prepare_terminal_font_families(config, all_font_families.clone());
-        let ui_font_families = Self::prepare_ui_font_families(config, all_font_families);
+            Self::prepare_terminal_font_families(&config, all_font_families.clone());
+        let ui_font_families = Self::prepare_ui_font_families(&config, all_font_families);
         let terminal_font_family = sanitize_terminal_font_family(&config.terminal.font_family);
         let terminal_font_select = Self::make_searchable_string_select(
             &terminal_font_families,
@@ -1334,7 +1398,8 @@ impl SettingsPanel {
             |this, _, ev: &SelectEvent<SearchableVec<String>>, window, cx| {
                 if let SelectEvent::Confirm(Some(value)) = ev {
                     if let Some(provider) = Self::suggestion_provider_from_label(value) {
-                        this.config.agent.provider = provider;
+                        this.config.agent.provider =
+                            Self::provider_for_saved_transport(&this.config, &provider);
                         this.active_model_select = Self::make_active_model_select(
                             &this.config,
                             &this.registry,
@@ -1448,7 +1513,7 @@ impl SettingsPanel {
             focus_handle: cx.focus_handle(),
             active_section: SettingsSection::General,
             overlay_motion: MotionValue::new(0.0),
-            selected_provider: config.agent.provider.clone(),
+            selected_provider,
             active_provider_select,
             active_model_select,
             model_input,
@@ -1540,6 +1605,9 @@ impl SettingsPanel {
     }
 
     fn refresh_controls_from_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.normalize_active_provider_for_saved_transport();
+        self.selected_provider =
+            Self::provider_for_saved_transport(&self.config, &self.selected_provider);
         let agent = &self.config.agent;
         let pc = agent.providers.get_or_default(&self.selected_provider);
         self.load_provider_inputs(&pc, window, cx);
@@ -1582,7 +1650,7 @@ impl SettingsPanel {
             Self::make_suggestion_model_select(&self.config, &self.registry, window, cx);
         self.auto_approve = agent.auto_approve_tools;
         self.model_select = Self::make_model_select(
-            &agent.provider,
+            &self.selected_provider,
             &pc.model,
             pc.base_url.as_deref(),
             &self.registry,
@@ -1590,7 +1658,7 @@ impl SettingsPanel {
             cx,
         );
         self.endpoint_preset_select =
-            Self::make_endpoint_preset_select(&agent.provider, &pc.base_url, window, cx);
+            Self::make_endpoint_preset_select(&self.selected_provider, &pc.base_url, window, cx);
         self.terminal_font_select.update(cx, |select, cx| {
             select.set_selected_value(
                 &sanitize_terminal_font_family(&self.config.terminal.font_family),
@@ -2037,14 +2105,14 @@ impl SettingsPanel {
         }
     }
 
-    fn resolve_provider_api_key(config: &ProviderConfig) -> Result<String, String> {
+    fn resolve_provider_api_key(config: &ProviderConfig) -> Result<Option<String>, String> {
         if let Some(key) = config
             .api_key
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            return Ok(key.to_string());
+            return Ok(Some(key.to_string()));
         }
 
         if let Some(env_name) = config
@@ -2060,12 +2128,12 @@ impl SettingsPanel {
                     if value.is_empty() {
                         Err(format!("Environment variable {env_name} is empty."))
                     } else {
-                        Ok(value)
+                        Ok(Some(value))
                     }
                 });
         }
 
-        Err("Enter an API key, or an environment variable name that contains one.".to_string())
+        Ok(None)
     }
 
     fn fetch_selected_provider_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -2115,7 +2183,8 @@ impl SettingsPanel {
         cx.spawn_in(window, async move |this, window| {
             let result = runtime
                 .spawn(async move {
-                    ModelRegistry::fetch_openai_compatible_models(&base_url, &api_key).await
+                    ModelRegistry::fetch_openai_compatible_models(&base_url, api_key.as_deref())
+                        .await
                 })
                 .await
                 .map_err(|err| anyhow::anyhow!("Model fetch task failed: {err}"))
@@ -2227,6 +2296,7 @@ impl SettingsPanel {
         // Save current provider's per-provider fields into the map
         let pc = self.read_provider_inputs(cx);
         self.config.agent.providers.set(&self.selected_provider, pc);
+        self.normalize_active_provider_for_saved_transport();
 
         // Update global fields
         self.config.agent.max_turns = max_turns_text.parse().unwrap_or(10);
@@ -2236,9 +2306,11 @@ impl SettingsPanel {
             temperature_text.parse().ok()
         };
         self.config.agent.auto_approve_tools = self.auto_approve;
+        let suggestion_provider = Self::suggestion_provider_from_label(&suggestion_provider_label)
+            .map(|provider| Self::provider_for_saved_transport(&self.config, &provider));
         self.config.agent.suggestion_model = SuggestionModelConfig {
             enabled: self.suggestion_enabled,
-            provider: Self::suggestion_provider_from_label(&suggestion_provider_label),
+            provider: suggestion_provider,
             model: if suggestion_model_text.is_empty() {
                 None
             } else {
@@ -2610,6 +2682,7 @@ impl SettingsPanel {
             &target_config,
         );
         self.config.agent.providers.set(&provider, seeded_target);
+        self.set_active_provider_if_tracking(&source_provider, &provider, window, cx);
         self.transition_provider(provider, window, cx);
     }
 
