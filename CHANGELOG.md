@@ -53,6 +53,18 @@ con is still pre-release, so entries may group related beta work while the produ
   [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
   [@wey-gu](https://github.com/wey-gu))_
 
+**Windows and Linux**
+
+- Fixed terminal selection copy semantics on the portable backends:
+  `Ctrl+C` now copies and clears the current selection when text is selected,
+  while still sending interrupt when nothing is selected. The Linux preview
+  also now supports left-drag text selection in the terminal pane. _(Issues
+  [#177](https://github.com/nowledge-co/con-terminal/issues/177),
+  [#18](https://github.com/nowledge-co/con-terminal/issues/18), and
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ## `v0.1.0-beta.68` - 2026-05-09
 
 ### Added

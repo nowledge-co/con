@@ -14,7 +14,7 @@ the recommended architecture, and the staged path from today's
 preview pane to a fully shippable Linux terminal backend (the
 remaining work is the long-term GPUI-owned glyph-atlas grid
 renderer matching the D3D11/DirectWrite path Windows uses, plus
-mouse selection / reporting and packaging).
+mouse reporting and packaging).
 
 This is a planning document, not an implementation log. The live issue
 tracker is GitHub issue #18. The deeper architecture notes live in
@@ -52,6 +52,9 @@ What that gives you:
   per styled span: SGR colors, bold (`FontWeight::BOLD`), italic
   (`FontStyle::Italic`), underline, strikethrough, inverse, and a
   block cursor (fg/bg swap on the cursor cell) all survive
+- terminal text selection with left-drag, `Ctrl+C` copy-and-clear
+  semantics, and `Ctrl+Shift+C` clipboard copy. Plain `Ctrl+C` still
+  sends interrupt when no text is selected.
 - terminal-local Tab / Shift+Tab capture, so shell completion and TUI
   focus/navigation keys reach the Linux pane instead of being swallowed
   by GPUI focus traversal
@@ -93,7 +96,7 @@ What it still does **not** give you:
   a block cursor correctly, but per-cell metrics still come from
   layout-time text shaping rather than a fixed cell grid the way
   the Windows D3D11/DirectWrite path does)
-- validated mouse selection / reporting
+- mouse reporting for terminal apps that request it
 - native packaging artifacts (`.deb`, AppImage, Flatpak, …); the
   current release pipeline already ships a tarball, one-line installer,
   `co.nowledge.con.desktop` launcher identity, icon install, appcast,
@@ -282,7 +285,7 @@ can ship.
 | 2c | Architecture decision | pick Linux backend lane | one recommended implementation path, no split-brain plan | ✅ landed |
 | 3 | Linux backend scaffold | `con-ghostty/src/linux/` plus `con-app/src/linux_view.rs` (or equivalent) with real lifecycle types | Linux no longer routes through the generic stub path conceptually | ✅ landed |
 | 4 | First real terminal surface | PTY spawn, resize, exit, `libghostty-vt` state, GPUI-owned pane paint, real product chrome (no native WM titlebar), embedded mono font, transparent + rounded window with compositor-gated blur | VT-backed Linux pane compiles and displays live shell state with SGR colors / bold / italic / underline / strikethrough / inverse, cursor block, theme palette synced from settings, IoskeleyMono shaping, client-side titlebar with min/max/close caption cluster, transparent ARGB window with rounded corners and per-pane / per-surface opacity, real KWin Wayland blur where available, fast paint pipeline (16 ms keystroke-echo round-trip), no placeholder flash on alt-screen TUIs | ✅ landed (preview) |
-| 5 | Input + selection + glyph-atlas grid renderer | keyboard, mouse, clipboard, bracketed paste, DECCKM, CJK IME text/preedit input, selection, plus the long-term GPUI-owned glyph-atlas grid renderer matching the D3D11/DirectWrite path Windows uses | vim/tmux/fzf/less usable on Linux at full speed | 🚧 in progress (DECCKM, bracketed paste, CJK IME text/preedit input, and terminal-local Tab / Shift+Tab capture are wired; mouse reporting, selection, desktop IME validation matrix, and the glyph-atlas renderer remain) |
+| 5 | Input + selection + glyph-atlas grid renderer | keyboard, mouse, clipboard, bracketed paste, DECCKM, CJK IME text/preedit input, selection, plus the long-term GPUI-owned glyph-atlas grid renderer matching the D3D11/DirectWrite path Windows uses | vim/tmux/fzf/less usable on Linux at full speed | 🚧 in progress (DECCKM, bracketed paste, CJK IME text/preedit input, terminal-local Tab / Shift+Tab capture, and basic left-drag text selection are wired; mouse reporting, scrollback gestures, desktop IME validation matrix, and the glyph-atlas renderer remain) |
 | 6 | Packaging | one-line installer, tarball release, desktop entry, icon integration, appcast / notify-only updater, plus native artifact strategy (`.deb`, AppImage, Flatpak, etc.) | tarball installer exists; runtime Linux app id, desktop-file basename, and `StartupWMClass` are aligned as `co.nowledge.con`; native package format decision remains | 🚧 partially landed |
 
 ## Immediate next work
@@ -303,10 +306,10 @@ With phase 4 landed (preview), the remaining Linux tasks are:
    stay on huge panes (the gap shows up first on `top -d 0.1`-class
    workloads and large command-start redraws).
 2. Finish Linux input correctness: mouse reporting (button + wheel),
-   selection (mouse drag → SGR 1006 / X10 reports + clipboard
-   integration), scrollback gestures, and a real desktop/IME validation
-   matrix across Wayland and X11. DECCKM, bracketed paste, and CJK
-   IME commit/preedit input are already wired through `libghostty-vt`
+   scrollback gestures, drag-to-scroll selection polish, and a real
+   desktop/IME validation matrix across Wayland and X11. DECCKM,
+   bracketed paste, basic left-drag text selection, and CJK IME
+   commit/preedit input are already wired through `libghostty-vt`
    mode tracking plus GPUI's text-input path; Tab / Shift+Tab now use
    a terminal-local key context so shell completion and reverse focus
    traversal are not intercepted by GPUI's app-level focus navigation.

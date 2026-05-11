@@ -1108,6 +1108,19 @@ impl GhosttyView {
             return false;
         }
 
+        // Plain Ctrl+C should copy terminal selection on Windows/Linux when
+        // text is selected; otherwise it must keep its shell meaning (^C).
+        if keystroke.modifiers.control
+            && !keystroke.modifiers.shift
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.platform
+            && keystroke.key == "c"
+            && copy_selection_to_clipboard(terminal, cx)
+        {
+            cx.notify();
+            return true;
+        }
+
         // Ctrl+Shift+C / Ctrl+Shift+V → clipboard. These must run ahead
         // of the generic Ctrl-letter path below, which would otherwise
         // emit ^C / ^V to the shell.
@@ -1118,7 +1131,9 @@ impl GhosttyView {
         {
             match keystroke.key.as_str() {
                 "c" => {
-                    copy_selection_to_clipboard(terminal, cx);
+                    if copy_selection_to_clipboard(terminal, cx) {
+                        cx.notify();
+                    }
                     return true;
                 }
                 "v" => {
@@ -1517,7 +1532,9 @@ impl Render for GhosttyView {
             }))
             .on_action(cx.listener(|this, _: &crate::Copy, _window, cx| {
                 if let Some(terminal) = &this.terminal {
-                    copy_selection_to_clipboard(terminal, cx);
+                    if copy_selection_to_clipboard(terminal, cx) {
+                        cx.notify();
+                    }
                 }
             }))
             .on_action(cx.listener(|this, _: &crate::Paste, _window, cx| {

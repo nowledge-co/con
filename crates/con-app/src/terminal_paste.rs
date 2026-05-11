@@ -53,10 +53,12 @@ pub fn copy_selection_to_clipboard(terminal: &GhosttyTerminal, cx: &mut gpui::Ap
         .selection_text()
         .filter(|selection| !selection.is_empty())
     else {
-        return false;
+        terminal.clear_selection();
+        return true;
     };
 
     cx.write_to_clipboard(ClipboardItem::new_string(selection));
+    terminal.clear_selection();
     true
 }
 
