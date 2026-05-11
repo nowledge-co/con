@@ -42,16 +42,22 @@ impl ConWorkspace {
             .tabs
             .iter()
             .map(|tab| {
-                let cwd = tab
-                    .pane_tree
-                    .try_focused_terminal()
-                    .and_then(|t| t.current_dir(cx));
-                let title = tab
-                    .pane_tree
-                    .try_focused_terminal()
+                let focused_terminal = tab.pane_tree.try_visible_focus_terminal();
+                let terminal = focused_terminal.map(|(_, terminal)| terminal);
+                let cwd = terminal.and_then(|t| t.current_dir(cx));
+                let title = terminal
                     .and_then(|t| t.title(cx))
                     .unwrap_or_else(|| tab.title.clone());
-                let pane_layout = tab.pane_tree.to_state(cx, capture_screen_text);
+                let pane_layout = tab.pane_tree.to_persisted_state(cx, capture_screen_text);
+                let focused_pane_id = focused_terminal
+                    .map(|(pane_id, _)| pane_id)
+                    .or_else(|| {
+                        tab.pane_tree
+                            .pane_terminals()
+                            .first()
+                            .map(|(pane_id, _)| *pane_id)
+                    })
+                    .unwrap_or_else(|| tab.pane_tree.focused_pane_id());
                 let pane_states = tab
                     .pane_tree
                     .pane_terminals()
@@ -79,8 +85,8 @@ impl ConWorkspace {
                 con_core::session::TabState {
                     title,
                     cwd,
-                    layout: Some(pane_layout),
-                    focused_pane_id: Some(tab.pane_tree.focused_pane_id()),
+                    layout: pane_layout,
+                    focused_pane_id: Some(focused_pane_id),
                     panes: pane_states,
                     shell_history,
                     conversation_id: Some(tab.session.conversation_id()),

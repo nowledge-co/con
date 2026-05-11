@@ -536,8 +536,11 @@ impl ConWorkspace {
     ) -> Result<ResolvedPaneTarget, String> {
         let pane_tree = &self.tabs[tab_idx].pane_tree;
         let all_terminals = pane_tree.all_terminals();
-        let focused_pane_id = pane_tree.focused_pane_id();
-        let focused_pane = pane_tree.try_focused_terminal().cloned();
+        let focused_terminal = pane_tree.try_visible_focus_terminal();
+        let focused_pane_id = focused_terminal
+            .map(|(pane_id, _)| pane_id)
+            .unwrap_or_else(|| pane_tree.focused_pane_id());
+        let focused_pane = focused_terminal.map(|(_, terminal)| terminal.clone());
         let focused_pane_index = all_terminals
             .iter()
             .enumerate()
@@ -955,7 +958,10 @@ impl ConWorkspace {
 
         // Determine focused pane's 1-based index and hostname
         let all_terminals = pane_tree.all_terminals();
-        let focused_pid = pane_tree.focused_pane_id();
+        let focused_terminal = pane_tree.try_visible_focus_terminal();
+        let focused_pid = focused_terminal
+            .map(|(pane_id, _)| pane_id)
+            .unwrap_or_else(|| pane_tree.focused_pane_id());
         let focused_pane_index = all_terminals
             .iter()
             .enumerate()
@@ -963,8 +969,8 @@ impl ConWorkspace {
             .map(|(i, _)| i + 1)
             .unwrap_or(1);
 
-        // If there's no terminal pane (editor-only tab), return an empty context
-        let Some(focused) = pane_tree.try_focused_terminal() else {
+        // If there's no terminal pane (editor-only tab), return an empty context.
+        let Some((_, focused)) = focused_terminal else {
             return self.harness.build_context_from_snapshot(
                 focused_pane_index,
                 focused_pid,

@@ -231,14 +231,31 @@ impl EditorView {
     /// Load a file from disk into the editor pane. If the file is already open,
     /// it becomes the active editor tab; otherwise a new editor tab is appended.
     pub fn open_file(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let content = match std::fs::read_to_string(&path) {
-            Ok(content) => content,
-            Err(e) => format!("Error reading file: {e}"),
-        };
-        self.open_file_from_content(path.clone(), content);
-        self.ensure_lsp_for_path(&path);
-        cx.emit(ActiveFileChanged);
-        cx.notify();
+        if let Some(index) = self.tabs.iter().position(|tab| tab.path == path) {
+            self.active_tab = index;
+            self.scroll_handle = UniformListScrollHandle::new();
+            cx.emit(ActiveFileChanged);
+            cx.notify();
+            return;
+        }
+
+        cx.spawn(async move |this, cx| {
+            let path_for_read = path.clone();
+            let content = cx
+                .background_executor()
+                .spawn(async move {
+                    std::fs::read_to_string(&path_for_read)
+                        .unwrap_or_else(|e| format!("Error reading file: {e}"))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.open_file_from_content(path.clone(), content);
+                this.ensure_lsp_for_path(&path);
+                cx.emit(ActiveFileChanged);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Testable core of `open_file` that avoids filesystem/GPUI coupling.

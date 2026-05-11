@@ -143,7 +143,6 @@ actions!(
         CycleInputMode,
         TogglePaneScopePicker,
         ToggleLeftPanel,
-        ToggleEditorArea,
         CheckForUpdates,
         EditorMoveLeft,
         EditorMoveRight,

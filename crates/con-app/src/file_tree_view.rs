@@ -14,10 +14,11 @@
 
 use gpui::{
     Context, EventEmitter, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
-    SharedString, Styled, Window, div, prelude::*, px, svg,
+    SharedString, Styled, Window, div, prelude::*, px, svg, uniform_list,
 };
-use gpui_component::{ActiveTheme, scroll::ScrollableElement};
+use gpui_component::ActiveTheme;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 const ROW_HEIGHT: f32 = 24.0;
 const INDENT_PER_LEVEL: f32 = 12.0;
@@ -42,17 +43,19 @@ impl EventEmitter<OpenFile> for FileTreeView {}
 
 pub struct FileTreeView {
     root: Option<PathBuf>,
-    entries: Vec<FileEntry>,
+    entries: Arc<Vec<FileEntry>>,
     /// Path of the currently open file (highlighted row).
     active_path: Option<PathBuf>,
+    load_generation: u64,
 }
 
 impl FileTreeView {
     pub fn new() -> Self {
         Self {
             root: None,
-            entries: Vec::new(),
+            entries: Arc::new(Vec::new()),
             active_path: None,
+            load_generation: 0,
         }
     }
 
@@ -61,9 +64,12 @@ impl FileTreeView {
         if self.root.as_deref() == Some(root.as_path()) {
             return;
         }
+        self.load_generation = self.load_generation.wrapping_add(1);
+        let generation = self.load_generation;
         self.root = Some(root.clone());
-        self.entries = build_root_entries(&root);
+        self.entries = Arc::new(root_placeholder_entry(&root));
         cx.notify();
+        Self::spawn_root_load(root, generation, cx);
     }
 
     pub fn set_active_path(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
@@ -82,7 +88,8 @@ impl FileTreeView {
         let Some(idx) = self.entries.iter().position(|e| e.path == path) else {
             return;
         };
-        let entry = &mut self.entries[idx];
+        let entries = Arc::make_mut(&mut self.entries);
+        let entry = &mut entries[idx];
         if !entry.is_dir {
             return;
         }
@@ -91,23 +98,59 @@ impl FileTreeView {
         let depth = entry.depth;
 
         if expanded {
-            // Insert children after this entry.
-            let children = build_entries(path, depth + 1, false);
-            let insert_at = idx + 1;
-            for (i, child) in children.into_iter().enumerate() {
-                self.entries.insert(insert_at + i, child);
-            }
+            let path = path.to_path_buf();
+            let generation = self.load_generation;
+            Self::spawn_children_load(path, depth, generation, cx);
         } else {
-            // Remove all descendants (depth > current depth).
-            let remove_start = idx + 1;
-            let remove_end = self.entries[remove_start..]
-                .iter()
-                .position(|e| e.depth <= depth)
-                .map(|rel| remove_start + rel)
-                .unwrap_or(self.entries.len());
-            self.entries.drain(remove_start..remove_end);
+            remove_descendants(entries, idx);
         }
         cx.notify();
+    }
+
+    fn spawn_root_load(root: PathBuf, generation: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let root_for_load = root.clone();
+            let entries = cx
+                .background_executor()
+                .spawn(async move { build_root_entries(&root_for_load) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.load_generation == generation
+                    && this.root.as_deref() == Some(root.as_path())
+                {
+                    this.entries = Arc::new(entries);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn spawn_children_load(path: PathBuf, depth: usize, generation: u64, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let path_for_load = path.clone();
+            let children = cx
+                .background_executor()
+                .spawn(async move { build_entries(&path_for_load, depth + 1, false) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.load_generation != generation {
+                    return;
+                }
+                let Some(idx) = this.entries.iter().position(|entry| entry.path == path) else {
+                    return;
+                };
+                if !this.entries[idx].is_expanded {
+                    return;
+                }
+                let entries = Arc::make_mut(&mut this.entries);
+                remove_descendants(entries, idx);
+                let insert_at = idx + 1;
+                entries.splice(insert_at..insert_at, children);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 }
 
@@ -115,19 +158,34 @@ impl FileTreeView {
 /// an expanded directory so the sidebar has a clear parent label and can be
 /// collapsed/expanded like any other folder.
 fn build_root_entries(root: &Path) -> Vec<FileEntry> {
+    let mut entries = root_placeholder_entry(root);
+    entries.extend(build_entries(root, 1, false));
+    entries
+}
+
+fn root_placeholder_entry(root: &Path) -> Vec<FileEntry> {
     let name = root
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| root.display().to_string());
-    let mut entries = vec![FileEntry {
+    vec![FileEntry {
         path: root.to_path_buf(),
         name,
         depth: 0,
         is_dir: true,
         is_expanded: true,
-    }];
-    entries.extend(build_entries(root, 1, false));
-    entries
+    }]
+}
+
+fn remove_descendants(entries: &mut Vec<FileEntry>, parent_index: usize) {
+    let depth = entries[parent_index].depth;
+    let remove_start = parent_index + 1;
+    let remove_end = entries[remove_start..]
+        .iter()
+        .position(|entry| entry.depth <= depth)
+        .map(|rel| remove_start + rel)
+        .unwrap_or(entries.len());
+    entries.drain(remove_start..remove_end);
 }
 
 /// Build a flat entry list for `dir` at `depth`. Only one level deep
@@ -196,123 +254,129 @@ impl Render for FileTreeView {
         let accent_bg = theme.primary.opacity(0.10);
         let hover_bg = theme.muted.opacity(0.08);
 
-        let rows: Vec<_> = self
-            .entries
-            .iter()
-            .enumerate()
-            .map(|(idx, entry)| {
-                let path = entry.path.clone();
-                let name: SharedString = entry.name.clone().into();
-                let depth = entry.depth;
-                let is_dir = entry.is_dir;
-                let is_expanded = entry.is_expanded;
-                let is_active = active_path.as_deref() == Some(entry.path.as_path());
+        let entries = self.entries.clone();
+        let entry_count = entries.len();
+        let weak = cx.weak_entity();
+        let list_theme = theme.clone();
+        let list = uniform_list("file-tree-rows", entry_count, move |range, _window, _cx| {
+            range
+                .map(|idx| {
+                    let entry = &entries[idx];
+                    let path = entry.path.clone();
+                    let name: SharedString = entry.name.clone().into();
+                    let depth = entry.depth;
+                    let is_dir = entry.is_dir;
+                    let is_expanded = entry.is_expanded;
+                    let is_active = active_path.as_deref() == Some(entry.path.as_path());
 
-                let indent = INDENT_PER_LEVEL * depth as f32 + 8.0;
+                    let indent = INDENT_PER_LEVEL * depth as f32 + 8.0;
 
-                let disclosure_icon = if is_dir {
-                    Some(if is_expanded {
-                        "phosphor/caret-down.svg"
-                    } else {
-                        "phosphor/caret-right.svg"
-                    })
-                } else {
-                    None
-                };
-
-                let icon = if is_dir {
-                    if is_expanded {
-                        "phosphor/folder-open.svg"
-                    } else {
-                        "phosphor/folder.svg"
-                    }
-                } else {
-                    "phosphor/file-text.svg"
-                };
-
-                let icon_color = if is_dir {
-                    theme.primary.opacity(0.75)
-                } else {
-                    theme.muted_foreground.opacity(0.80)
-                };
-
-                let text_color = if is_active {
-                    theme.foreground
-                } else {
-                    theme.foreground.opacity(0.85)
-                };
-
-                let row_bg = if is_active {
-                    accent_bg
-                } else {
-                    theme.transparent
-                };
-
-                div()
-                    .id(("file-row", idx))
-                    .h(px(ROW_HEIGHT))
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .pl(px(indent))
-                    .gap(px(5.0))
-                    .bg(row_bg)
-                    .cursor_pointer()
-                    .hover(move |s| {
-                        if is_active {
-                            s.bg(accent_bg)
+                    let disclosure_icon = if is_dir {
+                        Some(if is_expanded {
+                            "phosphor/caret-down.svg"
                         } else {
-                            s.bg(hover_bg)
-                        }
-                    })
-                    .child(if let Some(disclosure_icon) = disclosure_icon {
-                        svg()
-                            .path(disclosure_icon)
-                            .size(px(10.0))
-                            .flex_shrink_0()
-                            .text_color(theme.muted_foreground.opacity(0.62))
-                            .into_any_element()
+                            "phosphor/caret-right.svg"
+                        })
                     } else {
-                        div().w(px(10.0)).flex_shrink_0().into_any_element()
-                    })
-                    .child(
-                        svg()
-                            .path(icon)
-                            .size(px(ICON_SIZE))
-                            .flex_shrink_0()
-                            .text_color(icon_color),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(px(12.0))
-                            .text_color(text_color)
-                            .font_family(theme.font_family.clone())
-                            .child(name),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _: &MouseDownEvent, _window, cx| {
-                            if is_dir {
-                                this.toggle_dir(&path, cx);
+                        None
+                    };
+
+                    let icon = if is_dir {
+                        if is_expanded {
+                            "phosphor/folder-open.svg"
+                        } else {
+                            "phosphor/folder.svg"
+                        }
+                    } else {
+                        "phosphor/file-text.svg"
+                    };
+
+                    let icon_color = if is_dir {
+                        list_theme.primary.opacity(0.75)
+                    } else {
+                        list_theme.muted_foreground.opacity(0.80)
+                    };
+
+                    let text_color = if is_active {
+                        list_theme.foreground
+                    } else {
+                        list_theme.foreground.opacity(0.85)
+                    };
+
+                    let row_bg = if is_active {
+                        accent_bg
+                    } else {
+                        list_theme.transparent
+                    };
+
+                    let weak = weak.clone();
+                    div()
+                        .id(("file-row", idx))
+                        .h(px(ROW_HEIGHT))
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .pl(px(indent))
+                        .gap(px(5.0))
+                        .bg(row_bg)
+                        .cursor_pointer()
+                        .hover(move |s| {
+                            if is_active {
+                                s.bg(accent_bg)
                             } else {
-                                cx.emit(OpenFile { path: path.clone() });
+                                s.bg(hover_bg)
                             }
-                        }),
-                    )
-                    .into_any_element()
-            })
-            .collect();
+                        })
+                        .child(if let Some(disclosure_icon) = disclosure_icon {
+                            svg()
+                                .path(disclosure_icon)
+                                .size(px(10.0))
+                                .flex_shrink_0()
+                                .text_color(list_theme.muted_foreground.opacity(0.62))
+                                .into_any_element()
+                        } else {
+                            div().w(px(10.0)).flex_shrink_0().into_any_element()
+                        })
+                        .child(
+                            svg()
+                                .path(icon)
+                                .size(px(ICON_SIZE))
+                                .flex_shrink_0()
+                                .text_color(icon_color),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(12.0))
+                                .text_color(text_color)
+                                .font_family(list_theme.font_family.clone())
+                                .child(name),
+                        )
+                        .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, _window, cx| {
+                            if let Some(view) = weak.upgrade() {
+                                view.update(cx, |this, cx| {
+                                    if is_dir {
+                                        this.toggle_dir(&path, cx);
+                                    } else {
+                                        cx.emit(OpenFile { path: path.clone() });
+                                    }
+                                });
+                            }
+                        })
+                        .into_any_element()
+                })
+                .collect()
+        })
+        .flex_1();
 
         div()
             .id("file-tree")
             .size_full()
-            .overflow_y_scrollbar()
             .flex()
             .flex_col()
-            .children(rows)
+            .child(list)
             .into_any_element()
     }
 }
@@ -337,6 +401,16 @@ mod tests {
         root
     }
 
+    fn temp_ordered_tree() -> PathBuf {
+        let root = temp_tree();
+        fs::create_dir_all(root.join("Alpha")).unwrap();
+        fs::create_dir_all(root.join("beta")).unwrap();
+        fs::write(root.join("zeta.txt"), "z").unwrap();
+        fs::write(root.join("apple.txt"), "a").unwrap();
+        fs::write(root.join(".hidden"), "hidden").unwrap();
+        root
+    }
+
     #[test]
     fn root_directory_is_rendered_as_first_expanded_entry() {
         let root = temp_tree();
@@ -356,5 +430,71 @@ mod tests {
         assert!(entries.iter().skip(1).all(|entry| entry.depth == 1));
         assert!(entries.iter().any(|entry| entry.name == "src"));
         assert!(entries.iter().any(|entry| entry.name == "README.md"));
+    }
+
+    #[test]
+    fn build_entries_filters_hidden_entries() {
+        let root = temp_ordered_tree();
+        let entries = build_entries(&root, 1, false);
+
+        assert!(!entries.iter().any(|entry| entry.name.starts_with('.')));
+    }
+
+    #[test]
+    fn build_entries_sorts_dirs_first_then_files_case_insensitively() {
+        let root = temp_ordered_tree();
+        let entries = build_entries(&root, 1, false);
+        let names = entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            names,
+            vec!["Alpha", "beta", "src", "apple.txt", "README.md", "zeta.txt"]
+        );
+    }
+
+    #[test]
+    fn remove_descendants_drops_nested_rows_until_next_sibling() {
+        let root = PathBuf::from("/tmp/project");
+        let src = root.join("src");
+        let sibling = root.join("README.md");
+        let mut entries = vec![
+            FileEntry {
+                path: root.clone(),
+                name: "project".to_string(),
+                depth: 0,
+                is_dir: true,
+                is_expanded: true,
+            },
+            FileEntry {
+                path: src.clone(),
+                name: "src".to_string(),
+                depth: 1,
+                is_dir: true,
+                is_expanded: true,
+            },
+            FileEntry {
+                path: src.join("main.rs"),
+                name: "main.rs".to_string(),
+                depth: 2,
+                is_dir: false,
+                is_expanded: false,
+            },
+            FileEntry {
+                path: sibling.clone(),
+                name: "README.md".to_string(),
+                depth: 1,
+                is_dir: false,
+                is_expanded: false,
+            },
+        ];
+
+        remove_descendants(&mut entries, 1);
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[1].path, src);
+        assert_eq!(entries[2].path, sibling);
     }
 }

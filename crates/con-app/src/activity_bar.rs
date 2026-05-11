@@ -13,10 +13,12 @@
 //! - Surface separation via bg opacity, no borders.
 
 use gpui::{
-    App, Context, EventEmitter, IntoElement, MouseButton, MouseDownEvent, ParentElement, Render,
-    Styled, Window, div, prelude::*, px, svg,
+    Context, EventEmitter, IntoElement, ParentElement, Render, Styled, Window, div, prelude::*, px,
 };
-use gpui_component::ActiveTheme;
+use gpui_component::{
+    ActiveTheme, Icon, Sizable as _,
+    button::{Button, ButtonVariants as _},
+};
 
 pub const ACTIVITY_BAR_WIDTH: f32 = 40.0;
 
@@ -104,7 +106,7 @@ impl Render for ActivityBar {
                 "phosphor/folder-open.svg",
                 active_slot == ActivitySlot::Files,
                 theme,
-                cx.listener(|this, _: &MouseDownEvent, _window, cx| {
+                cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
                     this.set_slot(ActivitySlot::Files, cx);
                 }),
             ))
@@ -113,7 +115,7 @@ impl Render for ActivityBar {
                 "phosphor/magnifying-glass.svg",
                 active_slot == ActivitySlot::Search,
                 theme,
-                cx.listener(|this, _: &MouseDownEvent, _window, cx| {
+                cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
                     this.set_slot(ActivitySlot::Search, cx);
                 }),
             ))
@@ -128,7 +130,7 @@ fn activity_slot_button<F>(
     handler: F,
 ) -> impl IntoElement
 where
-    F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
+    F: Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
 {
     let icon_color = if active {
         theme.primary
@@ -136,16 +138,13 @@ where
         theme.muted_foreground
     };
     let hover_bg = theme.muted.opacity(0.10);
-
-    div()
-        .id(id)
-        .size(px(32.0))
-        .flex()
-        .items_center()
-        .justify_center()
+    Button::new(id)
+        .icon(Icon::default().path(icon))
+        .ghost()
+        .text_color(icon_color)
         .rounded(px(6.0))
+        .with_size(px(32.0))
         .cursor_pointer()
         .hover(move |s| s.bg(hover_bg))
-        .child(svg().path(icon).size(px(16.0)).text_color(icon_color))
-        .on_mouse_down(MouseButton::Left, handler)
+        .on_click(handler)
 }

@@ -300,6 +300,20 @@ impl PaneTree {
     }
 
     pub fn to_state(&self, cx: &App, capture_screen_text: bool) -> PaneLayoutState {
+        self.to_persisted_state(cx, capture_screen_text)
+            .unwrap_or_else(|| PaneLayoutState::Leaf {
+                pane_id: self.focused_pane_id,
+                cwd: None,
+                active_surface_id: None,
+                surfaces: Vec::new(),
+            })
+    }
+
+    pub fn to_persisted_state(
+        &self,
+        cx: &App,
+        capture_screen_text: bool,
+    ) -> Option<PaneLayoutState> {
         Self::node_to_state(&self.root, cx, capture_screen_text)
     }
 
@@ -792,17 +806,18 @@ impl PaneTree {
 
     /// Terminal that should receive app-level focus when returning from UI.
     /// While zoomed, only the zoomed pane is visible, so focus that pane.
-    pub fn visible_focus_terminal(&self) -> (PaneId, &TerminalPane) {
+    pub fn try_visible_focus_terminal(&self) -> Option<(PaneId, &TerminalPane)> {
         if let Some(zoomed_id) = self.zoomed_pane_id {
             if let Some(terminal) = Self::find_terminal(&self.root, zoomed_id) {
-                return (zoomed_id, terminal);
+                return Some((zoomed_id, terminal));
             }
         }
 
-        (
-            Self::first_pane_id(&self.root),
-            Self::first_terminal(&self.root),
-        )
+        if let Some(terminal) = Self::find_terminal(&self.root, self.focused_pane_id) {
+            return Some((self.focused_pane_id, terminal));
+        }
+
+        Self::try_first_terminal_with_id(&self.root)
     }
 
     /// Update focused pane based on which terminal currently has window focus.
@@ -1111,6 +1126,19 @@ impl PaneTree {
 
     fn first_terminal(node: &PaneNode) -> &TerminalPane {
         Self::try_first_terminal(node).expect("pane tree must have at least one terminal")
+    }
+
+    fn try_first_terminal_with_id(node: &PaneNode) -> Option<(PaneId, &TerminalPane)> {
+        match node {
+            PaneNode::Leaf {
+                content: PaneContent::Terminal { surfaces, .. },
+                id,
+                ..
+            } => surfaces.first().map(|s| (*id, &s.terminal)),
+            PaneNode::Leaf { .. } => None,
+            PaneNode::Split { first, second, .. } => Self::try_first_terminal_with_id(first)
+                .or_else(|| Self::try_first_terminal_with_id(second)),
+        }
     }
 
     fn try_first_terminal(node: &PaneNode) -> Option<&TerminalPane> {
@@ -2883,7 +2911,11 @@ impl PaneTree {
             .or_else(|| surfaces.first())
     }
 
-    fn node_to_state(node: &PaneNode, cx: &App, capture_screen_text: bool) -> PaneLayoutState {
+    fn node_to_state(
+        node: &PaneNode,
+        cx: &App,
+        capture_screen_text: bool,
+    ) -> Option<PaneLayoutState> {
         match node {
             PaneNode::Leaf {
                 id,
@@ -2918,35 +2950,38 @@ impl PaneTree {
                     .or_else(|| surface_states.first())
                     .and_then(|surface| surface.cwd.clone());
 
-                PaneLayoutState::Leaf {
+                Some(PaneLayoutState::Leaf {
                     pane_id: *id,
                     cwd,
                     active_surface_id: Some(*active_surface_id),
                     surfaces: surface_states,
-                }
+                })
             }
             // Editor panes are not persisted to session state (Phase 1).
-            PaneNode::Leaf { id, .. } => PaneLayoutState::Leaf {
-                pane_id: *id,
-                cwd: None,
-                active_surface_id: None,
-                surfaces: Vec::new(),
-            },
+            PaneNode::Leaf { .. } => None,
             PaneNode::Split {
                 direction,
                 ratio,
                 first,
                 second,
                 ..
-            } => PaneLayoutState::Split {
-                direction: match direction {
-                    SplitDirection::Horizontal => PaneSplitDirection::Horizontal,
-                    SplitDirection::Vertical => PaneSplitDirection::Vertical,
-                },
-                ratio: *ratio,
-                first: Box::new(Self::node_to_state(first, cx, capture_screen_text)),
-                second: Box::new(Self::node_to_state(second, cx, capture_screen_text)),
-            },
+            } => {
+                let first = Self::node_to_state(first, cx, capture_screen_text);
+                let second = Self::node_to_state(second, cx, capture_screen_text);
+                match (first, second) {
+                    (Some(first), Some(second)) => Some(PaneLayoutState::Split {
+                        direction: match direction {
+                            SplitDirection::Horizontal => PaneSplitDirection::Horizontal,
+                            SplitDirection::Vertical => PaneSplitDirection::Vertical,
+                        },
+                        ratio: *ratio,
+                        first: Box::new(first),
+                        second: Box::new(second),
+                    }),
+                    (Some(only), None) | (None, Some(only)) => Some(only),
+                    (None, None) => None,
+                }
+            }
         }
     }
 

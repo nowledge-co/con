@@ -93,7 +93,10 @@ impl ConWorkspace {
         self.pane_scope_picker_open = false;
         let (pane_id, terminal) = {
             let pane_tree = &self.tabs[self.active_tab].pane_tree;
-            let (pane_id, terminal) = pane_tree.visible_focus_terminal();
+            let Some((pane_id, terminal)) = pane_tree.try_visible_focus_terminal() else {
+                self.focus_active_editor_or_workspace(window, cx);
+                return;
+            };
             (pane_id, terminal.clone())
         };
         self.tabs[self.active_tab].pane_tree.focus(pane_id);

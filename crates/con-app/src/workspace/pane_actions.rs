@@ -76,11 +76,11 @@ impl ConWorkspace {
         }
 
         let tab_idx = self.active_tab;
-        let pane_id = self.tabs[tab_idx].pane_tree.focused_pane_id();
-        let cwd = self.tabs[tab_idx]
-            .pane_tree
-            .try_focused_terminal()
-            .and_then(|t| t.current_dir(cx));
+        let focused_terminal = self.tabs[tab_idx].pane_tree.try_visible_focus_terminal();
+        let pane_id = focused_terminal
+            .map(|(pane_id, _)| pane_id)
+            .unwrap_or_else(|| self.tabs[tab_idx].pane_tree.focused_pane_id());
+        let cwd = focused_terminal.and_then(|(_, terminal)| terminal.current_dir(cx));
         let terminal = self.create_terminal(cwd.as_deref(), window, cx);
         let next_surface_index = self.tabs[tab_idx]
             .pane_tree

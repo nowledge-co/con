@@ -644,7 +644,9 @@ impl ConWorkspace {
         }
 
         // Serialize the current pane tree layout (with cwd for every pane).
-        let layout = self.tabs[index].pane_tree.to_state(cx, false);
+        let Some(layout) = self.tabs[index].pane_tree.to_persisted_state(cx, false) else {
+            return;
+        };
         let focused_pane_id = Some(self.tabs[index].pane_tree.focused_pane_id());
 
         // Rebuild the pane tree from the serialized layout, spawning a fresh
