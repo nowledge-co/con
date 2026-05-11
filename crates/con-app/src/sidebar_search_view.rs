@@ -635,11 +635,15 @@ fn empty_state(text: &'static str, theme: &gpui_component::Theme) -> Div {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    static SEARCH_TEST_ID: AtomicU64 = AtomicU64::new(0);
+
     fn temp_search_tree() -> PathBuf {
+        let id = SEARCH_TEST_ID.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
-            "con-sidebar-search-test-{}",
+            "con-sidebar-search-test-{}-{id}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()

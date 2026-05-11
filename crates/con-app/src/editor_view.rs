@@ -1342,6 +1342,7 @@ impl Render for EditorView {
             .bg(theme.background)
             .cursor(CursorStyle::IBeam)
             .track_focus(&self.focus_handle)
+            .key_context("EditorView")
             .on_children_prepainted(move |bounds_list, _window, cx| {
                 let Some(bounds) = bounds_list.get(1).copied() else {
                     return;
@@ -1538,6 +1539,13 @@ mod tests {
             line_end.contains("tab.buffer.move_end()"),
             "ctrl-e must clear any active selection"
         );
+    }
+
+    #[test]
+    fn editor_root_declares_editor_key_context() {
+        let source = include_str!("editor_view.rs");
+
+        assert!(source.contains(".key_context(\"EditorView\")"));
     }
 
     #[test]
