@@ -5901,7 +5901,7 @@ fn keybinding_conflict_message(kb: &con_core::config::KeybindingConfig) -> Optio
 }
 
 fn reserved_keybinding_shortcuts() -> Vec<(&'static str, &'static str)> {
-    let mut shortcuts = vec![
+    let shortcuts = vec![
         ("Select Tab 1", "secondary-1"),
         ("Select Tab 2", "secondary-2"),
         ("Select Tab 3", "secondary-3"),
@@ -5914,15 +5914,20 @@ fn reserved_keybinding_shortcuts() -> Vec<(&'static str, &'static str)> {
     ];
 
     #[cfg(target_os = "macos")]
-    shortcuts.extend([
-        ("Hide Con", "cmd-h"),
-        ("Hide Other Apps", "cmd-alt-h"),
-        ("Show All Apps", "cmd-alt-shift-h"),
-        ("Next Window", "cmd-`"),
-        ("Previous Window", "cmd-shift-`"),
-        ("Minimize Window", "cmd-m"),
-    ]);
+    {
+        let mut shortcuts = shortcuts;
+        shortcuts.extend([
+            ("Hide Con", "cmd-h"),
+            ("Hide Other Apps", "cmd-alt-h"),
+            ("Show All Apps", "cmd-alt-shift-h"),
+            ("Next Window", "cmd-`"),
+            ("Previous Window", "cmd-shift-`"),
+            ("Minimize Window", "cmd-m"),
+        ]);
+        shortcuts
+    }
 
+    #[cfg(not(target_os = "macos"))]
     shortcuts
 }
 
