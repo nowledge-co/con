@@ -70,7 +70,7 @@ impl EditorBuffer {
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn set_cursor(&mut self, row: usize, column: usize) {
         let row = row.min(self.lines.len().saturating_sub(1));
-        let column = column.min(self.lines[row].len());
+        let column = clamp_to_char_boundary(&self.lines[row], column.min(self.lines[row].len()));
         self.cursor = CursorPosition::new(row, column);
         self.clear_selection();
     }
@@ -132,8 +132,9 @@ impl EditorBuffer {
         if self.cursor.column > 0 {
             let row = self.cursor.row;
             let column = self.cursor.column;
-            self.lines[row].remove(column - 1);
-            self.cursor.column -= 1;
+            let previous = previous_char_start(&self.lines[row], column).unwrap_or(0);
+            self.lines[row].replace_range(previous..column, "");
+            self.cursor.column = previous;
             self.dirty = true;
             self.bump_revision();
             return;
@@ -332,7 +333,7 @@ impl EditorBuffer {
 
     fn move_right_raw(&mut self) {
         if self.cursor.column < self.lines[self.cursor.row].len() {
-            self.cursor.column += 1;
+            self.cursor.column = next_char_end(&self.lines[self.cursor.row], self.cursor.column);
         } else if self.cursor.row + 1 < self.lines.len() {
             self.cursor.row += 1;
             self.cursor.column = 0;
@@ -341,7 +342,8 @@ impl EditorBuffer {
 
     fn move_left_raw(&mut self) {
         if self.cursor.column > 0 {
-            self.cursor.column -= 1;
+            self.cursor.column =
+                previous_char_start(&self.lines[self.cursor.row], self.cursor.column).unwrap_or(0);
         } else if self.cursor.row > 0 {
             self.cursor.row -= 1;
             self.cursor.column = self.lines[self.cursor.row].len();
@@ -353,7 +355,10 @@ impl EditorBuffer {
             return;
         }
         self.cursor.row -= 1;
-        self.cursor.column = self.cursor.column.min(self.lines[self.cursor.row].len());
+        self.cursor.column = clamp_to_char_boundary(
+            &self.lines[self.cursor.row],
+            self.cursor.column.min(self.lines[self.cursor.row].len()),
+        );
     }
 
     fn move_down_raw(&mut self) {
@@ -361,7 +366,10 @@ impl EditorBuffer {
             return;
         }
         self.cursor.row += 1;
-        self.cursor.column = self.cursor.column.min(self.lines[self.cursor.row].len());
+        self.cursor.column = clamp_to_char_boundary(
+            &self.lines[self.cursor.row],
+            self.cursor.column.min(self.lines[self.cursor.row].len()),
+        );
     }
 
     fn move_selecting(&mut self, move_cursor: fn(&mut Self)) {
@@ -389,7 +397,10 @@ impl EditorBuffer {
 
     fn clamp_position(&self, position: CursorPosition) -> CursorPosition {
         let row = position.row.min(self.lines.len().saturating_sub(1));
-        CursorPosition::new(row, position.column.min(self.lines[row].len()))
+        CursorPosition::new(
+            row,
+            clamp_to_char_boundary(&self.lines[row], position.column.min(self.lines[row].len())),
+        )
     }
 
     fn text_in_range(&self, start: CursorPosition, end: CursorPosition) -> String {
@@ -578,6 +589,36 @@ mod tests {
         buffer.move_down();
 
         assert_eq!(buffer.cursor(), CursorPosition::new(1, 2));
+    }
+
+    #[test]
+    fn horizontal_movement_keeps_cursor_on_utf8_boundaries() {
+        let mut buffer = EditorBuffer::from_text("éx");
+
+        buffer.move_right();
+        assert_eq!(buffer.cursor(), CursorPosition::new(0, "é".len()));
+
+        buffer.insert_text("!");
+        assert_eq!(buffer.text(), "é!x");
+
+        buffer.move_left();
+        assert_eq!(buffer.cursor(), CursorPosition::new(0, "é".len()));
+        buffer.delete_backward();
+
+        assert_eq!(buffer.text(), "!x");
+        assert_eq!(buffer.cursor(), CursorPosition::new(0, 0));
+    }
+
+    #[test]
+    fn vertical_movement_clamps_to_utf8_boundary() {
+        let mut buffer = EditorBuffer::from_text("ab\né");
+
+        buffer.set_cursor(0, 1);
+        buffer.move_down();
+        assert!(buffer.lines()[1].is_char_boundary(buffer.cursor().column));
+
+        buffer.insert_text("!");
+        assert_eq!(buffer.text(), "ab\n!é");
     }
 
     #[test]

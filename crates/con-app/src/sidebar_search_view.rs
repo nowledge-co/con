@@ -98,6 +98,8 @@ pub struct SidebarSearchView {
     query_text: String,
     options: SearchOptions,
     results: Vec<SearchMatch>,
+    search_generation: u64,
+    search_in_progress: bool,
 }
 
 impl SidebarSearchView {
@@ -115,6 +117,8 @@ impl SidebarSearchView {
             query_text: String::new(),
             options: SearchOptions::default(),
             results: Vec::new(),
+            search_generation: 0,
+            search_in_progress: false,
         }
     }
 
@@ -123,29 +127,60 @@ impl SidebarSearchView {
             return;
         }
         self.root = Some(root);
-        self.refresh_results(cx);
+        self.request_search(cx);
     }
 
-    fn refresh_results(&mut self, cx: &mut Context<Self>) {
-        self.update_results();
-        cx.notify();
-    }
-
-    fn update_results(&mut self) {
-        self.results = match self.root.as_deref() {
-            Some(root) => search_files(root, &self.query_text, self.options),
-            None => Vec::new(),
+    fn request_search(&mut self, cx: &mut Context<Self>) {
+        self.search_generation = self.search_generation.wrapping_add(1);
+        let generation = self.search_generation;
+        let Some(root) = self.root.clone() else {
+            self.results.clear();
+            self.search_in_progress = false;
+            cx.notify();
+            return;
         };
+        let query = self.query_text.clone();
+        if query.trim().is_empty() {
+            self.results.clear();
+            self.search_in_progress = false;
+            cx.notify();
+            return;
+        }
+
+        let options = self.options;
+        self.results.clear();
+        self.search_in_progress = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let root_for_search = root.clone();
+            let query_for_search = query.clone();
+            let results = cx
+                .background_executor()
+                .spawn(async move { search_files(&root_for_search, &query_for_search, options) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.search_generation == generation
+                    && this.root.as_deref() == Some(root.as_path())
+                    && this.query_text == query
+                    && this.options == options
+                {
+                    this.results = results;
+                    this.search_in_progress = false;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn toggle_case_sensitive(&mut self, cx: &mut Context<Self>) {
         self.options.case_sensitive = !self.options.case_sensitive;
-        self.refresh_results(cx);
+        self.request_search(cx);
     }
 
     fn toggle_regex(&mut self, cx: &mut Context<Self>) {
         self.options.regex = !self.options.regex;
-        self.refresh_results(cx);
+        self.request_search(cx);
     }
 }
 
@@ -226,13 +261,13 @@ fn search_file(path: &Path, matcher: &SearchMatcher, results: &mut Vec<SearchMat
 
 impl Render for SidebarSearchView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
         let next_query = self.query.read(cx).value().to_string();
         if next_query != self.query_text {
             self.query_text = next_query;
-            self.update_results();
+            self.request_search(cx);
         }
 
+        let theme = cx.theme();
         let root = self.root.clone();
         let query_empty = self.query_text.trim().is_empty();
         let results = self.results.clone();
@@ -251,6 +286,12 @@ impl Render for SidebarSearchView {
             rows.push(
                 empty_state("Search files", theme)
                     .id("search-empty-query")
+                    .into_any_element(),
+            );
+        } else if self.search_in_progress {
+            rows.push(
+                empty_state("Searching...", theme)
+                    .id("search-in-progress")
                     .into_any_element(),
             );
         } else if results.is_empty() {
