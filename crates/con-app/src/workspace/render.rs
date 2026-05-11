@@ -303,17 +303,12 @@ impl Render for ConWorkspace {
         #[cfg(target_os = "macos")]
         let (top_chrome_snap_guard_active, top_chrome_snap_guard_expired) =
             Self::snap_guard_state(&mut self.top_chrome_snap_guard_until, window);
-        #[cfg(target_os = "macos")]
-        let (sidebar_snap_guard_active, sidebar_snap_guard_expired) =
-            Self::snap_guard_state(&mut self.sidebar_snap_guard_until, window);
         #[cfg(not(target_os = "macos"))]
         let agent_panel_snap_guard_active = false;
         #[cfg(not(target_os = "macos"))]
         let input_bar_snap_guard_active = false;
         #[cfg(not(target_os = "macos"))]
         let top_chrome_snap_guard_active = false;
-        #[cfg(not(target_os = "macos"))]
-        let sidebar_snap_guard_active = false;
         #[cfg(target_os = "macos")]
         {
             let release_cover = Duration::from_millis(CHROME_RELEASE_COVER_MS);
@@ -326,12 +321,6 @@ impl Render for ConWorkspace {
             if top_chrome_snap_guard_expired && !self.horizontal_tabs_visible() {
                 Self::extend_guard(&mut self.top_chrome_release_cover_until, release_cover);
             }
-            if sidebar_snap_guard_expired && !self.vertical_tabs_active() {
-                self.sidebar_release_cover_width = self
-                    .sidebar_release_cover_width
-                    .max(self.sidebar_snap_guard_width);
-                Self::extend_guard(&mut self.sidebar_release_cover_until, release_cover);
-            }
         }
         #[cfg(target_os = "macos")]
         let agent_panel_release_cover_active =
@@ -342,20 +331,12 @@ impl Render for ConWorkspace {
         #[cfg(target_os = "macos")]
         let top_chrome_release_cover_active =
             Self::snap_guard_active(&mut self.top_chrome_release_cover_until, window);
-        #[cfg(target_os = "macos")]
-        let sidebar_release_cover_active =
-            Self::snap_guard_active(&mut self.sidebar_release_cover_until, window);
         #[cfg(not(target_os = "macos"))]
         let agent_panel_release_cover_active = false;
         #[cfg(not(target_os = "macos"))]
         let input_bar_release_cover_active = false;
         #[cfg(not(target_os = "macos"))]
         let top_chrome_release_cover_active = false;
-        #[cfg(target_os = "macos")]
-        if !sidebar_snap_guard_active && !sidebar_release_cover_active {
-            self.sidebar_snap_guard_width = 0.0;
-            self.sidebar_release_cover_width = 0.0;
-        }
         #[cfg(target_os = "macos")]
         {
             let allow_native_transition_underlay = self.terminal_opacity >= 0.999;
@@ -412,14 +393,6 @@ impl Render for ConWorkspace {
         } else {
             0.0
         };
-        let vertical_tabs_width = 0.0;
-        let vertical_tabs_pinned = false;
-
-        // Render the vertical-tabs hover-card overlay up front so it
-        // takes the (re-entrant) sidebar borrow before `theme` claims
-        // the immutable cx borrow that the rest of `render` relies on.
-        let vertical_tabs_overlay: Option<AnyElement> = None;
-
         let theme = cx.theme();
         let ui_surface_opacity = self.ui_surface_opacity();
         let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
@@ -778,17 +751,6 @@ impl Render for ConWorkspace {
             );
         }
         main_area = main_area.child(left_sidebar);
-        #[cfg(target_os = "macos")]
-        if !show_left_panel && sidebar_snap_guard_active && vertical_tabs_width > 0.0 {
-            main_area = main_area.child(
-                div()
-                    .w(px(vertical_tabs_width))
-                    .h_full()
-                    .flex_shrink_0()
-                    .bg(elevated_panel_surface_color),
-            );
-        }
-
         // ── Main column: terminal area only (editor panes live inside pane tree) ──
         let main_column = div()
             .flex()
@@ -904,36 +866,6 @@ impl Render for ConWorkspace {
                             .h_full()
                             .opacity(agent_panel_content_opacity)
                             .child(self.agent_panel.clone()),
-                    ),
-            );
-        }
-
-        if let Some(overlay) = vertical_tabs_overlay {
-            main_area = main_area.child(overlay);
-        }
-
-        if vertical_tabs_pinned {
-            let handle_left = (vertical_tabs_width - 3.0).max(0.0);
-            main_area = main_area.child(
-                div()
-                    .id("vertical-tabs-resize-handle")
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px(handle_left))
-                    .w(px(6.0))
-                    .cursor_col_resize()
-                    .occlude()
-                    .bg(theme.transparent)
-                    .hover(|s| s.bg(theme.muted.opacity(0.08)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                            this.release_active_terminal_mouse_selection(cx);
-                            let width = this.sidebar.read(cx).panel_width();
-                            this.sidebar_drag = Some((f32::from(event.position.x), width));
-                            cx.notify();
-                        }),
                     ),
             );
         }
@@ -1154,16 +1086,6 @@ impl Render for ConWorkspace {
                         );
                         cx.notify();
                     }
-                    // Safety cleanup/redraw for sidebar drag state — on_drop may not
-                    // fire if the cursor was outside all sidebar hit targets, and GPUI
-                    // can leave the last drop-indicator paint around until the next
-                    // sidebar repaint. Force one repaint on mouseup in vertical-tabs mode.
-                    if this.vertical_tabs_active() {
-                        this.sidebar.update(cx, |sidebar, cx| {
-                            sidebar.force_clear_drag_state(cx);
-                        });
-                    }
-
                     if this.active_tab >= this.tabs.len() {
                         return;
                     }
@@ -1173,7 +1095,6 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::minimize))
             .on_action(cx.listener(Self::toggle_agent_panel))
             .on_action(cx.listener(Self::toggle_input_bar))
-            .on_action(cx.listener(Self::toggle_vertical_tabs))
             .on_action(cx.listener(Self::collapse_sidebar))
             .on_action(cx.listener(Self::toggle_settings))
             .on_action(cx.listener(Self::toggle_command_palette))
@@ -1429,46 +1350,13 @@ impl Render for ConWorkspace {
             );
         }
 
-        if sidebar_snap_guard_active {
-            if self.vertical_tabs_active() {
-                root = root.child(
-                    div()
-                        .absolute()
-                        .top(px(top_bar_height))
-                        .bottom_0()
-                        .left(px(
-                            (vertical_tabs_width - CHROME_MOTION_SEAM_OVERDRAW).max(0.0)
-                        ))
-                        .w(px(CHROME_MOTION_SEAM_OVERDRAW))
-                        .bg(chrome_transition_seam_color),
-                );
-            }
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            if sidebar_release_cover_active && self.sidebar_release_cover_width > 0.0 {
-                root = root.child(
-                    div()
-                        .absolute()
-                        .top(px(top_bar_height))
-                        .bottom_0()
-                        .left_0()
-                        .w(px(self.sidebar_release_cover_width))
-                        .bg(chrome_transition_seam_color),
-                );
-            }
-        }
-
-        if self.sidebar_drag.is_some() && vertical_tabs_width > 0.0 {
+        if self.sidebar_drag.is_some() {
             root = root.child(
                 div()
                     .absolute()
                     .top(px(top_bar_height))
                     .bottom_0()
-                    .left(px(
-                        (vertical_tabs_width - CHROME_MOTION_SEAM_OVERDRAW).max(0.0)
-                    ))
+                    .left(px((left_panel_width - CHROME_MOTION_SEAM_OVERDRAW).max(0.0)))
                     .w(px(CHROME_MOTION_SEAM_OVERDRAW))
                     .bg(chrome_transition_seam_color),
             );

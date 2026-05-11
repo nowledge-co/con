@@ -2,24 +2,19 @@ use super::*;
 
 impl ConWorkspace {
     pub fn from_session(
-        mut config: Config,
+        config: Config,
         session: Session,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        config.appearance.tabs_orientation = TabsOrientation::Horizontal;
-        let initial_vertical_pinned = false;
         let agent_panel_open = session.agent_panel_open;
         let agent_panel_width = session
             .agent_panel_width
             .unwrap_or(AGENT_PANEL_DEFAULT_WIDTH);
-        let initial_sidebar_width = session
-            .vertical_tabs_width
-            .unwrap_or(PANEL_MIN_WIDTH * 1.25);
+        let initial_sidebar_width = session.left_panel_width.unwrap_or(PANEL_MIN_WIDTH * 1.25);
         let sidebar = cx.new(|cx| {
             let mut s = SessionSidebar::new(cx);
             s.set_panel_width(initial_sidebar_width, cx);
-            s.set_pinned(initial_vertical_pinned, cx);
             s
         });
         let terminal_font_family = sanitize_terminal_font_family(&config.terminal.font_family);
@@ -47,7 +42,6 @@ impl ConWorkspace {
         let background_image_position = config.appearance.background_image_position.clone();
         let background_image_fit = config.appearance.background_image_fit.clone();
         let background_image_repeat = config.appearance.background_image_repeat;
-        let tabs_orientation = TabsOrientation::Horizontal;
         let terminal_theme = TerminalTheme::by_name(&config.terminal.theme).unwrap_or_default();
         let colors = theme_to_ghostty_colors(&terminal_theme);
         let ghostty_app = con_ghostty::GhosttyApp::new(
@@ -214,12 +208,9 @@ impl ConWorkspace {
             });
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
-        // Seed the vertical-tabs side panel with the restored tab list
-        // so it has something to render before the first
-        // `sync_sidebar` call (which only fires when the live terminal
-        // title or the tab set changes). Without this seed the panel
-        // would draw an empty rail until the user opened or activated
-        // a tab.
+        // Seed the shared tab metadata before the first `sync_sidebar`
+        // call, which only fires when the live terminal title or tab set
+        // changes.
         {
             let entries: Vec<SessionEntry> = tabs
                 .iter()
@@ -311,8 +302,6 @@ impl ConWorkspace {
         .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_settings_saved)
             .detach();
-        cx.subscribe_in(&settings_panel, window, Self::on_tabs_orientation_changed)
-            .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_theme_preview)
             .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_appearance_preview)
@@ -365,15 +354,7 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_set_color)
             .detach();
-        cx.observe(&sidebar, |this, sidebar, cx| {
-            // The sidebar also notifies for transient hover and drag
-            // affordances. Re-render for all sidebar changes, but only
-            // persist when the actual pin state changes.
-            let pinned = sidebar.read(cx).is_pinned();
-            if this.last_sidebar_pinned != pinned {
-                this.last_sidebar_pinned = pinned;
-                this.save_session(cx);
-            }
+        cx.observe(&sidebar, |_this, _sidebar, cx| {
             cx.notify();
         })
         .detach();
@@ -667,7 +648,6 @@ impl ConWorkspace {
             background_image_position,
             background_image_fit,
             background_image_repeat,
-            tabs_orientation,
             agent_panel,
             input_bar,
             settings_panel,
@@ -703,19 +683,11 @@ impl ConWorkspace {
             #[cfg(target_os = "macos")]
             top_chrome_snap_guard_until: None,
             #[cfg(target_os = "macos")]
-            sidebar_snap_guard_until: None,
-            #[cfg(target_os = "macos")]
-            sidebar_snap_guard_width: 0.0,
-            #[cfg(target_os = "macos")]
             agent_panel_release_cover_until: None,
             #[cfg(target_os = "macos")]
             input_bar_release_cover_until: None,
             #[cfg(target_os = "macos")]
             top_chrome_release_cover_until: None,
-            #[cfg(target_os = "macos")]
-            sidebar_release_cover_until: None,
-            #[cfg(target_os = "macos")]
-            sidebar_release_cover_width: 0.0,
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
             pending_surface_control_requests: Vec::new(),
@@ -729,7 +701,6 @@ impl ConWorkspace {
             tab_summary_rx,
             tab_summary_tx,
             tab_summary_generation: 0,
-            last_sidebar_pinned: initial_vertical_pinned,
             next_tab_summary_id: next_tab_summary_id_init,
             next_control_agent_request_id: 1,
             window_handle: window.window_handle(),
@@ -843,11 +814,7 @@ impl ConWorkspace {
     }
 
     pub(super) fn horizontal_tabs_visible(&self) -> bool {
-        matches!(self.tabs_orientation, TabsOrientation::Horizontal) && self.tabs.len() > 1
-    }
-
-    pub(super) fn vertical_tabs_active(&self) -> bool {
-        false
+        self.tabs.len() > 1
     }
 
     pub(super) fn sync_tab_strip_motion(&mut self) -> bool {

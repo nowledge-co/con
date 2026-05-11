@@ -16,9 +16,9 @@ The left side of the window is split into two layers:
 - `ActivityBar`: a fixed 40 px icon rail that is always visible.
 - Left panel content: user-resizable content shown only when the panel is open.
 
-Horizontal tabs remain the active tab UI. The old vertical tabs feature is no
-longer part of the active product design; see `docs/impl/vertical-tabs.md` for
-the compatibility note.
+Horizontal tabs are the only tab UI. The removed vertical tabs config/session
+fields are accepted only for old-file compatibility; see
+`docs/impl/vertical-tabs.md`.
 
 ## Left Sidebar
 
@@ -32,12 +32,12 @@ Sidebar". The top bar sidebar button remains a first-class toggle for the same
 left panel. The rail stays visible even when the panel content is collapsed so
 Files/Search can reopen it directly.
 
-The panel width is stored through the existing session sidebar width field for
-backward-compatible persistence. The active resize gesture is owned by the
-workspace because it needs the full window width, agent panel width, and pane
-layout constraints. While resizing, `render.rs` installs a capture overlay so
-mouse movement and mouse-up events end the drag even if the cursor leaves the
-handle.
+The panel width is stored as `left_panel_width` in session state; old
+`vertical_tabs_width` session files load through a serde alias. The active
+resize gesture is owned by the workspace because it needs the full window
+width, agent panel width, and pane layout constraints. While resizing,
+`render.rs` installs a capture overlay so mouse movement and mouse-up events
+end the drag even if the cursor leaves the handle.
 
 ## File Explorer
 

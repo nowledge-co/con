@@ -56,13 +56,11 @@ use crate::motion::MotionValue;
 use crate::pane_tree::{
     PaneTree, SplitDirection, SplitPlacement, SurfaceCreateOptions, SurfaceRenameEditor,
 };
-use crate::settings_panel::{
-    self, AppearancePreview, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
-};
+use crate::settings_panel::{self, AppearancePreview, SaveSettings, SettingsPanel, ThemePreview};
 use crate::sidebar::{
-    DraggedTab, DraggedTabOrigin, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry,
-    SessionSidebar, SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate, SidebarPaneToTab,
-    SidebarRename, SidebarReorder, SidebarSelect, SidebarSetColor,
+    DraggedTab, DraggedTabOrigin, NewSession, PANEL_MIN_WIDTH, SessionEntry, SessionSidebar,
+    SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate, SidebarPaneToTab, SidebarRename,
+    SidebarReorder, SidebarSelect, SidebarSetColor,
 };
 use crate::sidebar_search_view::SidebarSearchView;
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
@@ -83,14 +81,12 @@ use crate::{
     OpenWorkspaceLayoutWindow, Paste, PreviousSurface, PreviousTab, Quit, RenameSurface, SelectAll,
     SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8,
     SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp, ToggleAgentPanel, ToggleLeftPanel,
-    TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs, Undo,
+    TogglePaneScopePicker, TogglePaneZoom, Undo,
 };
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
 };
-use con_core::config::{
-    AppearanceConfig, Config, TabsOrientation, TerminalConfig, sanitize_terminal_font_family,
-};
+use con_core::config::{AppearanceConfig, Config, TerminalConfig, sanitize_terminal_font_family};
 use con_core::control::{
     AgentAskResult, ControlCommand, ControlError, ControlRequestEnvelope, ControlResult,
     SystemIdentifyResult, TabInfo,
@@ -163,7 +159,6 @@ pub struct ConWorkspace {
     background_image_position: String,
     background_image_fit: String,
     background_image_repeat: bool,
-    tabs_orientation: TabsOrientation,
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
@@ -208,19 +203,11 @@ pub struct ConWorkspace {
     #[cfg(target_os = "macos")]
     top_chrome_snap_guard_until: Option<Instant>,
     #[cfg(target_os = "macos")]
-    sidebar_snap_guard_until: Option<Instant>,
-    #[cfg(target_os = "macos")]
-    sidebar_snap_guard_width: f32,
-    #[cfg(target_os = "macos")]
     agent_panel_release_cover_until: Option<Instant>,
     #[cfg(target_os = "macos")]
     input_bar_release_cover_until: Option<Instant>,
     #[cfg(target_os = "macos")]
     top_chrome_release_cover_until: Option<Instant>,
-    #[cfg(target_os = "macos")]
-    sidebar_release_cover_until: Option<Instant>,
-    #[cfg(target_os = "macos")]
-    sidebar_release_cover_width: f32,
     /// Pending create-pane requests that need a window context to process.
     pending_create_pane_requests: Vec<PendingCreatePane>,
     /// Pending window-aware control requests such as tab lifecycle mutations.
@@ -237,16 +224,15 @@ pub struct ConWorkspace {
     pending_control_agent_requests: HashMap<usize, PendingControlAgentRequest>,
     shell_suggestion_rx: crossbeam_channel::Receiver<ShellSuggestionResult>,
     shell_suggestion_tx: crossbeam_channel::Sender<ShellSuggestionResult>,
-    /// Background AI engine that produces a label + icon for each
-    /// vertical-tabs row. Shares the harness's tokio runtime and the
-    /// user's `agent.suggestion_model` settings.
+    /// Background AI engine that produces optional tab labels and icons.
+    /// Shares the harness's tokio runtime and the user's
+    /// `agent.suggestion_model` settings.
     tab_summary_engine: TabSummaryEngine,
     tab_summary_rx: crossbeam_channel::Receiver<(u64, TabSummary)>,
     tab_summary_tx: crossbeam_channel::Sender<(u64, TabSummary)>,
     /// Bumped whenever summary-model settings change so late async
     /// responses from the old configuration are ignored.
     tab_summary_generation: u64,
-    last_sidebar_pinned: bool,
     /// Monotonic counter for [`Tab::summary_id`] — stable across the
     /// window's lifetime so the summary engine's per-tab cache
     /// survives reorders and tab close/reopen.

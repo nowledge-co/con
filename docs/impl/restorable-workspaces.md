@@ -269,7 +269,7 @@ Purpose:
 - pane-local surfaces
 - agent panel state
 - input bar state
-- vertical tabs state
+- left sidebar state
 
 Sketch:
 
@@ -283,7 +283,7 @@ Sketch:
   "chrome": {
     "agent_panel_open": true,
     "input_bar_visible": true,
-    "vertical_tabs_visible": false
+    "left_panel_open": true
   }
 }
 ```

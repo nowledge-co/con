@@ -194,17 +194,6 @@ impl ConWorkspace {
             })
             .detach();
 
-            let workspace_for_tabs = workspace.clone();
-            let main_window_for_tabs = main_window;
-            cx.subscribe(&panel, move |settings, _: &TabsOrientationChanged, cx| {
-                let _ = main_window_for_tabs.update(cx, |_, _window, cx| {
-                    let _ = workspace_for_tabs.update(cx, |workspace, cx| {
-                        workspace.apply_tabs_orientation_from_panel(&settings, cx);
-                    });
-                });
-            })
-            .detach();
-
             let workspace_for_theme = workspace.clone();
             let main_window_for_theme = main_window;
             cx.subscribe(&panel, move |_settings, event: &ThemePreview, cx| {

@@ -543,7 +543,6 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         if generation != self.tab_summary_generation
-            || !self.vertical_tabs_active()
             || !self.harness.config().suggestion_model.enabled
         {
             return;
@@ -597,7 +596,7 @@ impl ConWorkspace {
     }
 
     pub(super) fn request_tab_summaries(&self, cx: &App) {
-        if !self.vertical_tabs_active() || !self.harness.config().suggestion_model.enabled {
+        if !self.harness.config().suggestion_model.enabled {
             return;
         }
         let tx = self.tab_summary_tx.clone();

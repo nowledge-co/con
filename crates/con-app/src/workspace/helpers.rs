@@ -131,7 +131,7 @@ pub(super) fn editor_line_boundary_for_key(
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn should_show_activity_bar(
-    _vertical_tabs_active: bool,
+    _left_sidebar_available: bool,
     _activity_slot: ActivitySlot,
 ) -> bool {
     true

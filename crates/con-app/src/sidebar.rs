@@ -1,35 +1,9 @@
-//! Legacy session sidebar implementation.
+//! Left-sidebar support state.
 //!
-//! The active product surface now uses a left sidebar whose first content
-//! view is the file tree. This module is kept for session/tab sidebar internals
-//! that have not been deleted yet.
-//!
-//! Two runtime states (no auto-expand-on-hover anymore — see design
-//! note at the bottom of this docblock):
-//!
-//! - **Collapsed (rail)** — narrow icon rail (~44 px). One smart icon
-//!   per tab. Hovering an icon pops a small floating **tab card**
-//!   anchored to the right of the icon (name, subtitle, pane count).
-//!   Card is purely informational — it never displaces the rail or
-//!   the terminal pane and dismisses the moment the cursor leaves
-//!   the icon. Drag an icon directly in collapsed mode to reorder.
-//!
-//! - **Pinned panel** — full panel (~240 px) with two-line rows
-//!   (name in system font, optional subtitle in mono). Persisted
-//!   across restart via `session.vertical_tabs_pinned`. Drag a row
-//!   to reorder; right-click a row for the context menu.
-//!
-//! Why a hover card instead of an auto-expanding overlay
-//! ---
-//! The first iteration of vertical tabs auto-expanded a full panel
-//! on hover. That's how Microsoft does Edge vertical tabs and it
-//! reads as aggressive — passive intent (just trying to remember
-//! what tab 3 is) takes over the workspace. It also makes drag-from-
-//! collapsed broken: the user clicks an icon to drag, the cursor
-//! leaves the icon to start the drag, the overlay dismisses, the
-//! drop zone disappears. Apple's pattern (Finder sidebar, Mail
-//! mailbox list) is a tooltip-style card that appears next to the
-//! icon without taking over the layout. We do that.
+//! The product sidebar is an activity rail plus content panel. This module
+//! still owns the shared width, opacity, tab metadata, and drag helpers used by
+//! older session/sidebar internals while the visible product surface is file
+//! explorer and search.
 //!
 //! Visual rules
 //! ---
@@ -85,7 +59,7 @@ const PANEL_TWEEN: Duration = Duration::from_millis(220);
 #[cfg(target_os = "macos")]
 const PANEL_TWEEN: Duration = Duration::ZERO;
 
-/// One row in the vertical tabs panel.
+/// One row in the tab sidebar panel.
 pub struct SessionEntry {
     pub id: u64,
     pub name: String,
@@ -230,7 +204,7 @@ impl Render for DraggedTab {
     }
 }
 
-/// Vertical tabs side panel.
+/// Tab sidebar side panel.
 pub struct SessionSidebar {
     mode: PanelMode,
     sessions: Vec<SessionEntry>,
@@ -267,9 +241,9 @@ pub struct SessionSidebar {
     /// `on_drop` gives us the window mouse position but not the
     /// element bounds, so we cache this from `on_drag_move`.
     rail_drag_origin_y: Option<f32>,
-    /// Last painted bounds for visible vertical tab targets (rail icons or panel rows).
+    /// Last painted bounds for visible tab sidebar targets (rail icons or panel rows).
     tab_bounds: Rc<RefCell<Vec<Bounds<Pixels>>>>,
-    /// Workspace-independent visible preview for vertical tab drags.
+    /// Workspace-independent visible preview for tab sidebar drags.
     drag_preview: Rc<RefCell<Option<SidebarDragPreviewState>>>,
     /// Effective UI opacity from the workspace appearance settings.
     /// Lower values let the window/terminal backdrop treatment show
@@ -339,7 +313,7 @@ impl SessionSidebar {
             // traffic-light/titlebar area before the sidebar is
             // rendered. Keep only a small visual inset here; a
             // platform titlebar inset creates a dead band above the
-            // vertical-tab controls.
+            // tab-sidebar controls.
             leading_top_pad: 6.0,
             width_motion: MotionValue::new(0.0),
             panel_width: PANEL_WIDTH,
@@ -355,18 +329,6 @@ impl SessionSidebar {
             ui_opacity: 0.92,
             tab_accent_inactive_alpha: crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA,
             tab_accent_inactive_hover_alpha: crate::tab_colors::TAB_ACCENT_INACTIVE_HOVER_ALPHA,
-        }
-    }
-
-    pub fn force_clear_drag_state(&mut self, cx: &mut Context<Self>) {
-        let had_state = self.drop_slot.is_some()
-            || self.rail_drag_origin_y.is_some()
-            || self.drag_preview.borrow().is_some();
-        self.drop_slot = None;
-        self.rail_drag_origin_y = None;
-        self.clear_drag_preview();
-        if had_state {
-            cx.notify();
         }
     }
 
@@ -443,7 +405,7 @@ impl SessionSidebar {
         let Some(preview) = self.drag_preview.borrow().clone() else {
             return;
         };
-        let preview_size = vertical_drag_preview_size(self.is_pinned());
+        let preview_size = tab_drag_preview_size(self.is_pinned());
         let max_top = (viewport_size.height - preview_size.height).max(px(0.0));
         let probe =
             vertical_drag_overlay_probe_position(mouse, &preview, preview_size, px(0.0), max_top);
@@ -500,7 +462,7 @@ impl SessionSidebar {
             return None;
         }
         let theme = cx.theme();
-        let preview_size = vertical_drag_preview_size(self.is_pinned());
+        let preview_size = tab_drag_preview_size(self.is_pinned());
         let max_top = (window.viewport_size().height - preview_size.height).max(px(0.0));
         let origin = vertical_drag_overlay_origin(
             window.mouse_position(),
@@ -544,17 +506,6 @@ impl SessionSidebar {
 
     fn effective_panel_width(&self) -> f32 {
         Self::clamped_panel_width(self.panel_width, self.effective_panel_max_width)
-    }
-
-    pub fn occupied_width_with_max(&self, effective_max_width: f32) -> f32 {
-        // Collapsed mode no longer shows a rail — the activity bar handles
-        // navigation, so a collapsed vertical-tabs panel takes zero width.
-        if matches!(self.mode, PanelMode::Collapsed) {
-            return 0.0;
-        }
-        let t = self.width_motion.current().clamp(0.0, 1.0);
-        let panel_width = Self::clamped_panel_width(self.panel_width, effective_max_width);
-        RAIL_WIDTH + (panel_width - RAIL_WIDTH) * t
     }
 
     pub fn toggle_pinned(&mut self, cx: &mut Context<Self>) {
@@ -676,7 +627,7 @@ impl SessionSidebar {
         let session_count = self.sessions.len();
         self.tab_bounds.borrow_mut().clear();
         let mut rail = div()
-            .id("vertical-tabs-rail")
+            .id("tab-sidebar-rail")
             .relative()
             .w(px(RAIL_WIDTH))
             .h_full()
@@ -737,7 +688,7 @@ impl SessionSidebar {
                     };
                     if let Some(slot) = slot {
                         // Cursor is over a tab item — create/keep preview.
-                        let preview_size = vertical_drag_preview_size(this.is_pinned());
+                        let preview_size = tab_drag_preview_size(this.is_pinned());
                         this.ensure_drag_preview(
                             event.drag(cx),
                             event.bounds.origin.x,
@@ -820,14 +771,14 @@ impl SessionSidebar {
                 cx.notify();
             }))
             .child(rail_icon_button(
-                "vertical-tabs-rail-expand",
+                "tab-sidebar-rail-expand",
                 "phosphor/caret-line-right.svg",
                 theme.muted_foreground.opacity(0.78),
                 theme,
                 cx.listener(|this, _, _, cx| this.toggle_pinned(cx)),
             ))
             .child(rail_icon_button(
-                "vertical-tabs-rail-new",
+                "tab-sidebar-rail-new",
                 "phosphor/plus.svg",
                 theme.muted_foreground,
                 theme,
@@ -1075,7 +1026,7 @@ impl SessionSidebar {
         card_inner = card_inner.child(meta);
 
         let card = div()
-            .id("vertical-tabs-hover-card")
+            .id("tab-sidebar-hover-card")
             .absolute()
             .top(px(top))
             .left(px(RAIL_WIDTH + 6.0))
@@ -1115,16 +1066,16 @@ impl SessionSidebar {
             header_color = theme.muted_foreground.opacity(0.55);
             header_font = theme.font_family.clone();
             new_btn = panel_icon_button(
-                "vertical-tabs-panel-new",
+                "tab-sidebar-panel-new",
                 "phosphor/plus.svg",
                 theme,
                 cx.listener(|_this, _, _, cx| cx.emit(NewSession)),
             );
             toggle_btn = panel_icon_button(
                 if is_overlay {
-                    "vertical-tabs-overlay-pin"
+                    "tab-sidebar-overlay-pin"
                 } else {
-                    "vertical-tabs-panel-collapse"
+                    "tab-sidebar-panel-collapse"
                 },
                 "phosphor/sidebar-simple.svg",
                 theme,
@@ -1169,7 +1120,7 @@ impl SessionSidebar {
         // using the same top-half / bottom-half rule as the per-row
         // handlers.
         let mut list = div()
-            .id("vertical-tabs-panel-list")
+            .id("tab-sidebar-panel-list")
             .flex()
             .flex_col()
             .flex_1()
@@ -1206,7 +1157,7 @@ impl SessionSidebar {
                     let slot = vertical_slot_from_bounds(event.event.position.y, &bounds, total);
                     if let Some(slot) = slot {
                         // Cursor is over a tab item — create/keep preview.
-                        let preview_size = vertical_drag_preview_size(this.is_pinned());
+                        let preview_size = tab_drag_preview_size(this.is_pinned());
                         this.ensure_drag_preview(
                             event.drag(cx),
                             event.bounds.origin.x,
@@ -1236,7 +1187,7 @@ impl SessionSidebar {
                         f32::from(event.bounds.origin.y) + (total as f32) * (approx_row_h + 2.0);
                     if f32::from(event.event.position.y) >= last_row_bottom_estimate {
                         let preview_missing = this.drag_preview.borrow().is_none();
-                        let preview_size = vertical_drag_preview_size(this.is_pinned());
+                        let preview_size = tab_drag_preview_size(this.is_pinned());
                         this.ensure_drag_preview(
                             event.drag(cx),
                             event.bounds.origin.x,
@@ -1601,7 +1552,7 @@ impl SessionSidebar {
                         return;
                     }
                     // Cursor is inside this row — create/keep preview.
-                    let preview_size = vertical_drag_preview_size(this.is_pinned());
+                    let preview_size = tab_drag_preview_size(this.is_pinned());
                     this.ensure_drag_preview(
                         event.drag(cx),
                         event.bounds.origin.x,
@@ -2096,7 +2047,7 @@ pub struct SidebarDragPreviewState {
     pub is_pane_origin: bool,
 }
 
-pub fn vertical_drag_preview_size(pinned: bool) -> Size<Pixels> {
+pub fn tab_drag_preview_size(pinned: bool) -> Size<Pixels> {
     Size {
         width: if pinned { px(180.0) } else { px(RAIL_WIDTH) },
         height: if pinned { px(28.0) } else { px(RAIL_ICON_SIZE) },
@@ -2138,7 +2089,7 @@ fn event_probe_y_from_vertical_preview(
     dragged: &DraggedTab,
     _bounds: &[Bounds<Pixels>],
 ) -> Pixels {
-    let preview_size = vertical_drag_preview_size(false);
+    let preview_size = tab_drag_preview_size(false);
     let cursor_offset_y = dragged
         .preview_constraint
         .map(|constraint| constraint.cursor_offset_y)

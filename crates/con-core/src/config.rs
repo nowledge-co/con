@@ -96,24 +96,6 @@ impl Default for TerminalConfig {
     }
 }
 
-/// How the workspace presents its tabs.
-///
-/// `Horizontal` keeps the historical behavior — a strip of pills along the
-/// top of the window that only appears once the second tab opens.
-///
-/// `Vertical` moves the strip to a left-side panel modelled on Chrome's
-/// vertical tabs: a narrow icon rail by default that can be pinned open
-/// to show full titles, with a hover-to-peek overlay in between. The top
-/// titlebar collapses to its compact one-tab form so the rail owns the
-/// tab list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum TabsOrientation {
-    #[default]
-    Horizontal,
-    Vertical,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppearanceConfig {
@@ -127,16 +109,13 @@ pub struct AppearanceConfig {
     pub background_image_position: String,
     pub background_image_fit: String,
     pub background_image_repeat: bool,
-    /// Accent color alpha for inactive tabs, vertical-tab rows, and unfocused pane titles.
+    /// Accent color alpha for inactive tabs and unfocused pane titles.
     pub tab_accent_inactive_alpha: f32,
-    /// Accent color alpha when hovering inactive tabs and vertical-tab rows.
+    /// Accent color alpha when hovering inactive tabs.
     pub tab_accent_inactive_hover_alpha: f32,
     /// Keep bounded private terminal text so restart continuity can show what
     /// was on screen. This is never exported to workspace layout profiles.
     pub restore_terminal_text: bool,
-    /// Layout of the workspace tab strip. Defaults to `Horizontal` for
-    /// backward compatibility with every shipped beta.
-    pub tabs_orientation: TabsOrientation,
     /// Hide the per-pane title bar when there are multiple panes. Defaults to
     /// `false` (title bar visible). When `true` the title bar is suppressed
     /// even in split layouts; the fullscreen/close buttons are also hidden.
@@ -159,7 +138,6 @@ impl Default for AppearanceConfig {
             tab_accent_inactive_alpha: default_tab_accent_inactive_alpha(),
             tab_accent_inactive_hover_alpha: default_tab_accent_inactive_hover_alpha(),
             restore_terminal_text: default_restore_terminal_text(),
-            tabs_orientation: TabsOrientation::default(),
             hide_pane_title_bar: false,
         }
     }
@@ -317,13 +295,13 @@ fn default_toggle_pane_scope() -> String {
     "secondary-'".into()
 }
 #[cfg(target_os = "macos")]
-fn default_toggle_vertical_tabs() -> String {
+fn default_toggle_left_panel() -> String {
     // Cmd+B is the established macOS/editor convention for showing or
     // hiding the left sidebar, and Cmd chords do not steal terminal input.
     "secondary-b".into()
 }
 #[cfg(not(target_os = "macos"))]
-fn default_toggle_vertical_tabs() -> String {
+fn default_toggle_left_panel() -> String {
     // Avoid bare Ctrl+B on Windows/Linux: it is tmux's prefix and a
     // real terminal control character. Ctrl+Shift+B stays app-level.
     "ctrl-shift-b".into()
@@ -433,7 +411,8 @@ pub struct KeybindingConfig {
     pub cycle_input_mode: String,
     pub toggle_input_bar: String,
     pub toggle_pane_scope: String,
-    pub toggle_vertical_tabs: String,
+    #[serde(alias = "toggle_vertical_tabs")]
+    pub toggle_left_panel: String,
     pub collapse_sidebar: String,
     pub new_surface: String,
     pub new_surface_split_right: String,
@@ -473,7 +452,7 @@ impl KeybindingConfig {
             ("Split Right", self.split_right.as_str()),
             ("Split Down", self.split_down.as_str()),
             ("Toggle Pane Scope", self.toggle_pane_scope.as_str()),
-            ("Toggle Vertical Tabs", self.toggle_vertical_tabs.as_str()),
+            ("Toggle Left Sidebar", self.toggle_left_panel.as_str()),
             ("Collapse/Expand Sidebar", self.collapse_sidebar.as_str()),
             ("New Surface Tab", self.new_surface.as_str()),
             (
@@ -554,7 +533,7 @@ impl Default for KeybindingConfig {
             cycle_input_mode: default_cycle_input_mode(),
             toggle_input_bar: default_toggle_input_bar(),
             toggle_pane_scope: default_toggle_pane_scope(),
-            toggle_vertical_tabs: default_toggle_vertical_tabs(),
+            toggle_left_panel: default_toggle_left_panel(),
             collapse_sidebar: default_collapse_sidebar(),
             new_surface: default_new_surface(),
             new_surface_split_right: default_new_surface_split_right(),
@@ -969,6 +948,25 @@ global_summon = "alt-space"
 
         assert!(!config.keybindings.quick_terminal_enabled);
         assert_eq!(config.keybindings.quick_terminal, "cmd-\\");
+    }
+
+    #[test]
+    fn legacy_vertical_tabs_config_is_accepted_but_not_serialized() {
+        let content = r#"
+[appearance]
+tabs_orientation = "vertical"
+
+[keybindings]
+toggle_vertical_tabs = "secondary-b"
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+
+        assert_eq!(config.keybindings.toggle_left_panel, "secondary-b");
+
+        let serialized = toml::to_string(&config).unwrap();
+        assert!(!serialized.contains("tabs_orientation"));
+        assert!(!serialized.contains("toggle_vertical_tabs"));
+        assert!(serialized.contains("toggle_left_panel"));
     }
 
     #[test]

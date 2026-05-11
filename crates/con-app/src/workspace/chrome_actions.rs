@@ -76,15 +76,6 @@ impl ConWorkspace {
         cx.notify();
     }
 
-    pub(super) fn toggle_vertical_tabs(
-        &mut self,
-        _: &ToggleVerticalTabs,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.toggle_left_panel(&ToggleLeftPanel, window, cx);
-    }
-
     pub(super) fn toggle_left_panel(
         &mut self,
         _: &ToggleLeftPanel,

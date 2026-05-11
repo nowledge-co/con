@@ -3,7 +3,7 @@
 //!
 //! Why this exists
 //! ---
-//! The vertical-tabs panel needs a name + icon for every tab. The
+//! Tab presentation needs a compact name + icon for every tab. The
 //! cheap path is `parse_focused_process(title)` — fast, deterministic,
 //! never needs the network — but it caps out at things the OSC title
 //! actually surfaces (`vim README.md`, `htop`, `ssh host`). It can't
@@ -57,8 +57,8 @@ const LABEL_MAX_LEN: usize = 32;
 
 /// The closed set of icons the model is allowed to choose from.
 ///
-/// This **is** the icon vocabulary for the vertical-tabs panel — the
-/// keyword the model returns is mapped to a Phosphor SVG path by
+/// This **is** the icon vocabulary for tab presentation. The keyword
+/// the model returns is mapped to a Phosphor SVG path by
 /// [`TabIconKind::svg_path`]. No emoji. No free-form image references.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabIconKind {

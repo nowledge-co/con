@@ -118,7 +118,6 @@ actions!(
         ToggleQuickTerminal,
         ToggleAgentPanel,
         ToggleInputBar,
-        ToggleVerticalTabs,
         CollapseSidebar,
         CloseTab,
         ClosePane,
@@ -1358,7 +1357,7 @@ fn configurable_app_binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
     push_global::<CycleInputMode>(&mut specs, &kb.cycle_input_mode);
     push_global::<ToggleInputBar>(&mut specs, &kb.toggle_input_bar);
     push_global::<TogglePaneScopePicker>(&mut specs, &kb.toggle_pane_scope);
-    push_global::<ToggleLeftPanel>(&mut specs, &kb.toggle_vertical_tabs);
+    push_global::<ToggleLeftPanel>(&mut specs, &kb.toggle_left_panel);
     push_global::<CollapseSidebar>(&mut specs, &kb.collapse_sidebar);
 
     specs

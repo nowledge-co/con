@@ -99,8 +99,6 @@ impl ConWorkspace {
         }
 
         // Tabs container — appears only when there is real tab selection to do.
-        // In vertical-tabs mode the side panel owns the tab list so we keep
-        // this strip empty even with multiple tabs.
         // Clear stale tab reorder indicators only when neither GPUI tab drag nor
         // pane-origin GPUI drag is active.
         let pane_title_drag_to_tab_active =
@@ -128,11 +126,9 @@ impl ConWorkspace {
 
         // Also show the tab strip during pane-to-tab drag so the ghost tab
         // preview is visible even when there is currently only one tab.
-        // In vertical-tabs mode the sidebar owns the tab list, so pane drags
-        // must NOT trigger the horizontal tab strip.
         let show_horizontal_tabs = self.horizontal_tabs_visible()
-            || (!self.vertical_tabs_active()
-                && (pane_title_drag_to_tab_active || pane_origin_drag_active));
+            || pane_title_drag_to_tab_active
+            || pane_origin_drag_active;
         let tab_count = self.tabs.len();
         let tab_strip_drop_slot = self.tab_strip_drop_slot;
         // Snapshot rename state for this render frame.

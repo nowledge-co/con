@@ -1,4 +1,4 @@
-# Vertical Tabs
+# Removed Vertical Tabs Compatibility
 
 Status: Removed from active UI
 
@@ -12,15 +12,14 @@ The old vertical tab strip, hover card, and pinned vertical tab panel are no
 longer part of the active product surface. `Cmd+B` now toggles the left sidebar
 content panel, not tab orientation.
 
-Some code and session field names still mention `vertical_tabs` for backward
-compatibility and migration:
+Compatibility with old user files is intentionally one-way:
 
-- `Session.vertical_tabs_width` persists the user-resized left panel width.
-- `Session.vertical_tabs_pinned` is legacy session data.
-- `ToggleVerticalTabs` routes to the current left-sidebar action path where
-  older keybinding/config names still exist.
-- `SessionSidebar` remains as legacy tab/sidebar infrastructure and width
-  storage, but the active left rail is `ActivityBar`.
+- `appearance.tabs_orientation` is ignored when loading config.
+- `keybindings.toggle_vertical_tabs` is accepted as an alias for
+  `keybindings.toggle_left_panel`.
+- `vertical_tabs_width` in session JSON is accepted as an alias for
+  `left_panel_width`.
+- `vertical_tabs_pinned` in session JSON is ignored.
 
 Current behavior is documented in `docs/impl/code-editor-design.md` and
 `docs/impl/left-sidebar.md`.
