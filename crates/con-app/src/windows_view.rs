@@ -1719,9 +1719,33 @@ impl Render for GhosttyView {
                             });
                         }
                     })
-                    // Measure a dedicated full-size wrapper child so the
-                    // prepaint callback always sees content bounds rather than
-                    // whichever image/layout child happens to be present.
+                    // Keep the terminal content as the first measured child:
+                    // prepaint uses bounds_list.first() to size the D3D grid,
+                    // while the gutter fills below only cover the inset edges.
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(TERMINAL_PADDING_X_PX))
+                            .right(px(TERMINAL_PADDING_X_PX))
+                            .top(px(TERMINAL_PADDING_Y_PX))
+                            .bottom(px(TERMINAL_PADDING_Y_PX))
+                            .overflow_hidden()
+                            .children(terminal_children)
+                            .child(
+                                canvas(
+                                    |_, _, _| {},
+                                    move |_, _, window, cx| {
+                                        window.handle_input(
+                                            &input_focus,
+                                            WindowsTerminalInputHandler::new(input_entity.clone()),
+                                            cx,
+                                        );
+                                    },
+                                )
+                                .absolute()
+                                .size_full(),
+                            ),
+                    )
                     .child(
                         div()
                             .absolute()
@@ -1757,30 +1781,6 @@ impl Render for GhosttyView {
                             .bottom(px(TERMINAL_PADDING_Y_PX))
                             .w(px(TERMINAL_PADDING_X_PX))
                             .bg(padding_background),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(TERMINAL_PADDING_X_PX))
-                            .right(px(TERMINAL_PADDING_X_PX))
-                            .top(px(TERMINAL_PADDING_Y_PX))
-                            .bottom(px(TERMINAL_PADDING_Y_PX))
-                            .overflow_hidden()
-                            .children(terminal_children)
-                            .child(
-                                canvas(
-                                    |_, _, _| {},
-                                    move |_, _, window, cx| {
-                                        window.handle_input(
-                                            &input_focus,
-                                            WindowsTerminalInputHandler::new(input_entity.clone()),
-                                            cx,
-                                        );
-                                    },
-                                )
-                                .absolute()
-                                .size_full(),
-                            ),
                     ),
             )
             .context_menu(move |menu, window, cx| {
