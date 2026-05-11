@@ -5,15 +5,21 @@ use http::{HeaderMap, HeaderValue};
 use rig::agent::{MultiTurnStreamItem, StreamingResult};
 use rig::client::CompletionClient;
 use rig::client::Nothing;
+use rig::http_client::{
+    self, HttpClientExt, LazyBody, MultipartForm, Request, Response, StreamingResponse,
+};
 use rig::providers::{
     anthropic, chatgpt, cohere, copilot, deepseek, gemini, groq, minimax, mistral, moonshot,
     ollama, openai, openrouter, perplexity, together, xai, zai,
 };
 use rig::streaming::{StreamedAssistantContent, StreamingPrompt};
+use rig::wasm_compat::WasmCompatSend;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use url::{Host, Url};
 
 use crate::context::TerminalContext;
 use crate::conversation::{AgentStep, Conversation, Message};
@@ -31,6 +37,91 @@ use crate::tools::{
 
 const KIMI_CODING_BASE_URL: &str = "https://api.kimi.com/coding/v1";
 const KIMI_CODING_USER_AGENT: &str = "KimiCLI/1.35.0";
+
+#[derive(Clone, Debug)]
+struct OpenAICompatibleHttpClient {
+    inner: http_client::ReqwestClient,
+    strip_authorization: bool,
+}
+
+impl OpenAICompatibleHttpClient {
+    fn new(strip_authorization: bool) -> Self {
+        Self {
+            inner: http_client::ReqwestClient::default(),
+            strip_authorization,
+        }
+    }
+
+    fn strip_authorization<T>(&self, req: &mut Request<T>) {
+        if self.strip_authorization {
+            req.headers_mut().remove(http::header::AUTHORIZATION);
+        }
+    }
+}
+
+impl Default for OpenAICompatibleHttpClient {
+    fn default() -> Self {
+        Self::new(false)
+    }
+}
+
+impl HttpClientExt for OpenAICompatibleHttpClient {
+    fn send<T, U>(
+        &self,
+        mut req: Request<T>,
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
+    where
+        T: Into<bytes::Bytes>,
+        T: WasmCompatSend,
+        U: From<bytes::Bytes>,
+        U: WasmCompatSend + 'static,
+    {
+        self.strip_authorization(&mut req);
+        <http_client::ReqwestClient as HttpClientExt>::send::<T, U>(&self.inner, req)
+    }
+
+    fn send_multipart<U>(
+        &self,
+        mut req: Request<MultipartForm>,
+    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
+    where
+        U: From<bytes::Bytes>,
+        U: WasmCompatSend + 'static,
+    {
+        self.strip_authorization(&mut req);
+        <http_client::ReqwestClient as HttpClientExt>::send_multipart::<U>(&self.inner, req)
+    }
+
+    fn send_streaming<T>(
+        &self,
+        mut req: Request<T>,
+    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
+    where
+        T: Into<bytes::Bytes> + WasmCompatSend,
+    {
+        self.strip_authorization(&mut req);
+        <http_client::ReqwestClient as HttpClientExt>::send_streaming::<T>(&self.inner, req)
+    }
+}
+
+fn is_local_openai_compatible_base_url(base_url: &str) -> bool {
+    let Ok(url) = Url::parse(base_url) else {
+        return false;
+    };
+
+    match url.host() {
+        Some(Host::Domain(domain)) => {
+            let domain = domain.trim_end_matches('.').to_ascii_lowercase();
+            matches!(domain.as_str(), "localhost" | "host.docker.internal")
+                || domain.ends_with(".local")
+        }
+        Some(Host::Ipv4(addr)) => addr.is_loopback() || addr.is_private() || addr.is_link_local(),
+        Some(Host::Ipv6(addr)) => {
+            addr.is_loopback() || addr.is_unique_local() || addr.is_unicast_link_local()
+        }
+        None => false,
+    }
+}
 
 // ── Provider enum ───────────────────────────────────────────────────
 
@@ -303,6 +394,73 @@ mod tests {
             config.provider_transport_for(&ProviderKind::ZAI),
             Some(ProviderTransport::Anthropic)
         );
+    }
+
+    #[test]
+    fn openai_compatible_allows_keyless_local_provider() {
+        let mut config = AgentConfig {
+            provider: ProviderKind::OpenAICompatible,
+            ..AgentConfig::default()
+        };
+        config.providers.set(
+            &ProviderKind::OpenAICompatible,
+            ProviderConfig {
+                base_url: Some("http://127.0.0.1:11434/v1".into()),
+                model: Some("local-model".into()),
+                ..ProviderConfig::default()
+            },
+        );
+
+        let provider = AgentProvider::new(config);
+
+        assert_eq!(
+            provider
+                .resolve_configured_api_key(&ProviderKind::OpenAICompatible)
+                .expect("api key resolution"),
+            None
+        );
+        provider
+            .build_openai_compatible_client()
+            .expect("keyless OpenAI-compatible client");
+    }
+
+    #[test]
+    fn openai_compatible_preserves_default_env_for_hosted_provider() {
+        let mut config = AgentConfig {
+            provider: ProviderKind::OpenAICompatible,
+            ..AgentConfig::default()
+        };
+        config.providers.set(
+            &ProviderKind::OpenAICompatible,
+            ProviderConfig {
+                base_url: Some("https://api.example.com/v1".into()),
+                model: Some("hosted-model".into()),
+                ..ProviderConfig::default()
+            },
+        );
+
+        let provider = AgentProvider::new(config);
+
+        assert!(!provider.should_skip_default_env_api_key(&ProviderKind::OpenAICompatible));
+    }
+
+    #[test]
+    fn local_openai_compatible_base_url_detection_covers_common_local_hosts() {
+        assert!(is_local_openai_compatible_base_url(
+            "http://127.0.0.1:11434/v1"
+        ));
+        assert!(is_local_openai_compatible_base_url(
+            "http://localhost:8080/v1"
+        ));
+        assert!(is_local_openai_compatible_base_url(
+            "http://192.168.1.10:8080/v1"
+        ));
+        assert!(is_local_openai_compatible_base_url(
+            "http://host.docker.internal:8080/v1"
+        ));
+        assert!(!is_local_openai_compatible_base_url(
+            "https://api.example.com/v1"
+        ));
     }
 
     #[test]
@@ -1309,16 +1467,27 @@ impl AgentProvider {
     /// OpenAI-compatible providers use the Chat Completions API (`/chat/completions`)
     /// rather than the Responses API (`/responses`). Most third-party providers
     /// (MiniMax, Together, etc.) only implement the completions endpoint.
-    fn build_openai_compatible_client(&self) -> Result<openai::CompletionsClient> {
+    fn build_openai_compatible_client(
+        &self,
+    ) -> Result<openai::CompletionsClient<OpenAICompatibleHttpClient>> {
         self.build_openai_compatible_client_for(&ProviderKind::OpenAICompatible)
     }
 
     fn build_openai_compatible_client_for(
         &self,
         kind: &ProviderKind,
-    ) -> Result<openai::CompletionsClient> {
-        let api_key = self.resolve_api_key(kind)?;
-        let mut builder = openai::CompletionsClient::builder().api_key(&api_key);
+    ) -> Result<openai::CompletionsClient<OpenAICompatibleHttpClient>> {
+        let configured_api_key = if self.should_skip_default_env_api_key(kind) {
+            self.resolve_configured_api_key(kind)?
+        } else {
+            self.resolve_optional_api_key(kind)?
+        };
+        let api_key = configured_api_key.as_deref().unwrap_or("con-local-keyless");
+        let mut builder = openai::CompletionsClient::builder()
+            .api_key(api_key)
+            .http_client(OpenAICompatibleHttpClient::new(
+                configured_api_key.is_none(),
+            ));
         if let Some(url) = self.config.effective_base_url(kind) {
             builder = builder.base_url(url);
         }
@@ -1715,31 +1884,12 @@ impl AgentProvider {
     }
 
     fn resolve_optional_api_key(&self, kind: &ProviderKind) -> Result<Option<String>> {
-        let pc = self.config.providers.get(kind);
-
-        // 1. Direct api_key from provider config
-        if let Some(key) = pc
-            .and_then(|p| p.api_key.as_ref())
-            .filter(|k| !k.is_empty())
-        {
-            return Ok(Some(key.clone()));
+        if let Some(api_key) = self.resolve_configured_api_key(kind)? {
+            return Ok(Some(api_key));
         }
 
-        // 2. api_key_env — could be env var name or direct key (legacy compat)
-        if let Some(key_or_env) = pc
-            .and_then(|p| p.api_key_env.as_ref())
-            .filter(|k| !k.is_empty())
-        {
-            let is_env_var_name = key_or_env
-                .chars()
-                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit());
-            if is_env_var_name {
-                if let Ok(val) = std::env::var(key_or_env) {
-                    return Ok(Some(val));
-                }
-            } else {
-                return Ok(Some(key_or_env.clone()));
-            }
+        if self.should_skip_default_env_api_key(kind) {
+            return Ok(None);
         }
 
         // 3. Fall back to provider's default env var
@@ -1751,6 +1901,51 @@ impl AgentProvider {
         }
 
         Ok(std::env::var(default_env).ok())
+    }
+
+    fn should_skip_default_env_api_key(&self, kind: &ProviderKind) -> bool {
+        *kind == ProviderKind::OpenAICompatible
+            && self
+                .config
+                .effective_base_url(kind)
+                .as_deref()
+                .is_some_and(is_local_openai_compatible_base_url)
+    }
+
+    fn resolve_configured_api_key(&self, kind: &ProviderKind) -> Result<Option<String>> {
+        let pc = self.config.providers.get(kind);
+
+        // 1. Direct api_key from provider config
+        if let Some(key) = pc
+            .and_then(|p| p.api_key.as_ref())
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            return Ok(Some(key.to_string()));
+        }
+
+        // 2. api_key_env — could be env var name or direct key (legacy compat)
+        if let Some(key_or_env) = pc
+            .and_then(|p| p.api_key_env.as_ref())
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            let is_env_var_name = key_or_env
+                .chars()
+                .all(|c| c.is_ascii_uppercase() || c == '_' || c.is_ascii_digit());
+            if is_env_var_name {
+                if let Ok(val) = std::env::var(key_or_env) {
+                    let val = val.trim().to_string();
+                    if !val.is_empty() {
+                        return Ok(Some(val));
+                    }
+                }
+            } else {
+                return Ok(Some(key_or_env.to_string()));
+            }
+        }
+
+        Ok(None)
     }
 }
 

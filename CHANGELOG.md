@@ -18,6 +18,23 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**AI Providers**
+
+- Fixed MiniMax, Moonshot, and Z.AI provider settings so switching a provider
+  between OpenAI-compatible and Anthropic protocol modes preserves the intended
+  endpoint preset. Domestic/China base URLs no longer fall back to the global
+  endpoint after saving and reopening Settings. _(Issue
+  [#178](https://github.com/nowledge-co/con-terminal/issues/178), PR
+  [#189](https://github.com/nowledge-co/con-terminal/pull/189) by
+  [@wey-gu](https://github.com/wey-gu))_
+- OpenAI Compatible providers can now be saved and used without an API key, so
+  local services such as OMLX do not require a fake `sk-...` credential just to
+  pass Settings validation. Explicit keys and env-var credentials still work
+  for hosted endpoints. _(Issue
+  [#147](https://github.com/nowledge-co/con-terminal/issues/147), PR
+  [#189](https://github.com/nowledge-co/con-terminal/pull/189) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 **macOS**
 
 - Set `GHOSTTY_RESOURCES_DIR` from the installed app bundle when the build-time
@@ -27,7 +44,6 @@ con is still pre-release, so entries may group related beta work while the produ
   [@wey-gu](https://github.com/wey-gu), following PR
   [#187](https://github.com/nowledge-co/con-terminal/pull/187) by
   [@iknowu10](https://github.com/iknowu10))_
-
 
 ## `v0.1.0-beta.69` - 2026-05-11
 

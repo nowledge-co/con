@@ -408,14 +408,18 @@ impl ModelRegistry {
     /// Fetch a model list from an OpenAI-compatible endpoint.
     pub async fn fetch_openai_compatible_models(
         base_url: &str,
-        api_key: &str,
+        api_key: Option<&str>,
     ) -> anyhow::Result<Vec<String>> {
         let endpoint = Self::openai_compatible_models_url(base_url)?;
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
             .build()?;
 
-        let resp = client.get(&endpoint).bearer_auth(api_key).send().await?;
+        let mut request = client.get(&endpoint);
+        if let Some(api_key) = api_key.map(str::trim).filter(|value| !value.is_empty()) {
+            request = request.bearer_auth(api_key);
+        }
+        let resp = request.send().await?;
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
