@@ -88,24 +88,24 @@ current limits and fixes.
 ## Shell integration
 
 con embeds Ghostty's shell-integration scripts and tries to auto-inject them
-into the shells it spawns. Most users won't notice — Ghostty handles this
+into the shells it spawns. Most users will never notice: Ghostty handles this
 through `ZDOTDIR` for zsh, `XDG_DATA_DIRS` for fish, and `--rcfile` for bash.
 
 Auto-injection can be skipped, though, when something else owns the shell
 startup path: tmux, `exec zsh`, login-shell mode, a framework that resets
-`ZDOTDIR`, etc. The symptoms are subtle but inconvenient — every restored tab
-opens at `$HOME` instead of where you left it, the sidebar can't read the
-foreground process / cwd, and AI tab labels have nothing to summarize.
+`ZDOTDIR`, and similar setups. When that happens, con still works as a
+terminal, but it loses shell metadata: new panes may open at `$HOME`, the
+sidebar may miss the foreground process or cwd, and AI tab labels have less
+context.
 
-To verify it's loaded, run this in a fresh con tab:
+You can check whether integration loaded in a fresh con tab:
 
-```sh
-echo $precmd_functions   # zsh
-```
+- zsh: `echo $precmd_functions | grep _ghostty_precmd`
+- bash: `declare -F | grep __ghostty_precmd`
+- fish: `functions -a | grep __ghostty_mark_prompt_start`
 
-You should see `_ghostty_precmd` in the list. If you don't, source the
-integration script explicitly. Add the line for your shell to its rc file
-and open a new tab:
+If the command prints nothing, source the integration script explicitly. Add
+the line for your shell to its startup file, save it, and open a new tab:
 
 **zsh** (`~/.zshrc`):
 
@@ -122,10 +122,14 @@ if [[ -n "$GHOSTTY_RESOURCES_DIR" ]]; then
 fi
 ```
 
+If you run bash as a login shell, put the same snippet in `~/.bash_profile` or
+`~/.profile`, or make that file source `~/.bashrc`. Login bash does not always
+read `~/.bashrc` on its own.
+
 **fish** (`~/.config/fish/config.fish`):
 
 ```fish
-if set -q GHOSTTY_RESOURCES_DIR
+if set -q GHOSTTY_RESOURCES_DIR; and string length -q -- "$GHOSTTY_RESOURCES_DIR"
     source "$GHOSTTY_RESOURCES_DIR/shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish"
 end
 ```

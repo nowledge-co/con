@@ -6,6 +6,29 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.70` - unreleased
 
+### Changed
+
+**Docs**
+
+- Added shell-integration troubleshooting to the install guide, with manual
+  zsh, bash, and fish fallback snippets for users whose startup files prevent
+  Ghostty's auto-injection from loading. _(PR
+  [#187](https://github.com/nowledge-co/con-terminal/pull/187) by
+  [@iknowu10](https://github.com/iknowu10))_
+
+### Fixed
+
+**macOS**
+
+- Set `GHOSTTY_RESOURCES_DIR` from the installed app bundle when the build-time
+  Ghostty resources path is unavailable, so manual shell-integration source
+  fallbacks work in release builds as well as `cargo run` builds. _(PR
+  [#188](https://github.com/nowledge-co/con-terminal/pull/188) by
+  [@wey-gu](https://github.com/wey-gu), following PR
+  [#187](https://github.com/nowledge-co/con-terminal/pull/187) by
+  [@iknowu10](https://github.com/iknowu10))_
+
+
 ## `v0.1.0-beta.69` - 2026-05-11
 
 ### Added
