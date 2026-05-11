@@ -1185,44 +1185,37 @@ fn show_about_window(cx: &mut App) {
 
 macro_rules! configurable_app_keybindings {
     ($bindings:expr, $kb:expr, $push:ident) => {{
-        $push!($bindings, &($kb).quit, Quit);
-        $push!($bindings, &($kb).new_window, NewWindow);
-        $push!($bindings, &($kb).new_tab, NewTab);
-        $push!($bindings, &($kb).next_tab, NextTab);
-        $push!($bindings, &($kb).previous_tab, PreviousTab);
-        $push!($bindings, &($kb).toggle_agent, ToggleAgentPanel);
-        $push!($bindings, &($kb).close_tab, CloseTab);
-        $push!($bindings, &($kb).close_pane, ClosePane);
-        $push!($bindings, &($kb).toggle_pane_zoom, TogglePaneZoom);
-        $push!($bindings, &($kb).settings, settings_panel::ToggleSettings);
+        let kb = $kb;
+        $push!($bindings, &kb.quit, Quit);
+        $push!($bindings, &kb.new_window, NewWindow);
+        $push!($bindings, &kb.new_tab, NewTab);
+        $push!($bindings, &kb.next_tab, NextTab);
+        $push!($bindings, &kb.previous_tab, PreviousTab);
+        $push!($bindings, &kb.toggle_agent, ToggleAgentPanel);
+        $push!($bindings, &kb.close_tab, CloseTab);
+        $push!($bindings, &kb.close_pane, ClosePane);
+        $push!($bindings, &kb.toggle_pane_zoom, TogglePaneZoom);
+        $push!($bindings, &kb.settings, settings_panel::ToggleSettings);
         $push!(
             $bindings,
-            &($kb).command_palette,
+            &kb.command_palette,
             command_palette::ToggleCommandPalette
         );
-        $push!($bindings, &($kb).split_right, SplitRight);
-        $push!($bindings, &($kb).split_down, SplitDown);
-        $push!($bindings, &($kb).new_surface, NewSurface);
-        $push!(
-            $bindings,
-            &($kb).new_surface_split_right,
-            NewSurfaceSplitRight
-        );
-        $push!(
-            $bindings,
-            &($kb).new_surface_split_down,
-            NewSurfaceSplitDown
-        );
-        $push!($bindings, &($kb).next_surface, NextSurface);
-        $push!($bindings, &($kb).previous_surface, PreviousSurface);
-        $push!($bindings, &($kb).rename_surface, RenameSurface);
-        $push!($bindings, &($kb).close_surface, CloseSurface);
-        $push!($bindings, &($kb).focus_input, FocusInput);
-        $push!($bindings, &($kb).cycle_input_mode, CycleInputMode);
-        $push!($bindings, &($kb).toggle_input_bar, ToggleInputBar);
-        $push!($bindings, &($kb).toggle_pane_scope, TogglePaneScopePicker);
-        $push!($bindings, &($kb).toggle_vertical_tabs, ToggleVerticalTabs);
-        $push!($bindings, &($kb).collapse_sidebar, CollapseSidebar);
+        $push!($bindings, &kb.split_right, SplitRight);
+        $push!($bindings, &kb.split_down, SplitDown);
+        $push!($bindings, &kb.new_surface, NewSurface);
+        $push!($bindings, &kb.new_surface_split_right, NewSurfaceSplitRight);
+        $push!($bindings, &kb.new_surface_split_down, NewSurfaceSplitDown);
+        $push!($bindings, &kb.next_surface, NextSurface);
+        $push!($bindings, &kb.previous_surface, PreviousSurface);
+        $push!($bindings, &kb.rename_surface, RenameSurface);
+        $push!($bindings, &kb.close_surface, CloseSurface);
+        $push!($bindings, &kb.focus_input, FocusInput);
+        $push!($bindings, &kb.cycle_input_mode, CycleInputMode);
+        $push!($bindings, &kb.toggle_input_bar, ToggleInputBar);
+        $push!($bindings, &kb.toggle_pane_scope, TogglePaneScopePicker);
+        $push!($bindings, &kb.toggle_vertical_tabs, ToggleVerticalTabs);
+        $push!($bindings, &kb.collapse_sidebar, CollapseSidebar);
     }};
 }
 

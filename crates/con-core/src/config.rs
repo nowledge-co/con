@@ -581,6 +581,8 @@ fn canonical_keybinding(binding: &str) -> Option<String> {
 
 fn canonical_keystroke(stroke: &str) -> Option<String> {
     let mut modifiers = Vec::<&'static str>::new();
+    // A trailing separator is the literal minus key, e.g. "ctrl--"
+    // means Control-Minus rather than a missing key token.
     let is_minus_key = stroke.ends_with('-');
     let mut key = is_minus_key.then(|| "-".to_string());
     let mut parts = stroke

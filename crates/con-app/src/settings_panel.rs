@@ -142,6 +142,7 @@ pub struct SettingsPanel {
     background_image_repeat: bool,
     hide_pane_title_bar: bool,
     save_error: Option<String>,
+    save_error_kind: Option<SettingsSaveErrorKind>,
     last_saved_at: Option<std::time::SystemTime>,
 
     // Theme import
@@ -157,6 +158,12 @@ pub struct SettingsPanel {
     // Network / proxy
     http_proxy_input: Entity<InputState>,
     https_proxy_input: Entity<InputState>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettingsSaveErrorKind {
+    KeybindingConflict,
+    Other,
 }
 
 const SIDEBAR_PROVIDERS: &[ProviderKind] = &[
@@ -1478,6 +1485,7 @@ impl SettingsPanel {
             background_image_repeat: config.appearance.background_image_repeat,
             hide_pane_title_bar: config.appearance.hide_pane_title_bar,
             save_error: None,
+            save_error_kind: None,
             last_saved_at: std::fs::metadata(Config::config_path())
                 .and_then(|m| m.modified())
                 .ok(),
@@ -2250,6 +2258,7 @@ impl SettingsPanel {
                 "UI Size must be a number between {:.1} and {:.1}.",
                 MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE
             ));
+            self.save_error_kind = Some(SettingsSaveErrorKind::Other);
             cx.notify();
             return;
         };
@@ -2289,6 +2298,7 @@ impl SettingsPanel {
         // Keybindings are updated directly via record_keystroke — no reading needed
         if let Some(message) = keybinding_conflict_message(&self.config.keybindings) {
             self.save_error = Some(message);
+            self.save_error_kind = Some(SettingsSaveErrorKind::KeybindingConflict);
             cx.notify();
             return;
         }
@@ -2312,6 +2322,7 @@ impl SettingsPanel {
         match self.persist_config() {
             Ok(()) => {
                 self.save_error = None;
+                self.save_error_kind = None;
                 self.last_saved_at = Some(std::time::SystemTime::now());
                 self.preview_snapshot = Some(self.config.clone());
                 if !self.standalone {
@@ -2324,6 +2335,7 @@ impl SettingsPanel {
             Err(e) => {
                 log::error!("Failed to save config: {}", e);
                 self.save_error = Some(e.to_string());
+                self.save_error_kind = Some(SettingsSaveErrorKind::Other);
             }
         }
         cx.notify();
@@ -2418,7 +2430,11 @@ impl SettingsPanel {
             _ => {}
         }
         self.set_recording_key(None);
-        sync_keybinding_conflict_error(&mut self.save_error, &self.config.keybindings);
+        sync_keybinding_conflict_error(
+            &mut self.save_error,
+            &mut self.save_error_kind,
+            &self.config.keybindings,
+        );
         cx.notify();
     }
 
@@ -3484,6 +3500,7 @@ impl SettingsPanel {
                                             "settings: persist tabs_orientation failed: {err}"
                                         );
                                         this.save_error = Some(err.to_string());
+                                        this.save_error_kind = Some(SettingsSaveErrorKind::Other);
                                         cx.notify();
                                         return;
                                     }
@@ -3492,6 +3509,7 @@ impl SettingsPanel {
                                             this.config.appearance.tabs_orientation;
                                     }
                                     this.save_error = None;
+                                    this.save_error_kind = None;
                                     cx.emit(TabsOrientationChanged);
                                     cx.notify();
                                 })),
@@ -3515,6 +3533,7 @@ impl SettingsPanel {
                                             "settings: persist hide_pane_title_bar failed: {err}"
                                         );
                                         this.save_error = Some(err.to_string());
+                                        this.save_error_kind = Some(SettingsSaveErrorKind::Other);
                                         cx.notify();
                                         return;
                                     }
@@ -3522,6 +3541,7 @@ impl SettingsPanel {
                                         snapshot.appearance.hide_pane_title_bar = *checked;
                                     }
                                     this.save_error = None;
+                                    this.save_error_kind = None;
                                     cx.emit(AppearancePreview);
                                     cx.notify();
                                 })),
@@ -4842,6 +4862,11 @@ impl SettingsPanel {
                                     this.config.keybindings.global_summon =
                                         "alt-space".to_string();
                                 }
+                                sync_keybinding_conflict_error(
+                                    &mut this.save_error,
+                                    &mut this.save_error_kind,
+                                    &this.config.keybindings,
+                                );
                                 cx.notify();
                             })),
                     ),
@@ -4985,6 +5010,11 @@ impl SettingsPanel {
                                     {
                                         this.config.keybindings.quick_terminal = "cmd-\\".to_string();
                                     }
+                                    sync_keybinding_conflict_error(
+                                        &mut this.save_error,
+                                        &mut this.save_error_kind,
+                                        &this.config.keybindings,
+                                    );
                                     cx.notify();
                                 })),
                         ),
@@ -5483,7 +5513,7 @@ impl Render for SettingsPanel {
             )
             // Error banner
             .children(self.save_error.as_ref().map(|err| {
-                let message = if is_keybinding_conflict_error(err) {
+                let message = if self.save_error_kind == Some(SettingsSaveErrorKind::KeybindingConflict) {
                     err.to_string()
                 } else {
                     format!("Save failed: {err}")
@@ -5902,22 +5932,20 @@ fn keybinding_conflict_message(kb: &con_core::config::KeybindingConfig) -> Optio
 
 fn sync_keybinding_conflict_error(
     save_error: &mut Option<String>,
+    save_error_kind: &mut Option<SettingsSaveErrorKind>,
     kb: &con_core::config::KeybindingConfig,
 ) {
     match keybinding_conflict_message(kb) {
-        Some(message) => *save_error = Some(message),
-        None if save_error
-            .as_deref()
-            .is_some_and(is_keybinding_conflict_error) =>
-        {
+        Some(message) => {
+            *save_error = Some(message);
+            *save_error_kind = Some(SettingsSaveErrorKind::KeybindingConflict);
+        }
+        None if *save_error_kind == Some(SettingsSaveErrorKind::KeybindingConflict) => {
             *save_error = None;
+            *save_error_kind = None;
         }
         None => {}
     }
-}
-
-fn is_keybinding_conflict_error(message: &str) -> bool {
-    message.starts_with("Shortcut conflict:")
 }
 
 fn reserved_keybinding_shortcuts() -> Vec<(&'static str, &'static str)> {
