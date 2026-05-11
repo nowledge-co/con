@@ -470,6 +470,7 @@ impl GhosttyView {
         if !self.seen_any_output && snapshot.cells.iter().any(|c| c.codepoint != 0) {
             self.seen_any_output = true;
         }
+        self.clear_selection();
         self.snapshot = Some(snapshot);
         true
     }
@@ -478,7 +479,7 @@ impl GhosttyView {
         self.pane_bounds = Some(bounds);
         self.scale_factor = scale_factor;
 
-        let Some(terminal) = self.terminal.as_ref() else {
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
             return false;
         };
 
@@ -664,7 +665,7 @@ impl GhosttyView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(terminal) = self.terminal.as_ref() else {
+        let Some(terminal) = self.terminal.as_ref().cloned() else {
             return false;
         };
 
@@ -716,7 +717,7 @@ impl GhosttyView {
                     return true;
                 }
                 "v" => {
-                    paste_from_clipboard(terminal, cx);
+                    paste_from_clipboard(&terminal, cx);
                     return true;
                 }
                 _ => {}

@@ -42,6 +42,7 @@ pub struct RenderSession {
     vt: Arc<VtScreen>,
     transcript: Arc<Mutex<TranscriptBuffer>>,
     conpty: Arc<ConPty>,
+    shell_cwd: Option<PathBuf>,
     config: Mutex<RendererConfig>,
     base_font_size_px: f32,
     dpi: AtomicU32,
@@ -202,6 +203,7 @@ impl RenderSession {
             vt,
             transcript,
             conpty,
+            shell_cwd,
             config: Mutex::new(renderer_config),
             base_font_size_px,
             dpi: AtomicU32::new(current_dpi),
@@ -647,7 +649,11 @@ impl RenderSession {
     }
 
     pub fn current_dir(&self) -> Option<String> {
-        self.vt.current_dir()
+        self.vt.current_dir().or_else(|| {
+            self.shell_cwd
+                .as_ref()
+                .map(|cwd| cwd.to_string_lossy().to_string())
+        })
     }
 
     pub fn read_recent_lines(&self, max_lines: usize) -> Vec<String> {

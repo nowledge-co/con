@@ -26,6 +26,8 @@ con is still pre-release, so entries may group related beta work while the produ
 - Fixed pane-local surface tab strips so they use the same themed chrome
   backing as split-pane title bars instead of leaking transparent window
   content, and tightened their spacing, typography, and active/hover states.
+  _(PR [#184](https://github.com/nowledge-co/con-terminal/pull/184) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 **Windows**
 
@@ -52,13 +54,26 @@ con is still pre-release, so entries may group related beta work while the produ
   [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
   [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
   [@wey-gu](https://github.com/wey-gu))_
+- Stopped stale Windows terminal frames from stretching while panes close,
+  split, or resize, so existing terminal content no longer appears briefly
+  zoomed before the next renderer frame arrives. _(Issue
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Fixed restored Windows sessions so the saved working directory remains the
+  ConPTY launch/current-directory fallback until shell integration reports a
+  newer path. _(Issue
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 **Windows and Linux**
 
 - Fixed terminal selection copy semantics on the portable backends:
   `Ctrl+C` now copies and clears the current selection when text is selected,
   while still sending interrupt when nothing is selected. The Linux preview
-  also now supports left-drag text selection in the terminal pane. _(Issues
+  also now supports left-drag text selection in the terminal pane and clears
+  stale highlights when fresh terminal output replaces the grid. _(Issues
   [#177](https://github.com/nowledge-co/con-terminal/issues/177),
   [#18](https://github.com/nowledge-co/con-terminal/issues/18), and
   [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR

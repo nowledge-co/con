@@ -139,6 +139,7 @@ pub struct GhosttyView {
     /// required while the terminal background is translucent: GPUI image
     /// children alpha-composite, so row-strip overlays would blend with
     /// stale text instead of erasing it.
+    cached_image_size: Option<(u32, u32)>,
     cached_frame: Option<Vec<u8>>,
     cached_frame_size: Option<(u32, u32)>,
     /// `GHOSTTY_TERMINAL_DATA_SCROLLBAR` is an expensive VT query.
@@ -226,6 +227,7 @@ impl GhosttyView {
             last_physical_size: None,
             last_scale_factor: 0.0,
             cached_image: None,
+            cached_image_size: None,
             cached_frame: None,
             cached_frame_size: None,
             scrollbar_cache: None,
@@ -288,6 +290,7 @@ impl GhosttyView {
         // the window closes; no way to reach `Window::drop_image` from
         // here. A per-pane ~2×framebytes residue is acceptable.
         self.cached_image = None;
+        self.cached_image_size = None;
         self.cached_frame = None;
         self.cached_frame_size = None;
         self.scrollbar_cache = None;
@@ -677,6 +680,7 @@ impl GhosttyView {
             if let Some(old) = self.cached_image.replace(image) {
                 self.images_to_drop.push(old);
             }
+            self.cached_image_size = Some((frame_width, frame_height));
             self.cached_frame_size = Some((frame_width, frame_height));
             return true;
         }
@@ -695,19 +699,30 @@ impl GhosttyView {
 
     fn image_children(&self) -> Vec<AnyElement> {
         let mut children = Vec::with_capacity(usize::from(self.cached_image.is_some()));
-        // `ObjectFit::Fill` keeps each image quad exactly equal to its
-        // logical bounds. The default `Contain` applies aspect-ratio
-        // letterboxing using float math, which produces a quad a
-        // fraction of a pixel smaller than our source texture; the
-        // LINEAR sprite sampler then blends neighbouring texels and the
-        // terminal cells show faint speckles below the glyph baseline.
         if let Some(img_arc) = self.cached_image.clone() {
-            children.push(
-                img(ImageSource::Render(img_arc))
-                    .size_full()
-                    .object_fit(ObjectFit::Fill)
-                    .into_any_element(),
-            );
+            // Keep stale D3D readback frames at their original logical
+            // size while pane layout is changing. Stretching the old
+            // texture to the new pane bounds makes terminal text appear
+            // zoomed for a frame when closing/splitting panes; the
+            // clipped parent background is a safer placeholder until the
+            // resized renderer publishes the next frame.
+            let image = img(ImageSource::Render(img_arc)).object_fit(ObjectFit::Fill);
+            let image = if let Some((frame_width, frame_height)) = self.cached_image_size {
+                let scale_factor = self.scale_factor.max(f32::EPSILON);
+                image
+                    .w(px(frame_width as f32 / scale_factor))
+                    .h(px(frame_height as f32 / scale_factor))
+            } else {
+                // `ObjectFit::Fill` keeps each image quad exactly equal
+                // to its logical bounds. The default `Contain` applies
+                // aspect-ratio letterboxing using float math, which
+                // produces a quad a fraction of a pixel smaller than our
+                // source texture; the LINEAR sprite sampler then blends
+                // neighbouring texels and terminal cells show faint
+                // speckles below the glyph baseline.
+                image.size_full()
+            };
+            children.push(image.into_any_element());
         }
 
         children
@@ -1658,12 +1673,16 @@ impl Render for GhosttyView {
                 }
                 let hover_changed = this.update_hovered_link(&event.modifiers);
                 if event.pressed_button == Some(MouseButton::Left) {
-                    this.forward_mouse_drag(
-                        event.position,
-                        mouse_mods_from(&event.modifiers),
-                        this.terminal_mouse_sequence_active,
-                    );
-                    cx.notify();
+                    if this.terminal_mouse_sequence_active {
+                        this.forward_mouse_drag(
+                            event.position,
+                            mouse_mods_from(&event.modifiers),
+                            true,
+                        );
+                        cx.notify();
+                    } else if hover_changed {
+                        cx.notify();
+                    }
                 } else if this.terminal_mouse_sequence_active {
                     this.forward_mouse_up(event.position, mouse_mods_from(&event.modifiers), true);
                     this.terminal_mouse_sequence_active = false;
@@ -1696,11 +1715,13 @@ impl Render for GhosttyView {
                         cx.notify();
                         return;
                     }
-                    this.forward_mouse_up(
-                        event.position,
-                        mouse_mods_from(&event.modifiers),
-                        had_terminal_mouse_sequence,
-                    );
+                    if had_terminal_mouse_sequence {
+                        this.forward_mouse_up(
+                            event.position,
+                            mouse_mods_from(&event.modifiers),
+                            true,
+                        );
+                    }
                     this.terminal_mouse_sequence_active = false;
                     let _ = this.update_hovered_link(&event.modifiers);
                     cx.notify();
