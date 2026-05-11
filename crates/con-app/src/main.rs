@@ -1232,8 +1232,8 @@ macro_rules! push_app_keybinding {
 macro_rules! push_app_keybinding_unbind {
     ($bindings:expr, $key:expr, $action:path) => {{
         let key = $key;
-        if !key.trim().is_empty() {
-            let action_name: SharedString = gpui::Action::name(&$action).into();
+        let action_name: SharedString = gpui::Action::name(&$action).into();
+        if !key.trim().is_empty() && !is_fixed_configurable_app_keybinding(key, &action_name) {
             $bindings.push(KeyBinding::new(
                 key,
                 gpui::Unbind(action_name.clone()),
@@ -1248,60 +1248,69 @@ macro_rules! push_app_keybinding_unbind {
     }};
 }
 
+macro_rules! fixed_app_keybindings {
+    ($items:expr, $push:ident) => {{
+        $push!($items, "Next Tab", "secondary-shift-]", NextTab);
+        $push!($items, "Previous Tab", "secondary-shift-[", PreviousTab);
+        $push!($items, "Select Tab 1", "secondary-1", SelectTab1);
+        $push!($items, "Select Tab 2", "secondary-2", SelectTab2);
+        $push!($items, "Select Tab 3", "secondary-3", SelectTab3);
+        $push!($items, "Select Tab 4", "secondary-4", SelectTab4);
+        $push!($items, "Select Tab 5", "secondary-5", SelectTab5);
+        $push!($items, "Select Tab 6", "secondary-6", SelectTab6);
+        $push!($items, "Select Tab 7", "secondary-7", SelectTab7);
+        $push!($items, "Select Tab 8", "secondary-8", SelectTab8);
+        $push!($items, "Select Tab 9", "secondary-9", SelectTab9);
+
+        #[cfg(target_os = "macos")]
+        {
+            $push!($items, "Hide Con", "cmd-h", HideApp);
+            $push!($items, "Hide Other Apps", "cmd-alt-h", HideOtherApps);
+            $push!($items, "Show All Apps", "cmd-alt-shift-h", ShowAllApps);
+            $push!($items, "Next Window", "cmd-`", NextWindow);
+            $push!($items, "Next Window", "cmd->", NextWindow);
+            $push!($items, "Previous Window", "cmd-shift-`", PreviousWindow);
+            $push!($items, "Previous Window", "cmd-~", PreviousWindow);
+            $push!($items, "Previous Window", "cmd-<", PreviousWindow);
+            $push!($items, "Minimize Window", "cmd-m", Minimize);
+        }
+    }};
+}
+
+macro_rules! push_fixed_app_keybinding {
+    ($bindings:expr, $label:expr, $key:expr, $action:path) => {{
+        let _ = $label;
+        $bindings.push(KeyBinding::new($key, $action, None));
+        $bindings.push(KeyBinding::new($key, $action, Some("Input")));
+    }};
+}
+
+macro_rules! push_fixed_app_keybinding_shortcut {
+    ($shortcuts:expr, $label:expr, $key:expr, $action:path) => {{
+        let _ = &$action;
+        $shortcuts.push(($label, $key));
+    }};
+}
+
+pub(crate) fn fixed_app_keybinding_shortcuts() -> Vec<(&'static str, &'static str)> {
+    let mut shortcuts = Vec::new();
+    fixed_app_keybindings!(shortcuts, push_fixed_app_keybinding_shortcut);
+    shortcuts
+}
+
+fn is_fixed_configurable_app_keybinding(key: &str, action_name: &SharedString) -> bool {
+    let next_tab: SharedString = gpui::Action::name(&NextTab).into();
+    let previous_tab: SharedString = gpui::Action::name(&PreviousTab).into();
+
+    (key == "secondary-shift-]" && action_name == &next_tab)
+        || (key == "secondary-shift-[" && action_name == &previous_tab)
+}
+
 pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
     let mut bindings = Vec::new();
     configurable_app_keybindings!(bindings, kb, push_app_keybinding);
-    bindings.extend([
-        KeyBinding::new("secondary-shift-]", NextTab, None),
-        KeyBinding::new("secondary-shift-[", PreviousTab, None),
-        KeyBinding::new("secondary-1", SelectTab1, None),
-        KeyBinding::new("secondary-2", SelectTab2, None),
-        KeyBinding::new("secondary-3", SelectTab3, None),
-        KeyBinding::new("secondary-4", SelectTab4, None),
-        KeyBinding::new("secondary-5", SelectTab5, None),
-        KeyBinding::new("secondary-6", SelectTab6, None),
-        KeyBinding::new("secondary-7", SelectTab7, None),
-        KeyBinding::new("secondary-8", SelectTab8, None),
-        KeyBinding::new("secondary-9", SelectTab9, None),
-        KeyBinding::new("secondary-shift-]", NextTab, Some("Input")),
-        KeyBinding::new("secondary-shift-[", PreviousTab, Some("Input")),
-        KeyBinding::new("secondary-1", SelectTab1, Some("Input")),
-        KeyBinding::new("secondary-2", SelectTab2, Some("Input")),
-        KeyBinding::new("secondary-3", SelectTab3, Some("Input")),
-        KeyBinding::new("secondary-4", SelectTab4, Some("Input")),
-        KeyBinding::new("secondary-5", SelectTab5, Some("Input")),
-        KeyBinding::new("secondary-6", SelectTab6, Some("Input")),
-        KeyBinding::new("secondary-7", SelectTab7, Some("Input")),
-        KeyBinding::new("secondary-8", SelectTab8, Some("Input")),
-        KeyBinding::new("secondary-9", SelectTab9, Some("Input")),
-    ]);
+    fixed_app_keybindings!(bindings, push_fixed_app_keybinding);
     cx.bind_keys(bindings);
-
-    // Hide app / Hide others / Show all are macOS system-menu conventions
-    // with no equivalent on Windows or Linux — cmd-h, cmd-alt-h, and
-    // cmd-alt-shift-h are the canonical modifiers, so we keep them
-    // verbatim inside a cfg gate rather than routing through `secondary`.
-    #[cfg(target_os = "macos")]
-    cx.bind_keys([
-        KeyBinding::new("cmd-h", HideApp, None),
-        KeyBinding::new("cmd-alt-h", HideOtherApps, None),
-        KeyBinding::new("cmd-alt-shift-h", ShowAllApps, None),
-        KeyBinding::new("cmd-`", NextWindow, None),
-        KeyBinding::new("cmd->", NextWindow, None),
-        KeyBinding::new("cmd-shift-`", PreviousWindow, None),
-        KeyBinding::new("cmd-~", PreviousWindow, None),
-        KeyBinding::new("cmd-<", PreviousWindow, None),
-        KeyBinding::new("cmd-m", Minimize, None),
-        KeyBinding::new("cmd-m", Minimize, Some("Input")),
-        KeyBinding::new("cmd-h", HideApp, Some("Input")),
-        KeyBinding::new("cmd-alt-h", HideOtherApps, Some("Input")),
-        KeyBinding::new("cmd-alt-shift-h", ShowAllApps, Some("Input")),
-        KeyBinding::new("cmd-`", NextWindow, Some("Input")),
-        KeyBinding::new("cmd->", NextWindow, Some("Input")),
-        KeyBinding::new("cmd-shift-`", PreviousWindow, Some("Input")),
-        KeyBinding::new("cmd-~", PreviousWindow, Some("Input")),
-        KeyBinding::new("cmd-<", PreviousWindow, Some("Input")),
-    ]);
 }
 
 fn bind_configurable_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {

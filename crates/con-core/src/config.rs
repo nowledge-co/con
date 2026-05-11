@@ -519,8 +519,8 @@ impl KeybindingConfig {
                 continue;
             };
             let entry = seen
-                .entry(canonical)
-                .or_insert_with(|| (binding.to_string(), Vec::new()));
+                .entry(canonical.clone())
+                .or_insert_with(|| (canonical, Vec::new()));
             if !entry.1.iter().any(|existing| existing == label) {
                 entry.1.push(label.to_string());
             }

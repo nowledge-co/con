@@ -6,6 +6,24 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.69` - unreleased
 
+### Added
+
+**macOS**
+
+- Added the standard <kbd>⌘</kbd><kbd>M</kbd> shortcut and Window menu action
+  for minimizing Con windows, including terminal-focused windows. _(PR
+  [#175](https://github.com/nowledge-co/con-terminal/pull/175) by
+  [@chenghuzi](https://github.com/chenghuzi))_
+
+**Developer Experience**
+
+- Added a mise-pinned contributor toolchain for Rust, Zig, and CMake, and
+  updated the hacking guide so new contributors can bootstrap the exact
+  supported build tools with `mise install` before running the usual checks.
+  _(Issue [#174](https://github.com/nowledge-co/con-terminal/issues/174), PR
+  [#183](https://github.com/nowledge-co/con-terminal/pull/183) by
+  [@tao12345666333](https://github.com/tao12345666333))_
+
 ### Changed
 
 **Windows**
@@ -178,15 +196,6 @@ con is still pre-release, so entries may group related beta work while the produ
   match terminal-launched sessions more closely. _(PR
   [#173](https://github.com/nowledge-co/con-terminal/pull/173) by
   [@sundy-li](https://github.com/sundy-li))_
-
-### Added
-
-**macOS**
-
-- Added the standard <kbd>⌘</kbd><kbd>M</kbd> shortcut and Window menu action
-  for minimizing Con windows, including terminal-focused windows. _(PR
-  [#175](https://github.com/nowledge-co/con-terminal/pull/175) by
-  [@chenghuzi](https://github.com/chenghuzi))_
 
 ## `v0.1.0-beta.67` - 2026-05-08
 

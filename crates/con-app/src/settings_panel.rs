@@ -5949,39 +5949,7 @@ fn sync_keybinding_conflict_error(
 }
 
 fn reserved_keybinding_shortcuts() -> Vec<(&'static str, &'static str)> {
-    let shortcuts = vec![
-        ("Next Tab", "secondary-shift-]"),
-        ("Previous Tab", "secondary-shift-["),
-        ("Select Tab 1", "secondary-1"),
-        ("Select Tab 2", "secondary-2"),
-        ("Select Tab 3", "secondary-3"),
-        ("Select Tab 4", "secondary-4"),
-        ("Select Tab 5", "secondary-5"),
-        ("Select Tab 6", "secondary-6"),
-        ("Select Tab 7", "secondary-7"),
-        ("Select Tab 8", "secondary-8"),
-        ("Select Tab 9", "secondary-9"),
-    ];
-
-    #[cfg(target_os = "macos")]
-    {
-        let mut shortcuts = shortcuts;
-        shortcuts.extend([
-            ("Hide Con", "cmd-h"),
-            ("Hide Other Apps", "cmd-alt-h"),
-            ("Show All Apps", "cmd-alt-shift-h"),
-            ("Next Window", "cmd-`"),
-            ("Next Window", "cmd->"),
-            ("Previous Window", "cmd-shift-`"),
-            ("Previous Window", "cmd-~"),
-            ("Previous Window", "cmd-<"),
-            ("Minimize Window", "cmd-m"),
-        ]);
-        shortcuts
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    shortcuts
+    crate::fixed_app_keybinding_shortcuts()
 }
 
 fn human_join(items: &[String]) -> String {
