@@ -408,12 +408,25 @@ impl ConWorkspace {
 
     pub(crate) fn on_terminal_cwd_changed(
         &mut self,
-        _entity: &Entity<GhosttyView>,
+        entity: &Entity<GhosttyView>,
         event: &GhosttyCwdChanged,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let _reported_cwd = event.0.as_deref();
+        // Stale AI label would take priority over the new CWD basename in
+        // smart_tab_presentation. Clear it so the tab reflects the new
+        // directory immediately while request_tab_summaries re-derives a
+        // fresh label.
+        let entity_id = entity.entity_id();
+        if let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.pane_tree.pane_id_for_entity(entity_id).is_some())
+        {
+            tab.ai_label = None;
+            tab.ai_icon = None;
+        }
         // Shell integration reports cwd independently from title/output.
         // Persist immediately so restart continuity survives a later crash or
         // force-quit instead of depending on an unrelated tab/layout save.
