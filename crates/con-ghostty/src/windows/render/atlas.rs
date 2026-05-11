@@ -43,6 +43,9 @@ use windows::Win32::Graphics::Dxgi::IDXGISurface;
 use windows::core::Interface;
 use windows_numerics::Matrix3x2;
 
+const TEXT_ENHANCED_CONTRAST: f32 = 1.15;
+const CJK_TEXT_ENHANCED_CONTRAST: f32 = 1.85;
+
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)] // offset_x/offset_y are wired in Phase 3b-2 (glyph bearing).
 pub struct GlyphRect {
@@ -142,6 +145,8 @@ pub struct GlyphCache {
     _atlas_texture: ID3D11Texture2D,
     atlas_srv: ID3D11ShaderResourceView,
     d2d_rt: ID2D1RenderTarget,
+    text_rendering_params: Option<IDWriteRenderingParams>,
+    cjk_text_rendering_params: Option<IDWriteRenderingParams>,
     white_brush: ID2D1SolidColorBrush,
     /// Opaque-black brush. Used to clear each slot before `DrawText` so
     /// any stale pixels — from a neighbouring scaled-PUA glyph that bled
@@ -352,26 +357,25 @@ impl GlyphCache {
         // coverage in our offscreen atlas. A mild contrast bump offsets
         // the perceived weight loss from dropping ClearType.
         //
+        // CJK fallback glyphs need a separate, stronger grayscale
+        // contrast. The user-visible complaint in #78 was not Latin
+        // weight after the RGB-fringe fix; it was CJK strokes looking
+        // too thin. Keep Latin / PUA conservative and only switch to
+        // the heavier params for wide fallback glyph rasterization.
+        //
         // If CreateCustomRenderingParams fails (very rare — it's a pure
         // parameter validator) we leave the default params in place.
-        // SAFETY: constants are valid for IDWriteFactory.
-        let custom_params: Option<IDWriteRenderingParams> = unsafe {
-            dwrite
-                .CreateCustomRenderingParams(
-                    1.8,  // gamma
-                    1.15, // enhanced contrast; offsets grayscale/ClearType weight loss
-                    0.0,  // ClearType level; zero means no RGB subpixel coverage
-                    DWRITE_PIXEL_GEOMETRY_FLAT,
-                    DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
-                )
-                .ok()
-        };
+        let text_rendering_params = custom_text_rendering_params(dwrite, TEXT_ENHANCED_CONTRAST);
+        let cjk_text_rendering_params = text_rendering_params
+            .is_some()
+            .then(|| custom_text_rendering_params(dwrite, CJK_TEXT_ENHANCED_CONTRAST))
+            .flatten();
         // SAFETY: grayscale AA. Setting the mode is cheap; if a driver
         // clamps it, the shader still collapses coverage to one scalar
         // so colored subpixel fringe cannot escape to the final frame.
         unsafe {
             d2d_rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-            if let Some(params) = custom_params.as_ref() {
+            if let Some(params) = text_rendering_params.as_ref() {
                 d2d_rt.SetTextRenderingParams(params);
             }
         }
@@ -427,6 +431,8 @@ impl GlyphCache {
             _atlas_texture: atlas_texture,
             atlas_srv,
             d2d_rt,
+            text_rendering_params,
+            cjk_text_rendering_params,
             white_brush,
             black_brush,
             allocator,
@@ -674,6 +680,9 @@ impl GlyphCache {
                     utf16_slice,
                     target_baseline,
                 );
+                if let Some(params) = self.cjk_text_rendering_params.as_ref() {
+                    self.d2d_rt.SetTextRenderingParams(params);
+                }
                 self.d2d_rt.DrawText(
                     utf16_slice,
                     format,
@@ -682,6 +691,9 @@ impl GlyphCache {
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
+                if let Some(params) = self.text_rendering_params.as_ref() {
+                    self.d2d_rt.SetTextRenderingParams(params);
+                }
             } else {
                 self.d2d_rt.DrawText(
                     utf16_slice,
@@ -952,6 +964,27 @@ fn make_text_format(
     }
 
     Ok(format)
+}
+
+fn custom_text_rendering_params(
+    dwrite: &IDWriteFactory,
+    enhanced_contrast: f32,
+) -> Option<IDWriteRenderingParams> {
+    // SAFETY: constants are valid for IDWriteFactory. ClearType level
+    // stays zero because this atlas is sampled and composited by our
+    // own shader; RGB subpixel coverage would survive screenshots and
+    // remote displays as colored fringe.
+    unsafe {
+        dwrite
+            .CreateCustomRenderingParams(
+                1.8,
+                enhanced_contrast,
+                0.0,
+                DWRITE_PIXEL_GEOMETRY_FLAT,
+                DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
+            )
+            .ok()
+    }
 }
 
 fn text_layout_baseline(

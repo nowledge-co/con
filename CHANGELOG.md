@@ -30,9 +30,10 @@ con is still pre-release, so entries may group related beta work while the produ
 **Windows**
 
 - Improved Windows CJK rendering by anchoring fallback CJK glyphs to the
-  terminal cell baseline and slightly increasing grayscale glyph contrast,
-  reducing the vertical drift and too-thin strokes reported in Windows font
-  rendering feedback. _(Issues
+  terminal cell baseline and applying a stronger grayscale contrast only to
+  wide CJK fallback glyphs, reducing vertical drift and the too-thin strokes
+  reported in Windows font rendering feedback without changing the Latin glyph
+  path. _(Issues
   [#124](https://github.com/nowledge-co/con-terminal/issues/124),
   [#78](https://github.com/nowledge-co/con-terminal/issues/78), and
   [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR

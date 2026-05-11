@@ -27,16 +27,19 @@ result was visible per-glyph vertical drift.
 
 The thin-stroke report came from the same rendering pipeline after we disabled
 ClearType subpixel color coverage. Grayscale text avoids RGB fringe in our
-offscreen BGRA atlas, but it needs slightly more contrast to match ClearType's
-perceived weight.
+offscreen BGRA atlas, but CJK fallback glyphs lost more perceived weight than
+Latin text. A single global contrast value was too blunt: pushing it high enough
+for CJK would also over-darken Latin and Nerd-Font prompt glyphs.
 
 ## Fix Applied
 
 - CJK/wide glyph rasterization now creates a tiny DirectWrite text layout for
   the glyph, reads the layout line baseline, and shifts the atlas layout rect so
   the fallback glyph baseline matches the primary terminal cell baseline.
-- The atlas keeps grayscale antialiasing but uses a modestly stronger
-  DirectWrite enhanced-contrast value to offset perceived weight loss.
+- The atlas keeps grayscale antialiasing. Latin and Nerd-Font glyphs use the
+  conservative contrast path; CJK/wide fallback glyphs temporarily switch to a
+  stronger DirectWrite enhanced-contrast profile during rasterization, then the
+  render target is restored before the next glyph.
 - The Windows terminal view now measures and renders an inset content surface
   instead of painting cells flush against the pane edge. Hit testing, link hover,
   IME cursor bounds, scrollbar placement, and renderer dimensions all use the
