@@ -142,7 +142,8 @@ actions!(
         Cut,
         Copy,
         Paste,
-        SelectAll
+        SelectAll,
+        Minimize
     ]
 );
 
@@ -914,6 +915,19 @@ pub(crate) fn toggle_global_summon(cx: &mut App) {
     }
 }
 
+fn minimize_frontmost_window(cx: &mut App) {
+    let frontmost_window = cx.active_window().or_else(|| {
+        cx.window_stack()
+            .and_then(|windows| windows.first().cloned())
+    });
+
+    if let Some(window_handle) = frontmost_window {
+        let _ = cx.update_window(window_handle, |_, window, _| {
+            window.minimize_window();
+        });
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn bundle_info_value(key: &'static [u8]) -> Option<String> {
     use objc::{class, msg_send, sel, sel_impl};
@@ -1277,6 +1291,8 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
         KeyBinding::new("cmd-shift-`", PreviousWindow, None),
         KeyBinding::new("cmd-~", PreviousWindow, None),
         KeyBinding::new("cmd-<", PreviousWindow, None),
+        KeyBinding::new("cmd-m", Minimize, None),
+        KeyBinding::new("cmd-m", Minimize, Some("Input")),
         KeyBinding::new("cmd-h", HideApp, Some("Input")),
         KeyBinding::new("cmd-alt-h", HideOtherApps, Some("Input")),
         KeyBinding::new("cmd-alt-shift-h", ShowAllApps, Some("Input")),
@@ -1719,6 +1735,9 @@ fn main() {
         cx.on_action(|_: &PreviousWindow, _cx: &mut App| {
             macos_windowing::cycle_app_window(true);
         });
+        cx.on_action(|_: &Minimize, cx: &mut App| {
+            minimize_frontmost_window(cx);
+        });
         cx.on_action(|_: &NewTab, cx: &mut App| {
             if cx.active_window().is_none() {
                 let config = con_core::Config::load().unwrap_or_default();
@@ -1838,6 +1857,8 @@ fn main() {
             Menu {
                 name: "Window".into(),
                 items: vec![
+                    MenuItem::action("Minimize", Minimize),
+                    MenuItem::separator(),
                     MenuItem::action("Next Window", NextWindow),
                     MenuItem::action("Previous Window", PreviousWindow),
                 ],

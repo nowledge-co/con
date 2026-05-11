@@ -1,6 +1,10 @@
 use super::*;
 
 impl ConWorkspace {
+    pub(super) fn minimize(&mut self, _: &Minimize, window: &mut Window, _cx: &mut Context<Self>) {
+        window.minimize_window();
+    }
+
     pub(super) fn quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_all_sessions();
         self.flush_session_save(cx);

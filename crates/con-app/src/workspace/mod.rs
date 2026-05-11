@@ -71,8 +71,8 @@ use crate::ghostty_view::{
 };
 use crate::{
     AddWorkspaceLayoutTabs, ClearRestoredTerminalHistory, ClearTerminal, ClosePane, CloseSurface,
-    CloseTab, CollapseSidebar, CycleInputMode, ExportWorkspaceLayout, FocusInput, NewSurface,
-    NewSurfaceSplitDown, NewSurfaceSplitRight, NewTab, NextSurface, NextTab,
+    CloseTab, CollapseSidebar, CycleInputMode, ExportWorkspaceLayout, FocusInput, Minimize,
+    NewSurface, NewSurfaceSplitDown, NewSurfaceSplitRight, NewTab, NextSurface, NextTab,
     OpenWorkspaceLayoutWindow, PreviousSurface, PreviousTab, Quit, RenameSurface, SelectTab1,
     SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8, SelectTab9,
     SplitDown, SplitLeft, SplitRight, SplitUp, ToggleAgentPanel, TogglePaneScopePicker,

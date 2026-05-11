@@ -1003,6 +1003,7 @@ impl Render for ConWorkspace {
                 }),
             )
             .on_action(cx.listener(Self::quit))
+            .on_action(cx.listener(Self::minimize))
             .on_action(cx.listener(Self::toggle_agent_panel))
             .on_action(cx.listener(Self::toggle_input_bar))
             .on_action(cx.listener(Self::toggle_vertical_tabs))
