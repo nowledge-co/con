@@ -4,6 +4,16 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.69` - unreleased
+
+### Fixed
+
+**Panes**
+
+- Fixed pane-local surface tab strips so they use the same themed chrome
+  backing as split-pane title bars instead of leaking transparent window
+  content, and tightened their spacing, typography, and active/hover states.
+
 ## `v0.1.0-beta.68` - 2026-05-09
 
 ### Added
