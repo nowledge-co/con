@@ -1461,13 +1461,15 @@ impl Render for GhosttyView {
             | SyncRenderResult::Unchanged => {}
         }
 
-        let placeholder_background = if self.cached_image.is_none() {
-            self.placeholder_background()
+        let terminal_background = self.placeholder_background();
+        let background = if self.cached_image.is_none() {
+            terminal_background
         } else {
             None
-        };
-        let background =
-            placeholder_background.unwrap_or_else(|| cx.theme().background.opacity(0.0));
+        }
+        .unwrap_or_else(|| cx.theme().background.opacity(0.0));
+        let padding_background =
+            terminal_background.unwrap_or_else(|| cx.theme().background.opacity(0.0));
         let entity = cx.entity().downgrade();
         let input_entity = entity.clone();
         let mut terminal_children = self.image_children();
@@ -1720,6 +1722,42 @@ impl Render for GhosttyView {
                     // Measure a dedicated full-size wrapper child so the
                     // prepaint callback always sees content bounds rather than
                     // whichever image/layout child happens to be present.
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .top_0()
+                            .h(px(TERMINAL_PADDING_Y_PX))
+                            .bg(padding_background),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom_0()
+                            .h(px(TERMINAL_PADDING_Y_PX))
+                            .bg(padding_background),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top(px(TERMINAL_PADDING_Y_PX))
+                            .bottom(px(TERMINAL_PADDING_Y_PX))
+                            .w(px(TERMINAL_PADDING_X_PX))
+                            .bg(padding_background),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .right_0()
+                            .top(px(TERMINAL_PADDING_Y_PX))
+                            .bottom(px(TERMINAL_PADDING_Y_PX))
+                            .w(px(TERMINAL_PADDING_X_PX))
+                            .bg(padding_background),
+                    )
                     .child(
                         div()
                             .absolute()

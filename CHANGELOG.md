@@ -12,8 +12,8 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Improved the default Windows terminal pane presentation with a small content
   inset and native-edge caption alignment, so the prompt no longer sits flush
-  against the window edge and the close button reaches the right edge of the
-  titlebar. _(Issues
+  against the window edge, the inset gutter matches the terminal background,
+  and the close button reaches the right edge of the titlebar. _(Issues
   [#131](https://github.com/nowledge-co/con-terminal/issues/131) and
   [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
   [#169](https://github.com/nowledge-co/con-terminal/pull/169) by

@@ -357,7 +357,9 @@ Phase 3c details now covered by the beta baseline:
 - The Windows terminal view insets the measured renderer surface from the pane
   edge. Mouse hit testing, IME candidate bounds, link hover, scrollbar, and
   render dimensions all use the inset content bounds, so the visual padding is
-  not a cosmetic overlay that desynchronizes terminal coordinates.
+  not a cosmetic overlay that desynchronizes terminal coordinates. The gutter is
+  painted with the same terminal clear color and opacity as the renderer image
+  rather than falling through to transparent window content.
 - CJK fallback glyphs are baseline-aligned inside the glyph atlas instead of
   being top-aligned as one-character `DrawText` lines. This keeps fallback
   CJK runs anchored to the same terminal-cell baseline as the primary face.

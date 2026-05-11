@@ -40,7 +40,9 @@ perceived weight.
 - The Windows terminal view now measures and renders an inset content surface
   instead of painting cells flush against the pane edge. Hit testing, link hover,
   IME cursor bounds, scrollbar placement, and renderer dimensions all use the
-  same inset content bounds.
+  same inset content bounds. The inset gutter is painted with the terminal
+  renderer's clear color and opacity so it stays visually attached to the
+  terminal instead of showing transparent window content.
 
 ## What We Learned
 
@@ -53,4 +55,3 @@ perceived weight.
 - Windows font-quality bugs need reporter-facing dev builds and profile logs.
   The tracker should keep #78 open until users confirm the perceived weight is
   comfortable on real Windows displays.
-
