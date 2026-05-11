@@ -1183,125 +1183,154 @@ fn show_about_window(cx: &mut App) {
     }
 }
 
-pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
-    cx.bind_keys([
-        KeyBinding::new(&kb.quit, Quit, None),
-        KeyBinding::new(&kb.new_window, NewWindow, None),
-        KeyBinding::new(&kb.new_tab, NewTab, None),
-        KeyBinding::new(&kb.next_tab, NextTab, None),
-        KeyBinding::new(&kb.previous_tab, PreviousTab, None),
-        KeyBinding::new("secondary-shift-]", NextTab, None),
-        KeyBinding::new("secondary-shift-[", PreviousTab, None),
-        KeyBinding::new("secondary-1", SelectTab1, None),
-        KeyBinding::new("secondary-2", SelectTab2, None),
-        KeyBinding::new("secondary-3", SelectTab3, None),
-        KeyBinding::new("secondary-4", SelectTab4, None),
-        KeyBinding::new("secondary-5", SelectTab5, None),
-        KeyBinding::new("secondary-6", SelectTab6, None),
-        KeyBinding::new("secondary-7", SelectTab7, None),
-        KeyBinding::new("secondary-8", SelectTab8, None),
-        KeyBinding::new("secondary-9", SelectTab9, None),
-        KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, None),
-        KeyBinding::new(&kb.close_tab, CloseTab, None),
-        KeyBinding::new(&kb.close_pane, ClosePane, None),
-        KeyBinding::new(&kb.toggle_pane_zoom, TogglePaneZoom, None),
-        KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, None),
-        KeyBinding::new(
+macro_rules! configurable_app_keybindings {
+    ($bindings:expr, $kb:expr, $push:ident) => {{
+        let kb = $kb;
+        $push!($bindings, &kb.quit, Quit);
+        $push!($bindings, &kb.new_window, NewWindow);
+        $push!($bindings, &kb.new_tab, NewTab);
+        $push!($bindings, &kb.next_tab, NextTab);
+        $push!($bindings, &kb.previous_tab, PreviousTab);
+        $push!($bindings, &kb.toggle_agent, ToggleAgentPanel);
+        $push!($bindings, &kb.close_tab, CloseTab);
+        $push!($bindings, &kb.close_pane, ClosePane);
+        $push!($bindings, &kb.toggle_pane_zoom, TogglePaneZoom);
+        $push!($bindings, &kb.settings, settings_panel::ToggleSettings);
+        $push!(
+            $bindings,
             &kb.command_palette,
-            command_palette::ToggleCommandPalette,
-            None,
-        ),
-        KeyBinding::new(&kb.split_right, SplitRight, None),
-        KeyBinding::new(&kb.split_down, SplitDown, None),
-        KeyBinding::new(&kb.new_surface, NewSurface, None),
-        KeyBinding::new(&kb.new_surface_split_right, NewSurfaceSplitRight, None),
-        KeyBinding::new(&kb.new_surface_split_down, NewSurfaceSplitDown, None),
-        KeyBinding::new(&kb.next_surface, NextSurface, None),
-        KeyBinding::new(&kb.previous_surface, PreviousSurface, None),
-        KeyBinding::new(&kb.rename_surface, RenameSurface, None),
-        KeyBinding::new(&kb.close_surface, CloseSurface, None),
-        KeyBinding::new(&kb.focus_input, FocusInput, None),
-        KeyBinding::new(&kb.cycle_input_mode, CycleInputMode, None),
-        KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, None),
-        KeyBinding::new(&kb.toggle_pane_scope, TogglePaneScopePicker, None),
-        KeyBinding::new(&kb.toggle_vertical_tabs, ToggleVerticalTabs, None),
-        KeyBinding::new(&kb.collapse_sidebar, CollapseSidebar, None),
-        KeyBinding::new(&kb.quit, Quit, Some("Input")),
-        KeyBinding::new(&kb.new_window, NewWindow, Some("Input")),
-        KeyBinding::new(&kb.new_tab, NewTab, Some("Input")),
-        KeyBinding::new(&kb.next_tab, NextTab, Some("Input")),
-        KeyBinding::new(&kb.previous_tab, PreviousTab, Some("Input")),
-        KeyBinding::new("secondary-shift-]", NextTab, Some("Input")),
-        KeyBinding::new("secondary-shift-[", PreviousTab, Some("Input")),
-        KeyBinding::new("secondary-1", SelectTab1, Some("Input")),
-        KeyBinding::new("secondary-2", SelectTab2, Some("Input")),
-        KeyBinding::new("secondary-3", SelectTab3, Some("Input")),
-        KeyBinding::new("secondary-4", SelectTab4, Some("Input")),
-        KeyBinding::new("secondary-5", SelectTab5, Some("Input")),
-        KeyBinding::new("secondary-6", SelectTab6, Some("Input")),
-        KeyBinding::new("secondary-7", SelectTab7, Some("Input")),
-        KeyBinding::new("secondary-8", SelectTab8, Some("Input")),
-        KeyBinding::new("secondary-9", SelectTab9, Some("Input")),
-        KeyBinding::new(&kb.toggle_agent, ToggleAgentPanel, Some("Input")),
-        KeyBinding::new(&kb.close_tab, CloseTab, Some("Input")),
-        KeyBinding::new(&kb.close_pane, ClosePane, Some("Input")),
-        KeyBinding::new(&kb.toggle_pane_zoom, TogglePaneZoom, Some("Input")),
-        KeyBinding::new(&kb.settings, settings_panel::ToggleSettings, Some("Input")),
-        KeyBinding::new(
-            &kb.command_palette,
-            command_palette::ToggleCommandPalette,
-            Some("Input"),
-        ),
-        KeyBinding::new(&kb.split_right, SplitRight, Some("Input")),
-        KeyBinding::new(&kb.split_down, SplitDown, Some("Input")),
-        KeyBinding::new(&kb.new_surface, NewSurface, Some("Input")),
-        KeyBinding::new(
-            &kb.new_surface_split_right,
-            NewSurfaceSplitRight,
-            Some("Input"),
-        ),
-        KeyBinding::new(
-            &kb.new_surface_split_down,
-            NewSurfaceSplitDown,
-            Some("Input"),
-        ),
-        KeyBinding::new(&kb.next_surface, NextSurface, Some("Input")),
-        KeyBinding::new(&kb.previous_surface, PreviousSurface, Some("Input")),
-        KeyBinding::new(&kb.rename_surface, RenameSurface, Some("Input")),
-        KeyBinding::new(&kb.close_surface, CloseSurface, Some("Input")),
-        KeyBinding::new(&kb.focus_input, FocusInput, Some("Input")),
-        KeyBinding::new(&kb.cycle_input_mode, CycleInputMode, Some("Input")),
-        KeyBinding::new(&kb.toggle_input_bar, ToggleInputBar, Some("Input")),
-        KeyBinding::new(&kb.toggle_pane_scope, TogglePaneScopePicker, Some("Input")),
-        KeyBinding::new(&kb.toggle_vertical_tabs, ToggleVerticalTabs, Some("Input")),
-        KeyBinding::new(&kb.collapse_sidebar, CollapseSidebar, Some("Input")),
-    ]);
+            command_palette::ToggleCommandPalette
+        );
+        $push!($bindings, &kb.split_right, SplitRight);
+        $push!($bindings, &kb.split_down, SplitDown);
+        $push!($bindings, &kb.new_surface, NewSurface);
+        $push!($bindings, &kb.new_surface_split_right, NewSurfaceSplitRight);
+        $push!($bindings, &kb.new_surface_split_down, NewSurfaceSplitDown);
+        $push!($bindings, &kb.next_surface, NextSurface);
+        $push!($bindings, &kb.previous_surface, PreviousSurface);
+        $push!($bindings, &kb.rename_surface, RenameSurface);
+        $push!($bindings, &kb.close_surface, CloseSurface);
+        $push!($bindings, &kb.focus_input, FocusInput);
+        $push!($bindings, &kb.cycle_input_mode, CycleInputMode);
+        $push!($bindings, &kb.toggle_input_bar, ToggleInputBar);
+        $push!($bindings, &kb.toggle_pane_scope, TogglePaneScopePicker);
+        $push!($bindings, &kb.toggle_vertical_tabs, ToggleVerticalTabs);
+        $push!($bindings, &kb.collapse_sidebar, CollapseSidebar);
+    }};
+}
 
-    // Hide app / Hide others / Show all are macOS system-menu conventions
-    // with no equivalent on Windows or Linux — cmd-h, cmd-alt-h, and
-    // cmd-alt-shift-h are the canonical modifiers, so we keep them
-    // verbatim inside a cfg gate rather than routing through `secondary`.
-    #[cfg(target_os = "macos")]
-    cx.bind_keys([
-        KeyBinding::new("cmd-h", HideApp, None),
-        KeyBinding::new("cmd-alt-h", HideOtherApps, None),
-        KeyBinding::new("cmd-alt-shift-h", ShowAllApps, None),
-        KeyBinding::new("cmd-`", NextWindow, None),
-        KeyBinding::new("cmd->", NextWindow, None),
-        KeyBinding::new("cmd-shift-`", PreviousWindow, None),
-        KeyBinding::new("cmd-~", PreviousWindow, None),
-        KeyBinding::new("cmd-<", PreviousWindow, None),
-        KeyBinding::new("cmd-m", Minimize, None),
-        KeyBinding::new("cmd-m", Minimize, Some("Input")),
-        KeyBinding::new("cmd-h", HideApp, Some("Input")),
-        KeyBinding::new("cmd-alt-h", HideOtherApps, Some("Input")),
-        KeyBinding::new("cmd-alt-shift-h", ShowAllApps, Some("Input")),
-        KeyBinding::new("cmd-`", NextWindow, Some("Input")),
-        KeyBinding::new("cmd->", NextWindow, Some("Input")),
-        KeyBinding::new("cmd-shift-`", PreviousWindow, Some("Input")),
-        KeyBinding::new("cmd-~", PreviousWindow, Some("Input")),
-        KeyBinding::new("cmd-<", PreviousWindow, Some("Input")),
-    ]);
+macro_rules! push_app_keybinding {
+    ($bindings:expr, $key:expr, $action:path) => {{
+        let key = $key;
+        if !key.trim().is_empty() {
+            $bindings.push(KeyBinding::new(key, $action, None));
+            $bindings.push(KeyBinding::new(key, $action, Some("Input")));
+        }
+    }};
+}
+
+macro_rules! push_app_keybinding_unbind {
+    ($bindings:expr, $key:expr, $action:path) => {{
+        let key = $key;
+        let action_name: SharedString = gpui::Action::name(&$action).into();
+        if !key.trim().is_empty() && !is_fixed_configurable_app_keybinding(key, &action_name) {
+            $bindings.push(KeyBinding::new(
+                key,
+                gpui::Unbind(action_name.clone()),
+                None,
+            ));
+            $bindings.push(KeyBinding::new(
+                key,
+                gpui::Unbind(action_name),
+                Some("Input"),
+            ));
+        }
+    }};
+}
+
+macro_rules! fixed_app_keybindings {
+    ($items:expr, $push:ident) => {{
+        $push!($items, "Next Tab", "secondary-shift-]", NextTab);
+        $push!($items, "Previous Tab", "secondary-shift-[", PreviousTab);
+        $push!($items, "Select Tab 1", "secondary-1", SelectTab1);
+        $push!($items, "Select Tab 2", "secondary-2", SelectTab2);
+        $push!($items, "Select Tab 3", "secondary-3", SelectTab3);
+        $push!($items, "Select Tab 4", "secondary-4", SelectTab4);
+        $push!($items, "Select Tab 5", "secondary-5", SelectTab5);
+        $push!($items, "Select Tab 6", "secondary-6", SelectTab6);
+        $push!($items, "Select Tab 7", "secondary-7", SelectTab7);
+        $push!($items, "Select Tab 8", "secondary-8", SelectTab8);
+        $push!($items, "Select Tab 9", "secondary-9", SelectTab9);
+
+        #[cfg(target_os = "macos")]
+        {
+            $push!($items, "Hide Con", "cmd-h", HideApp);
+            $push!($items, "Hide Other Apps", "cmd-alt-h", HideOtherApps);
+            $push!($items, "Show All Apps", "cmd-alt-shift-h", ShowAllApps);
+            $push!($items, "Next Window", "cmd-`", NextWindow);
+            $push!($items, "Next Window", "cmd->", NextWindow);
+            $push!($items, "Previous Window", "cmd-shift-`", PreviousWindow);
+            $push!($items, "Previous Window", "cmd-~", PreviousWindow);
+            $push!($items, "Previous Window", "cmd-<", PreviousWindow);
+            $push!($items, "Minimize Window", "cmd-m", Minimize);
+        }
+    }};
+}
+
+macro_rules! push_fixed_app_keybinding {
+    ($bindings:expr, $label:expr, $key:expr, $action:path) => {{
+        let _ = $label;
+        $bindings.push(KeyBinding::new($key, $action, None));
+        $bindings.push(KeyBinding::new($key, $action, Some("Input")));
+    }};
+}
+
+macro_rules! push_fixed_app_keybinding_shortcut {
+    ($shortcuts:expr, $label:expr, $key:expr, $action:path) => {{
+        let _ = &$action;
+        $shortcuts.push(($label, $key));
+    }};
+}
+
+pub(crate) fn fixed_app_keybinding_shortcuts() -> Vec<(&'static str, &'static str)> {
+    let mut shortcuts = Vec::new();
+    fixed_app_keybindings!(shortcuts, push_fixed_app_keybinding_shortcut);
+    shortcuts
+}
+
+fn is_fixed_configurable_app_keybinding(key: &str, action_name: &SharedString) -> bool {
+    let Some(key) = con_core::config::canonical_keybinding(key) else {
+        return false;
+    };
+    let fixed_next_tab = con_core::config::canonical_keybinding("secondary-shift-]")
+        .expect("fixed shortcut is valid");
+    let fixed_previous_tab = con_core::config::canonical_keybinding("secondary-shift-[")
+        .expect("fixed shortcut is valid");
+    let next_tab: SharedString = gpui::Action::name(&NextTab).into();
+    let previous_tab: SharedString = gpui::Action::name(&PreviousTab).into();
+
+    (key == fixed_next_tab && action_name == &next_tab)
+        || (key == fixed_previous_tab && action_name == &previous_tab)
+}
+
+pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
+    let mut bindings = Vec::new();
+    configurable_app_keybindings!(bindings, kb, push_app_keybinding);
+    fixed_app_keybindings!(bindings, push_fixed_app_keybinding);
+    cx.bind_keys(bindings);
+}
+
+fn bind_configurable_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
+    let mut bindings = Vec::new();
+    configurable_app_keybindings!(bindings, kb, push_app_keybinding);
+    cx.bind_keys(bindings);
+}
+
+pub(crate) fn rebind_app_keybindings(cx: &mut App, old: &KeybindingConfig, new: &KeybindingConfig) {
+    let mut unbinds = Vec::new();
+    configurable_app_keybindings!(unbinds, old, push_app_keybinding_unbind);
+    cx.bind_keys(unbinds);
+    bind_configurable_app_keybindings(cx, new);
 }
 
 /// Install a panic hook that writes every panic (including from

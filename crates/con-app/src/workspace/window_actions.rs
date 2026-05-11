@@ -130,13 +130,13 @@ impl ConWorkspace {
                 panel.toggle(window, cx);
             });
         }
+        // The action keeps its historic "toggle" name for keymap
+        // compatibility, but keyboard invocation is intentionally idempotent:
+        // repeated key-down events while modifiers are held should focus the
+        // palette, not close it and strand focus.
         self.command_palette.update(cx, |palette, cx| {
-            palette.toggle(window, cx);
+            palette.show(window, cx);
         });
-        // Restore terminal focus if palette just closed
-        if !self.is_modal_open(cx) {
-            self.focus_terminal(window, cx);
-        }
         cx.notify();
     }
 
