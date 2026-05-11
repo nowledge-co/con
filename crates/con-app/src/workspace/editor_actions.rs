@@ -26,6 +26,27 @@ fn editor_line_boundary_motion_for_key(event: &KeyDownEvent) -> Option<EditorMot
     }
 }
 
+fn editor_text_for_key(key: &str, key_char: Option<&str>) -> Option<String> {
+    if let Some(key_char) =
+        key_char.filter(|text| !text.is_empty() && text.chars().all(|ch| !ch.is_control()))
+    {
+        return Some(key_char.to_string());
+    }
+
+    match key {
+        "space" => Some(" ".to_string()),
+        "tab" => Some("    ".to_string()),
+        _ => {
+            let mut chars = key.chars();
+            let ch = chars.next()?;
+            if chars.next().is_some() || ch.is_control() {
+                return None;
+            }
+            Some(key.to_string())
+        }
+    }
+}
+
 impl ConWorkspace {
     fn with_focused_editor_view<R>(
         &mut self,
@@ -75,20 +96,11 @@ impl ConWorkspace {
             return false;
         }
 
-        let key = event.keystroke.key.as_str();
-        let text = match key {
-            "space" => " ".to_string(),
-            "tab" => "    ".to_string(),
-            _ => {
-                let mut chars = key.chars();
-                let Some(ch) = chars.next() else {
-                    return false;
-                };
-                if chars.next().is_some() || ch.is_control() {
-                    return false;
-                }
-                key.to_string()
-            }
+        let Some(text) = editor_text_for_key(
+            event.keystroke.key.as_str(),
+            event.keystroke.key_char.as_deref(),
+        ) else {
+            return false;
         };
 
         if self
@@ -425,5 +437,33 @@ impl ConWorkspace {
             cx.stop_propagation();
             Self::notify_editor_action(cx);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn editor_text_prefers_produced_key_char() {
+        assert_eq!(
+            super::editor_text_for_key("1", Some("!")).as_deref(),
+            Some("!")
+        );
+        assert_eq!(
+            super::editor_text_for_key("a", Some("A")).as_deref(),
+            Some("A")
+        );
+    }
+
+    #[test]
+    fn editor_text_keeps_named_key_fallbacks() {
+        assert_eq!(
+            super::editor_text_for_key("space", None).as_deref(),
+            Some(" ")
+        );
+        assert_eq!(
+            super::editor_text_for_key("tab", Some("\t")).as_deref(),
+            Some("    ")
+        );
+        assert_eq!(super::editor_text_for_key("enter", Some("\n")), None);
     }
 }

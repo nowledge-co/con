@@ -18,6 +18,7 @@ impl CursorPosition {
 #[derive(Debug, Clone)]
 pub struct EditorBuffer {
     lines: Vec<String>,
+    line_ending: LineEnding,
     cursor: CursorPosition,
     selection_anchor: Option<CursorPosition>,
     dirty: bool,
@@ -28,14 +29,39 @@ pub struct EditorBuffer {
 #[derive(Debug, Clone)]
 struct BufferSnapshot {
     lines: Vec<String>,
+    line_ending: LineEnding,
     cursor: CursorPosition,
     selection_anchor: Option<CursorPosition>,
     dirty: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineEnding {
+    Lf,
+    Crlf,
+}
+
+impl LineEnding {
+    fn detect(text: &str) -> Self {
+        if text.contains("\r\n") {
+            Self::Crlf
+        } else {
+            Self::Lf
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Lf => "\n",
+            Self::Crlf => "\r\n",
+        }
+    }
+}
+
 impl EditorBuffer {
     pub fn from_text(text: impl Into<String>) -> Self {
         let text = text.into();
+        let line_ending = LineEnding::detect(&text);
         let mut lines = text.lines().map(ToString::to_string).collect::<Vec<_>>();
         if text.ends_with('\n') {
             lines.push(String::new());
@@ -46,6 +72,7 @@ impl EditorBuffer {
 
         Self {
             lines,
+            line_ending,
             cursor: CursorPosition::new(0, 0),
             selection_anchor: None,
             dirty: false,
@@ -293,7 +320,7 @@ impl EditorBuffer {
     }
 
     pub fn text(&self) -> String {
-        self.lines.join("\n")
+        self.lines.join(self.line_ending.as_str())
     }
 
     pub fn mark_clean(&mut self) {
@@ -311,6 +338,7 @@ impl EditorBuffer {
             return false;
         };
         self.lines = snapshot.lines;
+        self.line_ending = snapshot.line_ending;
         self.cursor = snapshot.cursor;
         self.selection_anchor = snapshot.selection_anchor;
         self.dirty = snapshot.dirty;
@@ -321,6 +349,7 @@ impl EditorBuffer {
     fn push_undo_snapshot(&mut self) {
         self.undo_stack.push(BufferSnapshot {
             lines: self.lines.clone(),
+            line_ending: self.line_ending,
             cursor: self.cursor,
             selection_anchor: self.selection_anchor,
             dirty: self.dirty,
@@ -411,10 +440,10 @@ impl EditorBuffer {
         let mut text = String::new();
         text.push_str(&self.lines[start.row][start.column..]);
         for row in (start.row + 1)..end.row {
-            text.push('\n');
+            text.push_str(self.line_ending.as_str());
             text.push_str(&self.lines[row]);
         }
-        text.push('\n');
+        text.push_str(self.line_ending.as_str());
         text.push_str(&self.lines[end.row][..end.column]);
         text
     }
@@ -757,6 +786,16 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello world");
         assert!(!buffer.is_dirty());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn text_preserves_detected_crlf_line_endings() {
+        let mut buffer = EditorBuffer::from_text("hello\r\nworld\r\n");
+
+        buffer.set_cursor(1, 5);
+        buffer.insert_text("!");
+
+        assert_eq!(buffer.text(), "hello\r\nworld!\r\n");
     }
 
     fn unique_suffix() -> u128 {

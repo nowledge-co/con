@@ -337,6 +337,9 @@ impl EditorView {
         if self.tabs.is_empty() {
             return true;
         }
+        if self.tabs[self.active_tab].buffer.is_dirty() {
+            return false;
+        }
         self.open_generation = self.open_generation.wrapping_add(1);
         let closed_path = self.tabs[self.active_tab].path.clone();
         self.tabs.remove(self.active_tab);

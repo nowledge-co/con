@@ -137,7 +137,6 @@ where
     } else {
         theme.muted_foreground
     };
-    let hover_bg = theme.muted.opacity(0.10);
     Button::new(id)
         .icon(Icon::default().path(icon))
         .ghost()
@@ -145,6 +144,5 @@ where
         .rounded(px(6.0))
         .with_size(px(32.0))
         .cursor_pointer()
-        .hover(move |s| s.bg(hover_bg))
         .on_click(handler)
 }
