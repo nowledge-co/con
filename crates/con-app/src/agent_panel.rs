@@ -3000,7 +3000,7 @@ fn render_user_message_text(
             block.child(
                 div()
                     .id(format!("user-msg-{msg_idx}-blank-{line_idx}"))
-                    .h(px(10.0)),
+                    .h(ui_space_px(theme, 10.0)),
             )
         } else {
             block.child(
