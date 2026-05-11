@@ -5,6 +5,8 @@ use gpui_component::{
     tooltip::Tooltip,
 };
 
+use crate::ui_scale::{mono_font_scale, mono_px};
+
 actions!(
     input_bar,
     [
@@ -1174,6 +1176,10 @@ impl Render for InputBar {
         let has_text = !input_state.read(cx).value().trim().is_empty();
         let input_value = input_state.read(cx).value().to_string();
         let input_cursor = input_state.read(cx).cursor();
+        let mono_scale = mono_font_scale(theme);
+        let control_size = mono_px(theme, 24.0);
+        let mode_icon_size = mono_px(theme, 14.0);
+        let compact_icon_size = mono_px(theme, 11.0);
 
         let mode_tint = self.mode.tint(cx);
 
@@ -1183,8 +1189,8 @@ impl Render for InputBar {
             .flex()
             .items_center()
             .justify_center()
-            .size(px(24.0))
-            .rounded(px(6.0))
+            .size(control_size)
+            .rounded(px(6.0 * mono_scale))
             .cursor_pointer()
             .bg(mode_tint.opacity(0.08))
             .hover(|s| s.bg(mode_tint.opacity(0.14)))
@@ -1201,7 +1207,7 @@ impl Render for InputBar {
             .child(
                 svg()
                     .path(self.mode.icon())
-                    .size(px(14.0))
+                    .size(mode_icon_size)
                     .text_color(mode_tint),
             );
 
@@ -1222,9 +1228,9 @@ impl Render for InputBar {
                     .child(
                         div()
                             .id("pane-scope")
-                            .h(px(24.0))
-                            .px(px(8.0))
-                            .rounded(px(7.0))
+                            .h(control_size)
+                            .px(px(8.0 * mono_scale))
+                            .rounded(px(7.0 * mono_scale))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -1257,11 +1263,16 @@ impl Render for InputBar {
                                         .update(cx, |state, cx| state.focus(window, cx));
                                 }),
                             )
-                            .child(svg().path(scope_icon).size(px(11.0)).text_color(scope_tint))
+                            .child(
+                                svg()
+                                    .path(scope_icon)
+                                    .size(compact_icon_size)
+                                    .text_color(scope_tint),
+                            )
                             .child(
                                 div()
-                                    .text_size(px(10.5))
-                                    .line_height(px(12.0))
+                                    .text_size(mono_px(theme, 10.5))
+                                    .line_height(mono_px(theme, 12.0))
                                     .font_family(theme.mono_font_family.clone())
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(
@@ -1288,8 +1299,8 @@ impl Render for InputBar {
             .flex()
             .items_center()
             .justify_center()
-            .size(px(24.0))
-            .rounded(px(12.0))
+            .size(control_size)
+            .rounded(px(12.0 * mono_scale))
             .cursor_pointer()
             .flex_shrink_0()
             .bg(if has_text {
@@ -1313,7 +1324,7 @@ impl Render for InputBar {
             .child(
                 svg()
                     .path("phosphor/arrow-up.svg")
-                    .size(px(12.0))
+                    .size(mono_px(theme, 12.0))
                     .text_color(if has_text {
                         theme.primary_foreground
                     } else {
@@ -1324,8 +1335,8 @@ impl Render for InputBar {
         // Keep all terminal-adjacent inputs in the mono family for consistency.
         let input_font = theme.mono_font_family.clone();
         let input_text_size = match self.mode {
-            InputMode::Agent => px(14.0),
-            _ => px(13.0),
+            InputMode::Agent => mono_px(theme, 14.0),
+            _ => mono_px(theme, 13.0),
         };
         let input_line_height = match self.mode {
             InputMode::Agent => rems(1.15),
@@ -1367,7 +1378,7 @@ impl Render for InputBar {
 
         let input_field = div()
             .flex_1()
-            .min_h(px(24.0))
+            .min_h(control_size)
             .relative()
             .key_context("ConCommandInput")
             .on_action(cx.listener(|this, _: &AcceptSuggestion, window, cx| {
@@ -1508,7 +1519,7 @@ impl Render for InputBar {
                     .right_0()
                     .top_0()
                     .bottom_0()
-                    .px(px(12.0))
+                    .px(px(12.0 * mono_scale))
                     .flex()
                     .items_center()
                     .line_height(input_line_height)
@@ -1531,7 +1542,7 @@ impl Render for InputBar {
                     .right_0()
                     .top_0()
                     .bottom_0()
-                    .px(px(12.0))
+                    .px(px(12.0 * mono_scale))
                     .flex()
                     .items_center()
                     .line_height(input_line_height)
@@ -1559,8 +1570,8 @@ impl Render for InputBar {
                         })
                         .text_size(input_text_size)
                         .line_height(input_line_height)
-                        .pl(px(12.0))
-                        .h(px(24.0))
+                        .pl(px(12.0 * mono_scale))
+                        .h(control_size)
                         .into_any_element()
                 } else {
                     Input::new(&input_state)
@@ -1574,7 +1585,7 @@ impl Render for InputBar {
                         })
                         .text_size(input_text_size)
                         .line_height(input_line_height)
-                        .h(px(24.0))
+                        .h(control_size)
                         .into_any_element()
                 },
             ));
@@ -1589,13 +1600,13 @@ impl Render for InputBar {
             // ── Flat container ──
             .child(
                 div()
-                    .px(px(12.0))
-                    .py(px(7.0))
-                    .min_h(px(42.0))
+                    .px(px(12.0 * mono_scale))
+                    .py(px(7.0 * mono_scale))
+                    .min_h(px(42.0 * mono_scale))
                     .flex()
                     .items_center()
-                    .h(px(30.0))
-                    .gap(px(8.0))
+                    .h(px(30.0 * mono_scale))
+                    .gap(px(8.0 * mono_scale))
                     .child(mode_prefix)
                     .children(pane_row)
                     .child(div().flex_1().min_w_0().child(input_field))

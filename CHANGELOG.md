@@ -35,6 +35,14 @@ con is still pre-release, so entries may group related beta work while the produ
   [#189](https://github.com/nowledge-co/con-terminal/pull/189) by
   [@wey-gu](https://github.com/wey-gu))_
 
+**UI**
+
+- Fixed UI font-size scaling in terminal-adjacent chrome: the bottom input bar,
+  agent panel messages, and run-trace cards now follow the Appearance → UI Size
+  setting instead of staying at small fixed system sizes. _(Issue
+  [#190](https://github.com/nowledge-co/con-terminal/issues/190), reported by
+  [@leek_ed](https://x.com/leek_ed))_
+
 **macOS**
 
 - Set `GHOSTTY_RESOURCES_DIR` from the installed app bundle when the build-time

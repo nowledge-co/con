@@ -1,0 +1,38 @@
+# UI Font Size Scope
+
+## What happened
+
+A user raised issue #190 after setting Appearance -> UI Size to a large value:
+the terminal text scaled, but terminal-adjacent UI such as the bottom input bar
+and the agent panel run trace still looked small.
+
+## Root cause
+
+The Appearance setting correctly updated `Theme::font_size` and
+`Theme::mono_font_size`, but several high-density UI components bypassed those
+theme metrics with literal `px(...)` text sizes. The affected pieces were mostly
+terminal chrome and agent trace/status cards, so the app looked inconsistent at
+larger UI sizes even though the setting itself was saved and applied.
+
+## Fix applied
+
+Added a small `ui_scale` helper that derives UI and mono scale factors from the
+active GPUI theme. The helper preserves the shipped default sizes exactly, then
+scales only the relevant terminal-adjacent typography, spacing, and control
+heights when the user changes UI Size.
+
+The fix covers:
+
+- Bottom input bar text, mode button, pane selector, inline suggestion overlay,
+  and send button.
+- Agent panel prose markdown base sizing, headings, code block line height, and
+  message fallback text.
+- Agent run status, run trace cards, tool rows, compact chips, and inline agent
+  input when the bottom input bar is hidden.
+
+## What we learned
+
+Theme-level font settings are not enough if component code pins dense UI with
+literal pixel sizes. New terminal-adjacent UI should either inherit the theme
+font size or use a theme-derived scale helper, with the default scale resolving
+to `1.0` to avoid accidental visual drift.
