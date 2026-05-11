@@ -82,6 +82,7 @@ pub struct EditorTab {
     pub path: PathBuf,
     buffer: EditorBuffer,
     render_cache: EditorRenderCache,
+    save_enabled: bool,
 }
 
 #[derive(Clone, Default)]
@@ -120,6 +121,16 @@ impl EditorTab {
             path,
             buffer,
             render_cache: EditorRenderCache::default(),
+            save_enabled: true,
+        }
+    }
+
+    fn read_error(path: PathBuf, error: std::io::Error) -> Self {
+        Self {
+            path,
+            buffer: EditorBuffer::from_text(format!("Error reading file: {error}")),
+            render_cache: EditorRenderCache::default(),
+            save_enabled: false,
         }
     }
 
@@ -243,14 +254,16 @@ impl EditorView {
             let path_for_read = path.clone();
             let content = cx
                 .background_executor()
-                .spawn(async move {
-                    std::fs::read_to_string(&path_for_read)
-                        .unwrap_or_else(|e| format!("Error reading file: {e}"))
-                })
+                .spawn(async move { std::fs::read_to_string(&path_for_read) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.open_file_from_content(path.clone(), content);
-                this.ensure_lsp_for_path(&path);
+                match content {
+                    Ok(content) => {
+                        this.open_file_from_content(path.clone(), content);
+                        this.ensure_lsp_for_path(&path);
+                    }
+                    Err(error) => this.open_file_read_error(path.clone(), error),
+                }
                 cx.emit(ActiveFileChanged);
                 cx.notify();
             });
@@ -270,6 +283,17 @@ impl EditorView {
 
         self.tabs.push(EditorTab::new(path, buffer));
         self.active_tab = self.tabs.len().saturating_sub(1);
+        self.scroll_handle = UniformListScrollHandle::new();
+    }
+
+    fn open_file_read_error(&mut self, path: PathBuf, error: std::io::Error) {
+        if let Some(index) = self.tabs.iter().position(|tab| tab.path == path) {
+            self.tabs[index] = EditorTab::read_error(path, error);
+            self.active_tab = index;
+        } else {
+            self.tabs.push(EditorTab::read_error(path, error));
+            self.active_tab = self.tabs.len().saturating_sub(1);
+        }
         self.scroll_handle = UniformListScrollHandle::new();
     }
 
@@ -343,6 +367,23 @@ impl EditorView {
         )
     }
 
+    #[cfg(test)]
+    fn position_for_content_point_in_line_for_test(
+        point: gpui::Point<gpui::Pixels>,
+        line: &str,
+    ) -> CursorPosition {
+        let metrics = EditorMetrics::from_terminal_font_size(EDITOR_FONT_SIZE);
+        let scroll_offset = gpui::point(px(0.0), px(0.0));
+        let row = Self::row_for_content_point_with_metrics(point, scroll_offset, metrics);
+        let visual_col = Self::visual_column_for_content_point_with_metrics(
+            point,
+            scroll_offset,
+            line.chars().count(),
+            metrics,
+        );
+        CursorPosition::new(row, Self::byte_offset_for_visual_column(line, visual_col))
+    }
+
     fn position_for_window_point(&self, point: Point<Pixels>) -> CursorPosition {
         let local = if let Some(bounds) = self.content_bounds {
             point - bounds.origin
@@ -359,8 +400,17 @@ impl EditorView {
             .active_tab_ref()
             .and_then(|tab| tab.buffer.lines().get(row).map(String::as_str))
             .unwrap_or("");
-        let max_col = line_text.chars().count();
-        Self::position_for_content_point_with_metrics(point, scroll_offset, max_col, self.metrics)
+        let max_visual_col = line_text.chars().count();
+        let visual_col = Self::visual_column_for_content_point_with_metrics(
+            point,
+            scroll_offset,
+            max_visual_col,
+            self.metrics,
+        );
+        CursorPosition::new(
+            row,
+            Self::byte_offset_for_visual_column(line_text, visual_col),
+        )
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -384,11 +434,26 @@ impl EditorView {
         metrics: EditorMetrics,
     ) -> CursorPosition {
         let row = Self::row_for_content_point_with_metrics(point, scroll_offset, metrics);
+        let column = Self::visual_column_for_content_point_with_metrics(
+            point,
+            scroll_offset,
+            max_col,
+            metrics,
+        );
+        CursorPosition::new(row, column)
+    }
+
+    fn visual_column_for_content_point_with_metrics(
+        point: Point<Pixels>,
+        scroll_offset: Point<Pixels>,
+        max_col: usize,
+        metrics: EditorMetrics,
+    ) -> usize {
         let clicked_x = f32::from(point.x).max(0.0);
         let scroll_x = f32::from(scroll_offset.x);
         let text_x = (clicked_x - scroll_x - ROW_TEXT_LEFT).max(0.0);
         let column = ((text_x / metrics.char_width) + 0.0001).floor() as usize;
-        CursorPosition::new(row, column.min(max_col))
+        column.min(max_col)
     }
 
     fn row_for_content_point_with_metrics(
@@ -440,6 +505,21 @@ impl EditorView {
 
     fn visual_columns_for_line(line: &str) -> usize {
         line.chars().count()
+    }
+
+    fn byte_offset_for_visual_column(line: &str, visual_column: usize) -> usize {
+        line.char_indices()
+            .nth(visual_column)
+            .map(|(offset, _)| offset)
+            .unwrap_or(line.len())
+    }
+
+    fn visual_column_for_byte_offset(line: &str, byte_offset: usize) -> usize {
+        let mut byte_offset = byte_offset.min(line.len());
+        while byte_offset > 0 && !line.is_char_boundary(byte_offset) {
+            byte_offset -= 1;
+        }
+        line[..byte_offset].chars().count()
     }
 
     pub fn mouse_down(&mut self, event: &MouseDownEvent) {
@@ -550,7 +630,7 @@ impl EditorView {
         let tab = self.active_tab_ref()?;
         let cursor = tab.buffer.cursor();
         let line = tab.buffer.lines().get(cursor.row)?;
-        let columns = line.chars().take(cursor.column.min(line.len())).count();
+        let columns = Self::visual_column_for_byte_offset(line, cursor.column);
         Some(ROW_TEXT_LEFT + columns as f32 * self.metrics.char_width)
     }
 
@@ -786,6 +866,12 @@ impl EditorView {
         let Some(tab) = self.active_tab_mut() else {
             return Ok(None);
         };
+        if !tab.save_enabled {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("cannot save {}; file failed to load", tab.path.display()),
+            ));
+        }
         tab.buffer.save_to(&tab.path)?;
         Ok(Some(tab.path.clone()))
     }
@@ -923,6 +1009,11 @@ impl Render for EditorView {
         let line_count = active.line_count;
         let cursor = active.cursor;
         let selection = active.selection;
+        let cursor_visual_column = active
+            .lines
+            .get(cursor.row)
+            .map(|line| Self::visual_column_for_byte_offset(line, cursor.column))
+            .unwrap_or(0);
         let cursor_visible = self.cursor_visible;
         let widest_line_index = active.widest_line_index;
         let line_height = px(metrics.line_height);
@@ -1047,7 +1138,7 @@ impl Render for EditorView {
             "{} lines — Ln {}, Col {}{} — {}",
             line_count,
             cursor.row + 1,
-            cursor.column + 1,
+            cursor_visual_column + 1,
             diagnostics_label,
             active.path.display()
         )
@@ -1080,7 +1171,6 @@ impl Render for EditorView {
                         .as_ref()
                         .map(|diagnostic| Self::diagnostic_color(&list_theme, diagnostic.severity));
                     let line_runs = syntax_runs.get(i).cloned().unwrap_or_default();
-                    let line_len = line_text.len();
                     let line_visual_columns = Self::visual_columns_for_line(&line_text);
                     let row_min_width = px(Self::row_min_width_for_visual_columns_with_metrics(
                         line_visual_columns,
@@ -1091,23 +1181,21 @@ impl Render for EditorView {
                             return None;
                         }
                         let start_col = if i == start.row {
-                            start.column.min(line_len)
+                            Self::visual_column_for_byte_offset(&line_text, start.column)
                         } else {
                             0
                         };
                         let end_col = if i == end.row {
-                            end.column.min(line_len)
+                            Self::visual_column_for_byte_offset(&line_text, end.column)
                         } else {
-                            line_len
+                            line_visual_columns
                         };
                         (end_col > start_col).then_some((start_col, end_col))
                     });
-                    let before_cursor = line_text
-                        .chars()
-                        .take(cursor.column.min(line_len))
-                        .collect::<String>();
-                    let cursor_left = TEXT_IN_CONTENT_LEFT
-                        + before_cursor.chars().count() as f32 * metrics.char_width;
+                    let cursor_visual_col =
+                        Self::visual_column_for_byte_offset(&line_text, cursor.column);
+                    let cursor_left =
+                        TEXT_IN_CONTENT_LEFT + cursor_visual_col as f32 * metrics.char_width;
                     let text = SharedString::from(line_text);
                     let highlighted_text = StyledText::new(text.clone()).with_runs(line_runs);
                     let mut content = div()
@@ -1367,6 +1455,28 @@ mod tests {
     }
 
     #[test]
+    fn mouse_column_for_utf8_line_returns_byte_offset() {
+        let position = EditorView::position_for_content_point_in_line_for_test(
+            gpui::point(px(ROW_TEXT_LEFT + CHAR_WIDTH * 1.1), px(0.0)),
+            "éx",
+        );
+
+        assert_eq!(position, CursorPosition::new(0, "é".len()));
+    }
+
+    #[test]
+    fn visual_column_and_byte_offset_conversion_handle_utf8() {
+        assert_eq!(
+            EditorView::visual_column_for_byte_offset("éx", "é".len()),
+            1
+        );
+        assert_eq!(
+            EditorView::byte_offset_for_visual_column("éx", 1),
+            "é".len()
+        );
+    }
+
+    #[test]
     fn scrolled_content_point_uses_negative_gpui_scroll_offset() {
         assert_eq!(
             EditorView::position_for_content_point_with_scroll(
@@ -1567,6 +1677,17 @@ mod tests {
             &first.syntax_runs,
             &third.syntax_runs
         ));
+    }
+
+    #[test]
+    fn read_error_tabs_are_not_save_enabled() {
+        let tab = EditorTab::read_error(
+            PathBuf::from("not-utf8.bin"),
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "bad data"),
+        );
+
+        assert!(!tab.save_enabled);
+        assert!(tab.buffer.text().contains("Error reading file:"));
     }
 
     #[test]
