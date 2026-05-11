@@ -2418,7 +2418,7 @@ impl SettingsPanel {
             _ => {}
         }
         self.set_recording_key(None);
-        self.save_error = keybinding_conflict_message(&self.config.keybindings);
+        sync_keybinding_conflict_error(&mut self.save_error, &self.config.keybindings);
         cx.notify();
     }
 
@@ -5483,7 +5483,7 @@ impl Render for SettingsPanel {
             )
             // Error banner
             .children(self.save_error.as_ref().map(|err| {
-                let message = if err.starts_with("Shortcut conflict:") {
+                let message = if is_keybinding_conflict_error(err) {
                     err.to_string()
                 } else {
                     format!("Save failed: {err}")
@@ -5898,6 +5898,26 @@ fn keybinding_conflict_message(kb: &con_core::config::KeybindingConfig) -> Optio
         conflict.binding,
         human_join(&conflict.actions)
     ))
+}
+
+fn sync_keybinding_conflict_error(
+    save_error: &mut Option<String>,
+    kb: &con_core::config::KeybindingConfig,
+) {
+    match keybinding_conflict_message(kb) {
+        Some(message) => *save_error = Some(message),
+        None if save_error
+            .as_deref()
+            .is_some_and(is_keybinding_conflict_error) =>
+        {
+            *save_error = None;
+        }
+        None => {}
+    }
+}
+
+fn is_keybinding_conflict_error(message: &str) -> bool {
+    message.starts_with("Shortcut conflict:")
 }
 
 fn reserved_keybinding_shortcuts() -> Vec<(&'static str, &'static str)> {
