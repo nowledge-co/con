@@ -32,11 +32,12 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_METRICS, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC,
-    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
-    DWRITE_GLYPH_METRICS, DWRITE_LINE_METRICS, DWRITE_MEASURING_MODE_NATURAL,
-    DWRITE_PIXEL_GEOMETRY_FLAT, DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC, IDWriteFactory,
-    IDWriteFontCollection, IDWriteFontFace, IDWriteFontFallback, IDWriteRenderingParams,
-    IDWriteTextFormat, IDWriteTextFormat1,
+    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_BOLD,
+    DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_METRICS,
+    DWRITE_LINE_METRICS, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PIXEL_GEOMETRY_FLAT,
+    DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC, IDWriteFactory, IDWriteFontCollection,
+    IDWriteFontFace, IDWriteFontFallback, IDWriteRenderingParams, IDWriteTextFormat,
+    IDWriteTextFormat1,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
@@ -44,7 +45,7 @@ use windows::core::Interface;
 use windows_numerics::Matrix3x2;
 
 const TEXT_ENHANCED_CONTRAST: f32 = 1.15;
-const CJK_TEXT_ENHANCED_CONTRAST: f32 = 1.85;
+const CJK_TEXT_ENHANCED_CONTRAST: f32 = 1.45;
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)] // offset_x/offset_y are wired in Phase 3b-2 (glyph bearing).
@@ -162,6 +163,8 @@ pub struct GlyphCache {
     text_format_bold: IDWriteTextFormat,
     text_format_italic: IDWriteTextFormat,
     text_format_bold_italic: IDWriteTextFormat,
+    text_format_cjk_regular: IDWriteTextFormat,
+    text_format_cjk_italic: IDWriteTextFormat,
 
     /// Regular-weight face of the primary family, kept around so we can
     /// query per-glyph design metrics at rasterize time and scale wide
@@ -240,6 +243,24 @@ impl GlyphCache {
             &resolved_family,
             font_size_px,
             true,
+            true,
+        )?;
+        let text_format_cjk_regular = make_text_format_with_weight(
+            dwrite,
+            text_collection,
+            font_fallback.as_ref(),
+            &resolved_family,
+            font_size_px,
+            DWRITE_FONT_WEIGHT_MEDIUM,
+            false,
+        )?;
+        let text_format_cjk_italic = make_text_format_with_weight(
+            dwrite,
+            text_collection,
+            font_fallback.as_ref(),
+            &resolved_family,
+            font_size_px,
+            DWRITE_FONT_WEIGHT_MEDIUM,
             true,
         )?;
 
@@ -441,6 +462,8 @@ impl GlyphCache {
             text_format_bold,
             text_format_italic,
             text_format_bold_italic,
+            text_format_cjk_regular,
+            text_format_cjk_italic,
             primary_face,
             primary_upm,
             metrics,
@@ -501,6 +524,7 @@ impl GlyphCache {
         let is_scalable_pua =
             matches!(codepoint, 0xE000..=0xF8FF) && !matches!(codepoint, 0xE0A0..=0xE0D4);
         let is_wide_text = is_wide_codepoint(codepoint);
+        let is_cjk_text = is_cjk_codepoint(codepoint);
         let metrics = if is_scalable_pua {
             self.primary_glyph_metrics_px(codepoint)
         } else {
@@ -549,11 +573,20 @@ impl GlyphCache {
         let mut utf16 = [0u16; 2];
         let utf16_slice = ch.encode_utf16(&mut utf16);
 
-        let format = match (key.bold, key.italic) {
+        let base_format = match (key.bold, key.italic) {
             (true, true) => &self.text_format_bold_italic,
             (true, false) => &self.text_format_bold,
             (false, true) => &self.text_format_italic,
             (false, false) => &self.text_format_regular,
+        };
+        let format = if is_cjk_text && !key.bold {
+            if key.italic {
+                &self.text_format_cjk_italic
+            } else {
+                &self.text_format_cjk_regular
+            }
+        } else {
+            base_format
         };
         let target_baseline = self.layout_baselines.for_style(key.bold, key.italic);
 
@@ -680,7 +713,7 @@ impl GlyphCache {
                     utf16_slice,
                     target_baseline,
                 );
-                if let Some(params) = self.cjk_text_rendering_params.as_ref() {
+                if is_cjk_text && let Some(params) = self.cjk_text_rendering_params.as_ref() {
                     self.d2d_rt.SetTextRenderingParams(params);
                 }
                 self.d2d_rt.DrawText(
@@ -691,7 +724,7 @@ impl GlyphCache {
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
-                if let Some(params) = self.text_rendering_params.as_ref() {
+                if is_cjk_text && let Some(params) = self.text_rendering_params.as_ref() {
                     self.d2d_rt.SetTextRenderingParams(params);
                 }
             } else {
@@ -840,6 +873,24 @@ impl GlyphCache {
             true,
             true,
         )?;
+        self.text_format_cjk_regular = make_text_format_with_weight(
+            &self.dwrite,
+            self.font_collection.as_ref(),
+            self.font_fallback.as_ref(),
+            &self.font_family,
+            font_size_px,
+            DWRITE_FONT_WEIGHT_MEDIUM,
+            false,
+        )?;
+        self.text_format_cjk_italic = make_text_format_with_weight(
+            &self.dwrite,
+            self.font_collection.as_ref(),
+            self.font_fallback.as_ref(),
+            &self.font_family,
+            font_size_px,
+            DWRITE_FONT_WEIGHT_MEDIUM,
+            true,
+        )?;
         self.metrics = measure_cell(
             &self.dwrite,
             self.font_collection.as_ref(),
@@ -915,14 +966,28 @@ fn make_text_format(
     bold: bool,
     italic: bool,
 ) -> Result<IDWriteTextFormat> {
-    let family_w: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
-    let locale_w: Vec<u16> = "en-us".encode_utf16().chain(std::iter::once(0)).collect();
-
     let weight = if bold {
         DWRITE_FONT_WEIGHT_BOLD
     } else {
         DWRITE_FONT_WEIGHT_NORMAL
     };
+    make_text_format_with_weight(
+        dwrite, collection, fallback, family, size_px, weight, italic,
+    )
+}
+
+fn make_text_format_with_weight(
+    dwrite: &IDWriteFactory,
+    collection: Option<&IDWriteFontCollection>,
+    fallback: Option<&IDWriteFontFallback>,
+    family: &str,
+    size_px: f32,
+    weight: DWRITE_FONT_WEIGHT,
+    italic: bool,
+) -> Result<IDWriteTextFormat> {
+    let family_w: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+    let locale_w: Vec<u16> = "en-us".encode_utf16().chain(std::iter::once(0)).collect();
+
     let style = if italic {
         DWRITE_FONT_STYLE_ITALIC
     } else {
@@ -1298,9 +1363,35 @@ fn is_wide_codepoint(codepoint: u32) -> bool {
         .is_some_and(|width| width >= 2)
 }
 
+fn is_cjk_codepoint(codepoint: u32) -> bool {
+    matches!(
+        codepoint,
+        // Hangul Jamo.
+        0x1100..=0x11FF
+            // CJK radicals, Kangxi radicals, ideographic description chars.
+            | 0x2E80..=0x2FFF
+            // CJK punctuation, Hiragana, Katakana, Bopomofo, Hangul compatibility.
+            | 0x3000..=0x318F
+            // CJK strokes, Katakana extensions, enclosed CJK.
+            | 0x31C0..=0x32FF
+            // CJK Unified Ideographs Extension A + Unified Ideographs.
+            | 0x3400..=0x9FFF
+            // Hangul syllables.
+            | 0xAC00..=0xD7AF
+            // CJK compatibility ideographs.
+            | 0xF900..=0xFAFF
+            // Kana Supplement / Extended, Small Kana, Nushu.
+            | 0x1AFF0..=0x1B16F
+            // Ideographic symbols and Tangut/Nushu-era East Asian wide scripts.
+            | 0x16FE0..=0x18D8F
+            // CJK Extension B and later assigned extension planes.
+            | 0x20000..=0x323AF
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_wide_codepoint;
+    use super::{is_cjk_codepoint, is_wide_codepoint};
 
     #[test]
     fn wide_codepoint_uses_unicode_width_instead_of_local_ranges() {
@@ -1323,5 +1414,23 @@ mod tests {
         // Ambiguous-width punctuation should stay one cell unless the
         // terminal layer explicitly gains a CJK-ambiguous-width mode.
         assert!(!is_wide_codepoint(0x00B7));
+    }
+
+    #[test]
+    fn cjk_codepoint_detection_is_limited_to_east_asian_text() {
+        for codepoint in [
+            0x4E00,  // CJK Unified Ideograph
+            0x3002,  // Ideographic full stop
+            0x3042,  // Hiragana
+            0x30A2,  // Katakana
+            0x3105,  // Bopomofo
+            0xAC00,  // Hangul syllable
+            0x20000, // CJK Unified Ideographs Extension B
+        ] {
+            assert!(is_cjk_codepoint(codepoint), "U+{codepoint:04X}");
+        }
+
+        assert!(!is_cjk_codepoint('A' as u32));
+        assert!(!is_cjk_codepoint(0xE0B0)); // Powerline glyph; keep prompt icons untouched.
     }
 }

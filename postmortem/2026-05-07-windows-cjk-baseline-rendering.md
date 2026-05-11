@@ -30,6 +30,10 @@ ClearType subpixel color coverage. Grayscale text avoids RGB fringe in our
 offscreen BGRA atlas, but CJK fallback glyphs lost more perceived weight than
 Latin text. A single global contrast value was too blunt: pushing it high enough
 for CJK would also over-darken Latin and Nerd-Font prompt glyphs.
+The right typography fix is to ask DirectWrite for a more appropriate East
+Asian text weight first, then apply a moderate raster contrast adjustment only
+to CJK text. Contrast alone is a last-mile rasterization tweak, not a substitute
+for glyph weight.
 
 ## Fix Applied
 
@@ -37,9 +41,10 @@ for CJK would also over-darken Latin and Nerd-Font prompt glyphs.
   the glyph, reads the layout line baseline, and shifts the atlas layout rect so
   the fallback glyph baseline matches the primary terminal cell baseline.
 - The atlas keeps grayscale antialiasing. Latin and Nerd-Font glyphs use the
-  conservative contrast path; CJK/wide fallback glyphs temporarily switch to a
-  stronger DirectWrite enhanced-contrast profile during rasterization, then the
-  render target is restored before the next glyph.
+  conservative contrast path; normal-weight CJK glyphs use a medium-weight
+  DirectWrite text format and temporarily switch to a moderate CJK-only
+  enhanced-contrast profile during rasterization, then the render target is
+  restored before the next glyph.
 - The Windows terminal view now measures and renders an inset content surface
   instead of painting cells flush against the pane edge. Hit testing, link hover,
   IME cursor bounds, scrollbar placement, and renderer dimensions all use the
@@ -58,3 +63,5 @@ for CJK would also over-darken Latin and Nerd-Font prompt glyphs.
 - Windows font-quality bugs need reporter-facing dev builds and profile logs.
   The tracker should keep #78 open until users confirm the perceived weight is
   comfortable on real Windows displays.
+- Glyph weight and raster contrast are separate controls. We should prefer
+  semantically correct font selection before tuning DirectWrite contrast values.

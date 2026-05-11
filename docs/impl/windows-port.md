@@ -366,6 +366,10 @@ Phase 3c details now covered by the beta baseline:
 - CJK fallback glyphs are baseline-aligned inside the glyph atlas instead of
   being top-aligned as one-character `DrawText` lines. This keeps fallback
   CJK runs anchored to the same terminal-cell baseline as the primary face.
+- Normal-weight East Asian text uses a medium-weight DirectWrite text format
+  with a CJK-only grayscale contrast profile. That keeps Chinese strokes closer
+  to browser/native text weight without reintroducing ClearType RGB fringe or
+  changing Latin / Nerd-Font prompt glyphs.
 - OSC 52 and ordinary clipboard operations are wired through the Win32 clipboard.
 - CJK IME commit/preedit input is wired through GPUI's platform
   `InputHandler`. The terminal still owns control, alt/meta, and

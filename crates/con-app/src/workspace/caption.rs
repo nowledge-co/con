@@ -95,7 +95,8 @@ pub(super) fn caption_buttons(
     }
     .into();
     let fg = theme.muted_foreground.opacity(0.9);
-    let hover_bg = if theme.is_dark() {
+    let is_dark = theme.background.l < 0.5;
+    let hover_bg = if is_dark {
         theme.foreground.opacity(0.11)
     } else {
         theme.foreground.opacity(0.075)
