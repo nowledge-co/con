@@ -1313,7 +1313,7 @@ impl VtScreen {
                 if col_idx >= cols {
                     break;
                 }
-                let cell = read_cell(inner.row_cells, default_fg, default_bg);
+                let cell = read_cell(inner.row_cells, default_fg, default_bg, alternate_screen);
                 let idx = row_start + col_idx as usize;
                 row_changed |= inner.scratch[idx] != cell;
                 inner.scratch[idx] = cell;
@@ -1740,6 +1740,7 @@ fn read_cell(
     cells: GhosttyRowCells,
     default_fg: GhosttyColorRgb,
     default_bg: GhosttyColorRgb,
+    alternate_screen: bool,
 ) -> Cell {
     // RAW here is an **opaque `GhosttyCell` u64 snapshot**, not a packed
     // codepoint. Decode fields via `ghostty_cell_get(cell, KEY, &out)`
@@ -1801,15 +1802,29 @@ fn read_cell(
     // reports no SGR override (tag == GHOSTTY_STYLE_COLOR_NONE). The
     // row_cells FG_COLOR / BG_COLOR accessors return (0,0,0) for
     // unstyled cells, so without this substitution default-bg cells
-    // would paint pure black. Keying off the style tag (not the RGB
-    // value) is the correct test: an explicit `SGR 40` or
-    // `48;2;0;0;0` sets tag = PALETTE(0) / RGB(0,0,0) while still
-    // requesting solid black.
+    // would paint pure black. Key off the style tag, not the RGB value:
+    // explicit black may still resolve to the same RGB as the default.
     const STYLE_COLOR_TAG_NONE: u32 = 0;
+    const STYLE_COLOR_TAG_PALETTE: u32 = 1;
+    const PALETTE_BLACK: u8 = 0;
     let fg_was_default = style.fg_color.tag == STYLE_COLOR_TAG_NONE;
     let bg_was_default = style.bg_color.tag == STYLE_COLOR_TAG_NONE;
+    // Curses-style full-screen apps often paint their canvas with SGR
+    // 40 instead of default background. For themes whose ANSI black is
+    // a raised surface (Catppuccin, Nord, Everforest), that makes htop
+    // and similar TUIs look like a detached slab. Normalize only
+    // alternate-screen background palette index 0 to the terminal
+    // canvas; normal shell output, foreground black, RGB black, and
+    // xterm-cube black (palette index 16) remain untouched.
+    let bg_is_alt_canvas_black = alternate_screen
+        && style.bg_color.tag == STYLE_COLOR_TAG_PALETTE
+        && style.bg_color.value as u8 == PALETTE_BLACK;
     let fg = if fg_was_default { default_fg } else { fg };
-    let bg = if bg_was_default { default_bg } else { bg };
+    let bg = if bg_was_default || bg_is_alt_canvas_black {
+        default_bg
+    } else {
+        bg
+    };
 
     // Pack RGB into the 0xRRGGBBAA u32 our HLSL `unpackRGBA` expects
     // (high byte = R, low byte = A). Default-bg cells carry alpha=0
@@ -1818,7 +1833,11 @@ fn read_cell(
     let pack = |c: GhosttyColorRgb, a: u8| -> u32 {
         ((c.r as u32) << 24) | ((c.g as u32) << 16) | ((c.b as u32) << 8) | (a as u32)
     };
-    let bg_alpha: u8 = if bg_was_default { 0 } else { 0xFF };
+    let bg_alpha: u8 = if bg_was_default || bg_is_alt_canvas_black {
+        0
+    } else {
+        0xFF
+    };
 
     // Pack style flags into the attrs byte the renderer (and HLSL
     // pixel shader) interpret. Underline is an `int` upstream
@@ -1926,5 +1945,45 @@ mod tests {
             screen.current_dir().as_deref(),
             Some("/home/me/con terminal")
         );
+    }
+
+    #[test]
+    fn normal_screen_preserves_explicit_palette_black_background() {
+        let theme = catppuccin_like_theme();
+        let screen = VtScreen::new(4, 2, Some(&theme)).expect("create vt screen");
+
+        screen.feed(b"\x1b[40mX");
+        let snapshot = screen.snapshot();
+
+        assert!(!snapshot.alternate_screen);
+        let cell = snapshot.cells.first().expect("first cell");
+        assert_eq!(cell.codepoint, 'X' as u32);
+        assert_eq!(cell.bg, rgba([0x45, 0x47, 0x5A], 0xFF));
+    }
+
+    #[test]
+    fn alternate_screen_uses_default_canvas_for_palette_black_background() {
+        let theme = catppuccin_like_theme();
+        let screen = VtScreen::new(4, 2, Some(&theme)).expect("create vt screen");
+
+        screen.feed(b"\x1b[?1049h\x1b[H\x1b[40mX");
+        let snapshot = screen.snapshot();
+
+        assert!(snapshot.alternate_screen);
+        let cell = snapshot.cells.first().expect("first cell");
+        assert_eq!(cell.codepoint, 'X' as u32);
+        assert_eq!(cell.bg, rgba([0x1E, 0x1E, 0x2E], 0x00));
+    }
+
+    fn catppuccin_like_theme() -> ThemeColors {
+        let mut ansi = [[0u8; 3]; 16];
+        ansi[0] = [0x45, 0x47, 0x5A];
+        ansi[7] = [0xBA, 0xC2, 0xDE];
+        ansi[15] = [0xCD, 0xD6, 0xF4];
+        ThemeColors::from_ansi16([0xCD, 0xD6, 0xF4], [0x1E, 0x1E, 0x2E], ansi)
+    }
+
+    fn rgba(rgb: [u8; 3], alpha: u8) -> u32 {
+        ((rgb[0] as u32) << 24) | ((rgb[1] as u32) << 16) | ((rgb[2] as u32) << 8) | alpha as u32
     }
 }
