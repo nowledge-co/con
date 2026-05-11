@@ -591,8 +591,9 @@ fn canonical_keystroke(stroke: &str) -> Option<String> {
             continue;
         }
         match raw.as_str() {
-            "cmd" | "command" | "meta" | "platform" | "secondary" => {
-                push_unique_modifier(&mut modifiers, "platform")
+            "cmd" | "command" | "meta" => push_unique_modifier(&mut modifiers, "cmd"),
+            "platform" | "secondary" => {
+                push_unique_modifier(&mut modifiers, platform_modifier_name())
             }
             "ctrl" | "control" => push_unique_modifier(&mut modifiers, "ctrl"),
             "alt" | "option" => push_unique_modifier(&mut modifiers, "alt"),
@@ -605,13 +606,21 @@ fn canonical_keystroke(stroke: &str) -> Option<String> {
     }
 
     let key = key?;
-    let mut parts = ["platform", "ctrl", "alt", "shift", "fn"]
+    let mut parts = ["cmd", "ctrl", "alt", "shift", "fn"]
         .into_iter()
         .filter(|modifier| modifiers.contains(modifier))
         .map(str::to_string)
         .collect::<Vec<_>>();
     parts.push(key);
     Some(parts.join("-"))
+}
+
+fn platform_modifier_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "cmd"
+    } else {
+        "ctrl"
+    }
 }
 
 fn push_unique_modifier(modifiers: &mut Vec<&'static str>, modifier: &'static str) {
@@ -973,6 +982,25 @@ quick_terminal = "cmd-\\"
         let mut config = Config::default();
         config.keybindings.command_palette = "cmd-shift-p".to_string();
         config.keybindings.toggle_agent = "secondary-shift-p".to_string();
+
+        let conflicts = config.keybindings.shortcut_conflicts(&[]);
+
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(
+            conflicts[0].actions,
+            vec!["Command Palette".to_string(), "Toggle Agent".to_string()]
+        );
+    }
+
+    #[test]
+    fn keybinding_conflicts_match_secondary_to_platform_modifier() {
+        let mut config = Config::default();
+        config.keybindings.command_palette = "secondary-shift-p".to_string();
+        config.keybindings.toggle_agent = if cfg!(target_os = "macos") {
+            "cmd-shift-p".to_string()
+        } else {
+            "ctrl-shift-p".to_string()
+        };
 
         let conflicts = config.keybindings.shortcut_conflicts(&[]);
 

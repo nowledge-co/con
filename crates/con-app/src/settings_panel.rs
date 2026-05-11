@@ -5902,6 +5902,8 @@ fn keybinding_conflict_message(kb: &con_core::config::KeybindingConfig) -> Optio
 
 fn reserved_keybinding_shortcuts() -> Vec<(&'static str, &'static str)> {
     let shortcuts = vec![
+        ("Next Tab (Alternate)", "secondary-shift-]"),
+        ("Previous Tab (Alternate)", "secondary-shift-["),
         ("Select Tab 1", "secondary-1"),
         ("Select Tab 2", "secondary-2"),
         ("Select Tab 3", "secondary-3"),
@@ -5921,7 +5923,10 @@ fn reserved_keybinding_shortcuts() -> Vec<(&'static str, &'static str)> {
             ("Hide Other Apps", "cmd-alt-h"),
             ("Show All Apps", "cmd-alt-shift-h"),
             ("Next Window", "cmd-`"),
+            ("Next Window", "cmd->"),
             ("Previous Window", "cmd-shift-`"),
+            ("Previous Window", "cmd-~"),
+            ("Previous Window", "cmd-<"),
             ("Minimize Window", "cmd-m"),
         ]);
         shortcuts
