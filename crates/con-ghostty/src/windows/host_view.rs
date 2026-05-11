@@ -66,7 +66,7 @@ pub struct RenderSession {
     /// so fractional deltas accumulate here instead of turning every
     /// tiny touchpad event into a full-row jump.
     scroll_remainder: Mutex<ScrollRemainder>,
-    drag_anchor: Mutex<Option<(u16, u16)>>,
+    drag_anchor: Mutex<Option<(u16, u64)>>,
 }
 
 unsafe impl Send for RenderSession {}
@@ -430,20 +430,21 @@ impl RenderSession {
             return;
         }
         self.request_low_latency_present();
+        let point = self.selection_point(col, row);
         if mods.shift {
             let renderer = self.renderer.lock();
-            let existing_anchor = renderer.selection().map(|s| s.anchor).unwrap_or((col, row));
+            let existing_anchor = renderer.selection().map(|s| s.anchor).unwrap_or(point);
             *self.drag_anchor.lock() = Some(existing_anchor);
             renderer.set_selection(Some(Selection {
                 anchor: existing_anchor,
-                extent: (col, row),
+                extent: point,
             }));
             return;
         }
-        *self.drag_anchor.lock() = Some((col, row));
+        *self.drag_anchor.lock() = Some(point);
         self.renderer.lock().set_selection(Some(Selection {
-            anchor: (col, row),
-            extent: (col, row),
+            anchor: point,
+            extent: point,
         }));
     }
 
@@ -464,7 +465,7 @@ impl RenderSession {
         if let Some(anchor) = anchor {
             self.renderer.lock().set_selection(Some(Selection {
                 anchor,
-                extent: (col, row),
+                extent: self.selection_point(col, row),
             }));
         }
     }
@@ -484,10 +485,15 @@ impl RenderSession {
         self.request_low_latency_present();
         let anchor = self.drag_anchor.lock().take();
         if let Some(anchor) = anchor
-            && anchor == (col, row)
+            && anchor == self.selection_point(col, row)
         {
             self.renderer.lock().set_selection(None);
         }
+    }
+
+    fn selection_point(&self, col: u16, row: u16) -> (u16, u64) {
+        let viewport_offset = self.vt.scrollbar().map_or(0, |scrollbar| scrollbar.offset);
+        (col, viewport_offset.saturating_add(row as u64))
     }
 
     fn report_sgr_button(
@@ -769,6 +775,7 @@ fn extract_selection_text(snapshot: &ScreenSnapshot, sel: Selection) -> String {
     if cols == 0 || snapshot.cells.is_empty() {
         return String::new();
     }
+    let viewport_offset = snapshot.scrollbar.map_or(0, |scrollbar| scrollbar.offset);
     let mut out = String::new();
     let rows = snapshot.rows;
     for row in 0..rows {
@@ -776,7 +783,7 @@ fn extract_selection_text(snapshot: &ScreenSnapshot, sel: Selection) -> String {
         let mut row_has_cell = false;
         let mut last_non_blank: i32 = -1;
         for col in 0..cols {
-            if !sel.contains(col, row, cols) {
+            if !sel.contains(col, row, cols, viewport_offset) {
                 continue;
             }
             row_has_cell = true;

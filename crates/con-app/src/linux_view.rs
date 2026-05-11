@@ -106,7 +106,7 @@ pub struct GhosttyView {
     hovered_link: Option<TerminalLink>,
     last_mouse_position: Option<Point<Pixels>>,
     selection: Option<TerminalSelection>,
-    drag_anchor: Option<(u16, u16)>,
+    drag_anchor: Option<(u16, u64)>,
 }
 
 pub fn init(cx: &mut App) {
@@ -593,13 +593,13 @@ impl GhosttyView {
     }
 
     fn begin_selection(&mut self, pos: Point<Pixels>) -> bool {
-        let Some(cell) = self.cell_from_event_position(pos) else {
+        let Some(point) = self.selection_point_from_event_position(pos) else {
             return self.clear_selection();
         };
-        self.drag_anchor = Some(cell);
+        self.drag_anchor = Some(point);
         self.selection = Some(TerminalSelection {
-            anchor: cell,
-            extent: cell,
+            anchor: point,
+            extent: point,
         });
         true
     }
@@ -608,7 +608,7 @@ impl GhosttyView {
         let Some(anchor) = self.drag_anchor else {
             return false;
         };
-        let Some(extent) = self.clamped_cell_from_event_position(pos) else {
+        let Some(extent) = self.clamped_selection_point_from_event_position(pos) else {
             return false;
         };
         let next = TerminalSelection { anchor, extent };
@@ -624,7 +624,9 @@ impl GhosttyView {
         let Some(anchor) = anchor else {
             return false;
         };
-        let extent = self.clamped_cell_from_event_position(pos).unwrap_or(anchor);
+        let extent = self
+            .clamped_selection_point_from_event_position(pos)
+            .unwrap_or(anchor);
         if anchor == extent {
             return self.clear_selection();
         }
@@ -634,6 +636,28 @@ impl GhosttyView {
         }
         self.selection = Some(next);
         true
+    }
+
+    fn selection_point_from_event_position(&self, pos: Point<Pixels>) -> Option<(u16, u64)> {
+        self.cell_from_event_position(pos)
+            .map(|cell| self.selection_point_from_cell(cell))
+    }
+
+    fn clamped_selection_point_from_event_position(
+        &self,
+        pos: Point<Pixels>,
+    ) -> Option<(u16, u64)> {
+        self.clamped_cell_from_event_position(pos)
+            .map(|cell| self.selection_point_from_cell(cell))
+    }
+
+    fn selection_point_from_cell(&self, cell: (u16, u16)) -> (u16, u64) {
+        let viewport_offset = self
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.scrollbar)
+            .map_or(0, |scrollbar| scrollbar.offset);
+        (cell.0, viewport_offset.saturating_add(cell.1 as u64))
     }
 
     fn render_link_cursor_overlay(
@@ -1015,7 +1039,17 @@ impl Render for GhosttyView {
 
         let foreground = theme.foreground;
         let status_color = foreground.opacity(0.5);
-        let pane_opacity = self.app.background_opacity().clamp(0.0, 1.0);
+        let configured_pane_opacity = self.app.background_opacity().clamp(0.0, 1.0);
+        let pane_opacity = if self
+            .snapshot
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.alternate_screen)
+            && configured_pane_opacity > f32::EPSILON
+        {
+            1.0
+        } else {
+            configured_pane_opacity
+        };
         let selection = self.selection;
         let selection_bg = theme.selection.opacity(0.42);
         self.sync_row_cache(
@@ -1045,7 +1079,7 @@ impl Render for GhosttyView {
         if let Some(snapshot) = self.snapshot.as_ref() {
             for row_idx in 0..usize::from(snapshot.rows) {
                 if let Some(selection_cols) =
-                    selection.and_then(|selection| selection.row_range(row_idx, snapshot.cols))
+                    selection.and_then(|selection| selection.row_range(row_idx, snapshot))
                 {
                     let row_start = row_idx * usize::from(snapshot.cols);
                     let row_end = row_start + usize::from(snapshot.cols);
@@ -1368,13 +1402,15 @@ impl Drop for GhosttyView {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TerminalSelection {
-    anchor: (u16, u16),
-    extent: (u16, u16),
+    anchor: (u16, u64),
+    extent: (u16, u64),
 }
 
 impl TerminalSelection {
-    fn contains(self, col: u16, row: u16, cols: u16) -> bool {
-        let to_linear = |point: (u16, u16)| point.1 as u32 * cols as u32 + point.0 as u32;
+    fn contains(self, col: u16, row: u16, snapshot: &ScreenSnapshot) -> bool {
+        let cols = snapshot.cols;
+        let viewport_offset = snapshot.scrollbar.map_or(0, |scrollbar| scrollbar.offset);
+        let to_linear = |point: (u16, u64)| point.1 as u128 * cols as u128 + point.0 as u128;
         let anchor = to_linear(self.anchor);
         let extent = to_linear(self.extent);
         let (start, end) = if anchor <= extent {
@@ -1382,11 +1418,12 @@ impl TerminalSelection {
         } else {
             (extent, anchor)
         };
-        let current = to_linear((col, row));
+        let current = to_linear((col, viewport_offset.saturating_add(row as u64)));
         current >= start && current <= end
     }
 
-    fn row_range(self, row: usize, cols: u16) -> Option<(usize, usize)> {
+    fn row_range(self, row: usize, snapshot: &ScreenSnapshot) -> Option<(usize, usize)> {
+        let cols = snapshot.cols;
         if cols == 0 || row > u16::MAX as usize {
             return None;
         }
@@ -1395,7 +1432,7 @@ impl TerminalSelection {
         let mut start = None;
         let mut end = None;
         for col in 0..cols {
-            if self.contains(col, row, cols) {
+            if self.contains(col, row, snapshot) {
                 start.get_or_insert(usize::from(col));
                 end = Some(usize::from(col));
             }
@@ -1416,7 +1453,7 @@ fn extract_selection_text(
     let cols = usize::from(snapshot.cols);
     let mut output = String::new();
     for row in 0..snapshot.rows {
-        let Some((start, end)) = selection.row_range(usize::from(row), snapshot.cols) else {
+        let Some((start, end)) = selection.row_range(usize::from(row), snapshot) else {
             continue;
         };
 
@@ -1881,14 +1918,29 @@ mod tests {
 
     #[test]
     fn terminal_selection_row_range_handles_reverse_drag() {
+        let snapshot = ScreenSnapshot {
+            cols: 5,
+            rows: 3,
+            cells: Vec::new(),
+            dirty_rows: Vec::new(),
+            cursor: VtCursor {
+                col: 0,
+                row: 0,
+                visible: false,
+            },
+            alternate_screen: false,
+            scrollbar: None,
+            title: None,
+            generation: 1,
+        };
         let selection = TerminalSelection {
             anchor: (3, 1),
             extent: (1, 0),
         };
 
-        assert_eq!(selection.row_range(0, 5), Some((1, 4)));
-        assert_eq!(selection.row_range(1, 5), Some((0, 3)));
-        assert_eq!(selection.row_range(2, 5), None);
+        assert_eq!(selection.row_range(0, &snapshot), Some((1, 4)));
+        assert_eq!(selection.row_range(1, &snapshot), Some((0, 3)));
+        assert_eq!(selection.row_range(2, &snapshot), None);
     }
 
     #[test]
@@ -1908,6 +1960,7 @@ mod tests {
                 visible: false,
             },
             alternate_screen: false,
+            scrollbar: None,
             title: None,
             generation: 1,
         };
@@ -1936,6 +1989,7 @@ mod tests {
                 visible: true,
             },
             alternate_screen: false,
+            scrollbar: None,
             title: None,
             generation: 7,
         };

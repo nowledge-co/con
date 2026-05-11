@@ -42,10 +42,11 @@ con is still pre-release, so entries may group related beta work while the produ
   [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
   [@wey-gu](https://github.com/wey-gu))_
 - Raised the Windows alternate-screen background opacity floor for full-screen
-  TUIs such as htop and vim, so their default-background canvas stays readable
-  while ordinary shell panes keep the configured terminal glass effect. _(Issue
-  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
-  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  TUIs such as htop and vim to a solid app canvas, so their default-background
+  screens match Windows Terminal/Ghostty instead of compositing with shell
+  content underneath. Ordinary shell panes still keep the configured terminal
+  glass effect. _(Issue [#34](https://github.com/nowledge-co/con-terminal/issues/34),
+  PR [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
   [@wey-gu](https://github.com/wey-gu))_
 - Polished Windows and Linux caption-button hover states so minimize and
   maximize/restore give visible feedback instead of only the close button
@@ -98,6 +99,13 @@ con is still pre-release, so entries may group related beta work while the produ
   stale highlights when fresh terminal output replaces the grid. _(Issues
   [#177](https://github.com/nowledge-co/con-terminal/issues/177),
   [#18](https://github.com/nowledge-co/con-terminal/issues/18), and
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Made portable terminal selections scrollback-stable: when the viewport moves
+  while text is selected, the highlight now remains attached to the selected
+  terminal content instead of staying pinned to the same screen rows. _(Issues
+  [#18](https://github.com/nowledge-co/con-terminal/issues/18) and
   [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
   [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
   [@wey-gu](https://github.com/wey-gu))_

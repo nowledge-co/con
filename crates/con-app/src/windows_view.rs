@@ -909,14 +909,14 @@ impl GhosttyView {
         }
     }
 
-    fn forward_scroll(&self, pos: Point<Pixels>, delta: ScrollDelta, mods: MouseEventMods) {
+    fn forward_scroll(&self, pos: Point<Pixels>, delta: ScrollDelta, mods: MouseEventMods) -> bool {
         let Some(terminal) = &self.terminal else {
-            return;
+            return false;
         };
         let inner = terminal.inner();
         let guard = inner.lock();
         let Some(session) = guard.as_ref() else {
-            return;
+            return false;
         };
         let delta_y_px = match delta {
             ScrollDelta::Pixels(p) => f32::from(p.y),
@@ -926,7 +926,7 @@ impl GhosttyView {
             }
         };
         if delta_y_px.abs() < f32::EPSILON {
-            return;
+            return false;
         }
 
         // Only report wheel to the shell when it has explicitly enabled
@@ -936,14 +936,15 @@ impl GhosttyView {
         // `set mouse=a`.
         if !session.mouse_tracking_active() || mods.shift {
             session.scroll_viewport_or_alt_screen(delta_y_px, !mods.shift);
-            return;
+            return true;
         }
 
         let Some((col0, row0)) = self.cell_from_event_position(pos) else {
-            return;
+            return false;
         };
         // `forward_wheel` expects 1-based SGR coordinates.
         session.forward_wheel(col0 + 1, row0 + 1, delta_y_px, mods);
+        false
     }
 
     fn scrollbar_visible(scrollbar: &GhosttyScrollbar) -> bool {
@@ -1758,11 +1759,18 @@ impl Render for GhosttyView {
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
                 this.last_mouse_position = Some(event.position);
                 let _ = this.update_hovered_link(&event.modifiers);
-                this.forward_scroll(
+                let scrolled_viewport = this.forward_scroll(
                     event.position,
                     event.delta,
                     mouse_mods_from(&event.modifiers),
                 );
+                if scrolled_viewport && this.terminal_mouse_sequence_active {
+                    this.forward_mouse_drag(
+                        event.position,
+                        mouse_mods_from(&event.modifiers),
+                        true,
+                    );
+                }
                 cx.notify();
             }))
             .child(

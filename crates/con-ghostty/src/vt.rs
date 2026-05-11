@@ -645,6 +645,7 @@ pub struct ScreenSnapshot {
     pub dirty_rows: Vec<u16>,
     pub cursor: Cursor,
     pub alternate_screen: bool,
+    pub scrollbar: Option<GhosttyScrollbar>,
     pub title: Option<String>,
     pub generation: u64,
 }
@@ -1156,6 +1157,7 @@ impl VtScreen {
                 dirty_rows: Vec::new(),
                 cursor: Cursor::default(),
                 alternate_screen: false,
+                scrollbar: None,
                 title: None,
                 generation: inner.generation,
             };
@@ -1403,6 +1405,7 @@ impl VtScreen {
             dirty_rows,
             cursor,
             alternate_screen,
+            scrollbar: read_scrollbar(inner.terminal),
             title: None,
             generation: inner.generation,
         };
@@ -1483,19 +1486,7 @@ impl VtScreen {
         if inner.terminal.is_null() {
             return None;
         }
-        let mut scrollbar = GhosttyTerminalScrollbar::default();
-        let rc = unsafe {
-            ghostty_terminal_get(
-                inner.terminal,
-                GhosttyTerminalData::Scrollbar,
-                &mut scrollbar as *mut _ as *mut c_void,
-            )
-        };
-        (rc == 0).then_some(GhosttyScrollbar {
-            total: scrollbar.total,
-            offset: scrollbar.offset,
-            len: scrollbar.len,
-        })
+        read_scrollbar(inner.terminal)
     }
 
     /// Current working directory reported by shell integration (OSC 7).
@@ -1714,9 +1705,29 @@ fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
         dirty_rows: Vec::new(),
         cursor: Cursor::default(),
         alternate_screen: false,
+        scrollbar: None,
         title: None,
         generation,
     }
+}
+
+fn read_scrollbar(terminal: GhosttyTerminal) -> Option<GhosttyScrollbar> {
+    if terminal.is_null() {
+        return None;
+    }
+    let mut scrollbar = GhosttyTerminalScrollbar::default();
+    let rc = unsafe {
+        ghostty_terminal_get(
+            terminal,
+            GhosttyTerminalData::Scrollbar,
+            &mut scrollbar as *mut _ as *mut c_void,
+        )
+    };
+    (rc == 0).then_some(GhosttyScrollbar {
+        total: scrollbar.total,
+        offset: scrollbar.offset,
+        len: scrollbar.len,
+    })
 }
 
 fn push_unique_row(rows: &mut Vec<u16>, row: u16) {
