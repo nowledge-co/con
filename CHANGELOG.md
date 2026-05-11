@@ -21,6 +21,17 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Keyboard Shortcuts**
+
+- Fixed shortcut lifecycle issues in Settings: changed shortcuts now apply
+  immediately without restarting Con, duplicate assignments are blocked with a
+  clear conflict warning, and the command palette shortcut now refocuses the
+  palette instead of getting stuck when pressed repeatedly while modifiers are
+  held. _(Issue
+  [#182](https://github.com/nowledge-co/con-terminal/issues/182), PR
+  [#186](https://github.com/nowledge-co/con-terminal/pull/186) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 **Panes**
 
 - Fixed pane-local surface tab strips so they use the same themed chrome
