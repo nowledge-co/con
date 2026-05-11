@@ -915,6 +915,19 @@ pub(crate) fn toggle_global_summon(cx: &mut App) {
     }
 }
 
+fn minimize_frontmost_window(cx: &mut App) {
+    let frontmost_window = cx.active_window().or_else(|| {
+        cx.window_stack()
+            .and_then(|windows| windows.first().cloned())
+    });
+
+    if let Some(window_handle) = frontmost_window {
+        let _ = cx.update_window(window_handle, |_, window, _| {
+            window.minimize_window();
+        });
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn bundle_info_value(key: &'static [u8]) -> Option<String> {
     use objc::{class, msg_send, sel, sel_impl};
@@ -1721,6 +1734,9 @@ fn main() {
         #[cfg(target_os = "macos")]
         cx.on_action(|_: &PreviousWindow, _cx: &mut App| {
             macos_windowing::cycle_app_window(true);
+        });
+        cx.on_action(|_: &Minimize, cx: &mut App| {
+            minimize_frontmost_window(cx);
         });
         cx.on_action(|_: &NewTab, cx: &mut App| {
             if cx.active_window().is_none() {

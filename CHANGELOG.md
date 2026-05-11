@@ -6,6 +6,15 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.68` - unreleased
 
+### Added
+
+**macOS**
+
+- Added the standard <kbd>⌘</kbd><kbd>M</kbd> shortcut and Window menu action
+  for minimizing Con windows, including terminal-focused windows. _(PR
+  [#175](https://github.com/nowledge-co/con-terminal/pull/175) by
+  [@chenghuzi](https://github.com/chenghuzi))_
+
 ## `v0.1.0-beta.67` - 2026-05-08
 
 ### Fixed

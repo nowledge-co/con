@@ -4756,6 +4756,8 @@ impl SettingsPanel {
         #[cfg(target_os = "macos")]
         let fixed_tab_card = fixed_tab_card
             .child(row_separator(theme))
+            .child(key_row("Minimize Window", "cmd-m", theme))
+            .child(row_separator(theme))
             .child(key_row("Next Window", "cmd-`", theme))
             .child(row_separator(theme))
             .child(key_row("Previous Window", "cmd-shift-`", theme));
