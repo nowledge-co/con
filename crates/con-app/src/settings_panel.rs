@@ -2287,6 +2287,11 @@ impl SettingsPanel {
         self.config.appearance.background_image_repeat = self.background_image_repeat;
 
         // Keybindings are updated directly via record_keystroke — no reading needed
+        if let Some(message) = keybinding_conflict_message(&self.config.keybindings) {
+            self.save_error = Some(message);
+            cx.notify();
+            return;
+        }
 
         // Network / proxy
         // Blank field → None (leave inherited env untouched).
@@ -2413,6 +2418,7 @@ impl SettingsPanel {
             _ => {}
         }
         self.set_recording_key(None);
+        self.save_error = keybinding_conflict_message(&self.config.keybindings);
         cx.notify();
     }
 
@@ -5477,6 +5483,11 @@ impl Render for SettingsPanel {
             )
             // Error banner
             .children(self.save_error.as_ref().map(|err| {
+                let message = if err.starts_with("Shortcut conflict:") {
+                    err.to_string()
+                } else {
+                    format!("Save failed: {err}")
+                };
                 div()
                     .px_4()
                     .py_2()
@@ -5486,7 +5497,7 @@ impl Render for SettingsPanel {
                     .bg(theme.danger)
                     .text_color(theme.danger_foreground)
                     .text_xs()
-                    .child(format!("Save failed: {}", err))
+                    .child(message)
             }))
             // Body
             .child(
@@ -5877,6 +5888,56 @@ fn keystroke_to_binding(ks: &gpui::Keystroke) -> String {
     }
     parts.push(&ks.key);
     parts.join("-")
+}
+
+fn keybinding_conflict_message(kb: &con_core::config::KeybindingConfig) -> Option<String> {
+    let conflicts = kb.shortcut_conflicts(&reserved_keybinding_shortcuts());
+    let conflict = conflicts.first()?;
+    Some(format!(
+        "Shortcut conflict: {} is assigned to {}. Pick a different shortcut before saving.",
+        conflict.binding,
+        human_join(&conflict.actions)
+    ))
+}
+
+fn reserved_keybinding_shortcuts() -> Vec<(&'static str, &'static str)> {
+    let mut shortcuts = vec![
+        ("Select Tab 1", "secondary-1"),
+        ("Select Tab 2", "secondary-2"),
+        ("Select Tab 3", "secondary-3"),
+        ("Select Tab 4", "secondary-4"),
+        ("Select Tab 5", "secondary-5"),
+        ("Select Tab 6", "secondary-6"),
+        ("Select Tab 7", "secondary-7"),
+        ("Select Tab 8", "secondary-8"),
+        ("Select Tab 9", "secondary-9"),
+    ];
+
+    #[cfg(target_os = "macos")]
+    shortcuts.extend([
+        ("Hide Con", "cmd-h"),
+        ("Hide Other Apps", "cmd-alt-h"),
+        ("Show All Apps", "cmd-alt-shift-h"),
+        ("Next Window", "cmd-`"),
+        ("Previous Window", "cmd-shift-`"),
+        ("Minimize Window", "cmd-m"),
+    ]);
+
+    shortcuts
+}
+
+fn human_join(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [first, second] => format!("{first} and {second}"),
+        _ => {
+            let mut text = items[..items.len() - 1].join(", ");
+            text.push_str(", and ");
+            text.push_str(&items[items.len() - 1]);
+            text
+        }
+    }
 }
 
 fn key_row(action: &str, shortcut: &str, theme: &gpui_component::Theme) -> Div {

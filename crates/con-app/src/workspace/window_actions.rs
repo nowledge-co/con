@@ -131,12 +131,8 @@ impl ConWorkspace {
             });
         }
         self.command_palette.update(cx, |palette, cx| {
-            palette.toggle(window, cx);
+            palette.show(window, cx);
         });
-        // Restore terminal focus if palette just closed
-        if !self.is_modal_open(cx) {
-            self.focus_terminal(window, cx);
-        }
         cx.notify();
     }
 
