@@ -78,6 +78,7 @@ mod terminal_paste;
 mod terminal_restore;
 mod terminal_shortcuts;
 mod theme;
+mod ui_scale;
 mod updater;
 mod workspace;
 

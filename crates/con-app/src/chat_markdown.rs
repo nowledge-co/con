@@ -18,6 +18,8 @@ use gpui_component::{Colorize, Theme};
 use markdown::{ParseOptions, mdast};
 use ropey::Rope;
 
+use crate::ui_scale::{mono_px, ui_px};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatMarkdownTone {
     Message,
@@ -293,10 +295,10 @@ impl<'a> ChatMarkdownStyle<'a> {
                 theme,
                 tone,
                 content_width: px(720.0),
-                base_font_size: px(15.0),
-                base_line_height: px(24.0),
+                base_font_size: ui_px(theme, 15.0),
+                base_line_height: ui_px(theme, 24.0),
                 code_font_size: theme.mono_font_size,
-                code_line_height: px(21.0),
+                code_line_height: mono_px(theme, 21.0),
                 text_color: theme.foreground.opacity(0.88),
                 muted_text_color: theme.muted_foreground.opacity(0.74),
                 inline_code_background: theme
@@ -321,17 +323,17 @@ impl<'a> ChatMarkdownStyle<'a> {
                 link_color: theme.primary,
                 table_border: theme.muted_foreground.opacity(0.10),
                 table_cell_background: theme.background.opacity(0.96),
-                block_gap: px(13.0),
-                inner_gap: px(9.0),
+                block_gap: ui_px(theme, 13.0),
+                inner_gap: ui_px(theme, 9.0),
             },
             ChatMarkdownTone::Thinking => Self {
                 theme,
                 tone,
                 content_width: px(640.0),
-                base_font_size: px(12.75),
-                base_line_height: px(20.0),
+                base_font_size: ui_px(theme, 12.75),
+                base_line_height: ui_px(theme, 20.0),
                 code_font_size: theme.mono_font_size,
-                code_line_height: px(19.0),
+                code_line_height: mono_px(theme, 19.0),
                 text_color: theme.muted_foreground.opacity(0.66),
                 muted_text_color: theme.muted_foreground.opacity(0.58),
                 inline_code_background: theme
@@ -356,8 +358,8 @@ impl<'a> ChatMarkdownStyle<'a> {
                 link_color: theme.primary.opacity(0.82),
                 table_border: theme.muted_foreground.opacity(0.08),
                 table_cell_background: theme.background.opacity(0.82),
-                block_gap: px(10.0),
-                inner_gap: px(8.0),
+                block_gap: ui_px(theme, 10.0),
+                inner_gap: ui_px(theme, 8.0),
             },
         }
     }
@@ -377,12 +379,36 @@ impl<'a> ChatMarkdownStyle<'a> {
 
     fn heading_text_style(&self, level: u8) -> TextStyle {
         let (font_size, line_height, weight) = match (self.tone, level) {
-            (ChatMarkdownTone::Message, 1) => (px(19.0), px(27.0), FontWeight::BOLD),
-            (ChatMarkdownTone::Message, 2) => (px(17.0), px(25.0), FontWeight::SEMIBOLD),
-            (ChatMarkdownTone::Message, 3) => (px(15.5), px(23.0), FontWeight::SEMIBOLD),
-            (ChatMarkdownTone::Thinking, 1) => (px(14.5), px(21.0), FontWeight::SEMIBOLD),
-            (ChatMarkdownTone::Thinking, 2) => (px(13.5), px(20.0), FontWeight::SEMIBOLD),
-            (ChatMarkdownTone::Thinking, _) => (px(12.75), px(19.0), FontWeight::MEDIUM),
+            (ChatMarkdownTone::Message, 1) => (
+                ui_px(self.theme, 19.0),
+                ui_px(self.theme, 27.0),
+                FontWeight::BOLD,
+            ),
+            (ChatMarkdownTone::Message, 2) => (
+                ui_px(self.theme, 17.0),
+                ui_px(self.theme, 25.0),
+                FontWeight::SEMIBOLD,
+            ),
+            (ChatMarkdownTone::Message, 3) => (
+                ui_px(self.theme, 15.5),
+                ui_px(self.theme, 23.0),
+                FontWeight::SEMIBOLD,
+            ),
+            (ChatMarkdownTone::Thinking, 1) => (
+                ui_px(self.theme, 14.5),
+                ui_px(self.theme, 21.0),
+                FontWeight::SEMIBOLD,
+            ),
+            (ChatMarkdownTone::Thinking, 2) => (
+                ui_px(self.theme, 13.5),
+                ui_px(self.theme, 20.0),
+                FontWeight::SEMIBOLD,
+            ),
+            (ChatMarkdownTone::Thinking, _) => (
+                ui_px(self.theme, 12.75),
+                ui_px(self.theme, 19.0),
+                FontWeight::MEDIUM,
+            ),
             (_, _) => (
                 self.base_font_size,
                 self.base_line_height,

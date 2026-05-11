@@ -23,6 +23,7 @@ use gpui_component::{ActiveTheme, Disableable, Icon, IndexPath, Sizable as _, in
 
 use crate::model_registry::ModelRegistry;
 use crate::motion::{MotionValue, vertical_reveal_offset};
+use crate::ui_scale::ui_density_scale;
 use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
@@ -5316,7 +5317,12 @@ impl Render for SettingsPanel {
         let save_button_tint = theme
             .foreground
             .opacity(if theme.is_dark() { 0.84 } else { 0.78 });
-        let save_button_style = ButtonCustomVariant::new(cx).color(save_button_tint);
+        let save_button_style = ButtonCustomVariant::new(cx)
+            .color(save_button_tint.opacity(0.10))
+            .foreground(save_button_tint)
+            .hover(save_button_tint.opacity(0.16))
+            .active(save_button_tint.opacity(0.20));
+        let header_density = ui_density_scale(theme);
         let surface_rounding = if self.standalone { px(0.0) } else { px(12.0) };
         let header_left_padding = if self.standalone && cfg!(target_os = "macos") {
             px(78.0)
@@ -5504,10 +5510,28 @@ impl Render for SettingsPanel {
                                                 Button::new("settings-apply")
                                                     .small()
                                                     .compact()
-                                                    .rounded(px(8.0))
                                                     .custom(save_button_style)
-                                                    .icon(Icon::default().path("phosphor/check.svg"))
-                                                    .label("Save Changes")
+                                                    .h(px(30.0 * header_density))
+                                                    .px(px(11.0 * header_density))
+                                                    .rounded(px(9.0 * header_density))
+                                                    .gap(px(6.0 * header_density))
+                                                    .child(
+                                                        svg()
+                                                            .path("phosphor/check.svg")
+                                                            .size(px(13.0 * header_density))
+                                                            .text_color(save_button_tint),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(13.0 * header_density))
+                                                            .line_height(px(
+                                                                16.0 * header_density,
+                                                            ))
+                                                            .font_weight(FontWeight::MEDIUM)
+                                                            .text_color(save_button_tint)
+                                                            .whitespace_nowrap()
+                                                            .child("Save Changes"),
+                                                    )
                                                     .on_click(cx.listener(|this, _, window, cx| {
                                                         this.save(window, cx);
                                                     })),

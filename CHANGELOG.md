@@ -4,7 +4,7 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.70` - unreleased
+## `v0.1.0-beta.70` - 2026-05-12
 
 ### Changed
 
@@ -34,6 +34,16 @@ con is still pre-release, so entries may group related beta work while the produ
   [#147](https://github.com/nowledge-co/con-terminal/issues/147), PR
   [#189](https://github.com/nowledge-co/con-terminal/pull/189) by
   [@wey-gu](https://github.com/wey-gu))_
+
+**UI**
+
+- Fixed UI font-size scaling in terminal-adjacent chrome: the bottom input bar,
+  agent panel messages, and run-trace cards now follow the Appearance → UI Size
+  setting instead of staying at small fixed system sizes. _(Issue
+  [#190](https://github.com/nowledge-co/con-terminal/issues/190), PR
+  [#191](https://github.com/nowledge-co/con-terminal/pull/191) by
+  [@wey-gu](https://github.com/wey-gu), reported by
+  [@leek_ed](https://x.com/leek_ed))_
 
 **macOS**
 
