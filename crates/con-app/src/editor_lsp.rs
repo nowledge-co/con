@@ -1,4 +1,4 @@
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, select};
 use serde_json::json;
 use std::{
     io::{self, BufRead, BufReader, Read, Write},
@@ -136,9 +136,17 @@ impl LspClient {
             .ok_or_else(|| io::Error::other("language server stdout was not piped"))?;
         let child = Arc::new(Mutex::new(child));
         let (sender, receiver) = crossbeam_channel::unbounded();
+        let (initialize_tx, initialize_rx) = crossbeam_channel::bounded(1);
 
-        spawn_writer_thread(path.clone(), spec.clone(), text, stdin, receiver);
-        spawn_reader_thread(path.clone(), stdout, events);
+        spawn_writer_thread(
+            path.clone(),
+            spec.clone(),
+            text,
+            stdin,
+            receiver,
+            initialize_rx,
+        );
+        spawn_reader_thread(path.clone(), stdout, initialize_tx, events);
 
         Ok(Some(Self {
             path,
@@ -201,10 +209,46 @@ fn spawn_writer_thread(
     initial_text: String,
     mut stdin: impl Write + Send + 'static,
     receiver: Receiver<LspClientCommand>,
+    initialize_rx: Receiver<()>,
 ) {
     let name = format!("con-lsp-writer-{}", spec.language_id);
     let _ = thread::Builder::new().name(name).spawn(move || {
-        for message in initial_messages(&path, &spec, &initial_text) {
+        if write_message(&mut stdin, &initialize_message(&path)).is_err() {
+            return;
+        }
+
+        let mut pending_changes = Vec::new();
+        loop {
+            select! {
+                recv(initialize_rx) -> initialized => {
+                    if initialized.is_err() {
+                        return;
+                    }
+                    break;
+                }
+                recv(receiver) -> command => match command {
+                    Ok(LspClientCommand::DidChange { version, text }) => {
+                        pending_changes.push((version, text));
+                    }
+                    Ok(LspClientCommand::Shutdown) => {
+                        write_shutdown_and_exit(&mut stdin);
+                        return;
+                    }
+                    Err(_) => return,
+                },
+            }
+        }
+
+        for message in [
+            initialized_message(),
+            did_open_message(&path, &spec, &initial_text),
+        ] {
+            if write_message(&mut stdin, &message).is_err() {
+                return;
+            }
+        }
+        for (version, text) in pending_changes {
+            let message = did_change_message(&path, version, &text);
             if write_message(&mut stdin, &message).is_err() {
                 return;
             }
@@ -219,14 +263,7 @@ fn spawn_writer_thread(
                     }
                 }
                 LspClientCommand::Shutdown => {
-                    let _ = write_message(
-                        &mut stdin,
-                        &json!({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": null}),
-                    );
-                    let _ = write_message(
-                        &mut stdin,
-                        &json!({"jsonrpc": "2.0", "method": "exit", "params": null}),
-                    );
+                    write_shutdown_and_exit(&mut stdin);
                     return;
                 }
             }
@@ -237,15 +274,21 @@ fn spawn_writer_thread(
 fn spawn_reader_thread(
     path: PathBuf,
     stdout: impl Read + Send + 'static,
+    initialize_tx: Sender<()>,
     events: Sender<LspClientEvent>,
 ) {
     let _ = thread::Builder::new()
         .name("con-lsp-reader".to_string())
         .spawn(move || {
             let mut reader = BufReader::new(stdout);
+            let mut initialize_acknowledged = false;
             loop {
                 match read_json_rpc_message(&mut reader) {
                     Ok(Some(message)) => {
+                        if !initialize_acknowledged && is_initialize_response(&message) {
+                            initialize_acknowledged = true;
+                            let _ = initialize_tx.send(());
+                        }
                         if let Some((diagnostic_path, diagnostics)) =
                             diagnostics_from_publish_notification(&message)
                         {
@@ -266,44 +309,63 @@ fn spawn_reader_thread(
         });
 }
 
-fn initial_messages(path: &Path, spec: &LanguageServerSpec, text: &str) -> Vec<serde_json::Value> {
-    let uri = document_uri(path).unwrap_or_else(|| path.display().to_string());
+fn initialize_message(path: &Path) -> serde_json::Value {
     let root_uri = path
         .parent()
         .and_then(|parent| url::Url::from_directory_path(parent).ok())
         .map(|uri| uri.to_string());
 
-    vec![
-        json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "processId": std::process::id(),
-                "rootUri": root_uri,
-                "capabilities": {
-                    "textDocument": {
-                        "publishDiagnostics": {
-                            "relatedInformation": true
-                        }
+    json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "processId": std::process::id(),
+            "rootUri": root_uri,
+            "capabilities": {
+                "textDocument": {
+                    "publishDiagnostics": {
+                        "relatedInformation": true
                     }
                 }
             }
-        }),
-        json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
-        json!({
-            "jsonrpc": "2.0",
-            "method": "textDocument/didOpen",
-            "params": {
-                "textDocument": {
-                    "uri": uri,
-                    "languageId": spec.language_id,
-                    "version": 1,
-                    "text": text
-                }
+        }
+    })
+}
+
+fn initialized_message() -> serde_json::Value {
+    json!({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+}
+
+fn did_open_message(path: &Path, spec: &LanguageServerSpec, text: &str) -> serde_json::Value {
+    let uri = document_uri(path).unwrap_or_else(|| path.display().to_string());
+    json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {
+            "textDocument": {
+                "uri": uri,
+                "languageId": spec.language_id,
+                "version": 1,
+                "text": text
             }
-        }),
-    ]
+        }
+    })
+}
+
+fn is_initialize_response(message: &serde_json::Value) -> bool {
+    message.get("id").and_then(|id| id.as_i64()) == Some(1) && message.get("result").is_some()
+}
+
+fn write_shutdown_and_exit(stdin: &mut impl Write) {
+    let _ = write_message(
+        stdin,
+        &json!({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": null}),
+    );
+    let _ = write_message(
+        stdin,
+        &json!({"jsonrpc": "2.0", "method": "exit", "params": null}),
+    );
 }
 
 fn did_change_message(path: &Path, version: i32, text: &str) -> serde_json::Value {
@@ -473,6 +535,48 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(body).unwrap(),
             message
+        );
+    }
+
+    #[test]
+    fn initialize_response_is_detected_by_id_and_result() {
+        assert!(is_initialize_response(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "capabilities": {} }
+        })));
+        assert!(!is_initialize_response(&json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "result": { "capabilities": {} }
+        })));
+        assert!(!is_initialize_response(&json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "textDocument/publishDiagnostics"
+        })));
+    }
+
+    #[test]
+    fn did_open_message_is_separate_from_initialize() {
+        let spec = LanguageServerSpec {
+            language_id: "rust",
+            command: "rust-analyzer",
+            args: &[],
+        };
+        let path = Path::new("/tmp/main.rs");
+
+        assert_eq!(
+            initialize_message(path)
+                .get("method")
+                .and_then(|m| m.as_str()),
+            Some("initialize")
+        );
+        assert_eq!(
+            did_open_message(path, &spec, "fn main() {}")
+                .get("method")
+                .and_then(|m| m.as_str()),
+            Some("textDocument/didOpen")
         );
     }
 

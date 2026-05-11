@@ -94,8 +94,17 @@ impl ConWorkspace {
         &mut self,
         _: &CollapseSidebar,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
+        if !self.left_panel_open {
+            return;
+        }
+        self.left_panel_open = false;
+        self.activity_bar.update(cx, |bar, _cx| {
+            bar.left_panel_open = false;
+        });
+        self.save_session(cx);
+        cx.notify();
     }
 
     pub(super) fn toggle_pane_scope_picker(
