@@ -1447,7 +1447,7 @@ pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
 }
 
 pub(crate) fn fixed_app_keybinding_shortcuts() -> Vec<(&'static str, &'static str)> {
-    let mut shortcuts = vec![
+    let shortcuts = vec![
         ("Next Tab", "secondary-shift-]"),
         ("Previous Tab", "secondary-shift-["),
         ("Select Tab 1", "secondary-1"),
@@ -1462,7 +1462,8 @@ pub(crate) fn fixed_app_keybinding_shortcuts() -> Vec<(&'static str, &'static st
     ];
 
     #[cfg(target_os = "macos")]
-    {
+    let shortcuts = {
+        let mut shortcuts = shortcuts;
         shortcuts.extend([
             ("Hide Con", "cmd-h"),
             ("Hide Other Apps", "cmd-alt-h"),
@@ -1474,7 +1475,8 @@ pub(crate) fn fixed_app_keybinding_shortcuts() -> Vec<(&'static str, &'static st
             ("Previous Window", "cmd-<"),
             ("Minimize Window", "cmd-m"),
         ]);
-    }
+        shortcuts
+    };
 
     shortcuts
 }
