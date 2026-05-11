@@ -242,7 +242,11 @@ impl Render for FileTreeView {
                     theme.foreground.opacity(0.85)
                 };
 
-                let row_bg = if is_active { accent_bg } else { theme.transparent };
+                let row_bg = if is_active {
+                    accent_bg
+                } else {
+                    theme.transparent
+                };
 
                 div()
                     .id(("file-row", idx))

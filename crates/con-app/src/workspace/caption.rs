@@ -46,8 +46,7 @@ pub(super) fn max_agent_panel_width(window_width: f32) -> f32 {
 }
 
 pub(super) fn max_sidebar_panel_width(window_width: f32, agent_panel_outer_width: f32) -> f32 {
-    (window_width - agent_panel_outer_width - TERMINAL_MIN_CONTENT_WIDTH)
-        .clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
+    (window_width - agent_panel_outer_width - ACTIVITY_BAR_WIDTH).max(PANEL_MIN_WIDTH)
 }
 
 /// Windows / Linux caption buttons (Min / Max+Restore / Close).

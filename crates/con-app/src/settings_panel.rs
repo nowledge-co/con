@@ -3438,60 +3438,14 @@ impl SettingsPanel {
                 ),
         );
 
-        let vertical_tabs_enabled = matches!(
-            self.config.appearance.tabs_orientation,
-            con_core::config::TabsOrientation::Vertical,
-        );
         content = content.child(
             div()
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Tabs", &theme))
+                .child(group_label("Pane", &theme))
                 .child(
                     card(theme, card_opacity)
-                        .child(toggle_row(
-                            "Vertical Tabs",
-                            "Show tabs as a collapsible left-side panel.",
-                            Switch::new("vertical-tabs-toggle")
-                                .checked(vertical_tabs_enabled)
-                                .small()
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    // Live toggle: write the new value
-                                    // into self.config, persist to disk
-                                    // immediately so closing the panel
-                                    // (or quitting + relaunching)
-                                    // doesn't lose the change, and emit
-                                    // a narrow event so the workspace
-                                    // applies only the orientation switch.
-                                    let previous_orientation =
-                                        this.config.appearance.tabs_orientation;
-                                    this.config.appearance.tabs_orientation = if *checked {
-                                        con_core::config::TabsOrientation::Vertical
-                                    } else {
-                                        con_core::config::TabsOrientation::Horizontal
-                                    };
-                                    if let Err(err) = this.config.save() {
-                                        this.config.appearance.tabs_orientation =
-                                            previous_orientation;
-                                        log::warn!(
-                                            "settings: persist tabs_orientation failed: {err}"
-                                        );
-                                        this.save_error = Some(err.to_string());
-                                        cx.notify();
-                                        return;
-                                    }
-                                    if let Some(snapshot) = &mut this.preview_snapshot {
-                                        snapshot.appearance.tabs_orientation =
-                                            this.config.appearance.tabs_orientation;
-                                    }
-                                    this.save_error = None;
-                                    cx.emit(TabsOrientationChanged);
-                                    cx.notify();
-                                })),
-                            theme,
-                        ))
-                        .child(row_separator(theme))
                         .child(toggle_row(
                             "Hide Pane Title Bar",
                             "Hide the title bar on split panes.",
@@ -4610,8 +4564,7 @@ impl SettingsPanel {
             ("Toggle Input / Terminal", "focus_input"),
             ("Cycle Input Mode", "cycle_input_mode"),
             ("Toggle Pane Scope", "toggle_pane_scope"),
-            ("Toggle Vertical Tabs", "toggle_vertical_tabs"),
-            ("Collapse/Expand Sidebar", "collapse_sidebar"),
+            ("Toggle Left Sidebar", "toggle_vertical_tabs"),
             ("Quit", "quit"),
         ];
 

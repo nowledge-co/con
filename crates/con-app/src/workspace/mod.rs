@@ -37,6 +37,9 @@ const SPLIT_PREVIEW_SEAM_THICKNESS: f32 = 6.0;
 const TAB_DRAG_PREVIEW_WIDTH: f32 = 180.0;
 const TAB_DRAG_PREVIEW_HEIGHT: f32 = 28.0;
 
+use crate::activity_bar::{
+    ACTIVITY_BAR_WIDTH, ActivityBar, ActivitySlot, ActivitySlotChanged, ActivityTogglePanel,
+};
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, InlineInputSubmit,
     InlineSkillAutocompleteChanged, LoadConversation, NewConversation, PanelState,
@@ -45,6 +48,8 @@ use crate::agent_panel::{
 use crate::command_palette::{
     CommandPalette, PaletteDismissed, PaletteSelect, ToggleCommandPalette,
 };
+use crate::editor_view::{ActiveFileChanged, EditorEmptied, EditorView};
+use crate::file_tree_view::{FileTreeView, OpenFile};
 use crate::input_bar::{
     EscapeInput, InputBar, InputEdited, InputMode, InputScopeChanged, PaneInfo,
     SkillAutocompleteChanged, SubmitInput, TogglePaneScopePicker as TogglePaneScopePickerRequested,
@@ -57,14 +62,12 @@ use crate::pane_tree::{
 use crate::settings_panel::{
     self, AppearancePreview, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
 };
-use crate::activity_bar::{ACTIVITY_BAR_WIDTH, ActivityBar, ActivitySlot, ActivitySlotChanged, ActivityTogglePanel};
-use crate::editor_view::{ActiveFileChanged, EditorView};
-use crate::file_tree_view::{FileTreeView, OpenFile};
 use crate::sidebar::{
     DraggedTab, DraggedTabOrigin, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry,
     SessionSidebar, SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate, SidebarPaneToTab,
     SidebarRename, SidebarReorder, SidebarSelect, SidebarSetColor,
 };
+use crate::sidebar_search_view::SidebarSearchView;
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use con_terminal::TerminalTheme;
 
@@ -74,12 +77,16 @@ use crate::ghostty_view::{
 };
 use crate::{
     AddWorkspaceLayoutTabs, ClearRestoredTerminalHistory, ClearTerminal, ClosePane, CloseSurface,
-    CloseTab, CollapseSidebar, CycleInputMode, ExportWorkspaceLayout, FocusInput, NewSurface,
+    CloseTab, CollapseSidebar, Copy, Cut, CycleInputMode, EditorDeleteBackward,
+    EditorDeleteForward, EditorInsertNewline, EditorMoveDown, EditorMoveEnd, EditorMoveHome,
+    EditorMoveLeft, EditorMoveLineEnd, EditorMoveLineStart, EditorMoveRight, EditorMoveUp,
+    EditorSave, EditorSelectDown, EditorSelectEnd, EditorSelectHome, EditorSelectLeft,
+    EditorSelectRight, EditorSelectUp, ExportWorkspaceLayout, FocusInput, NewSurface,
     NewSurfaceSplitDown, NewSurfaceSplitRight, NewTab, NextSurface, NextTab,
-    OpenWorkspaceLayoutWindow, PreviousSurface, PreviousTab, Quit, RenameSurface, SelectTab1,
-    SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8, SelectTab9,
-    SplitDown, SplitLeft, SplitRight, SplitUp, ToggleAgentPanel, ToggleLeftPanel,
-    TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs,
+    OpenWorkspaceLayoutWindow, Paste, PreviousSurface, PreviousTab, Quit, RenameSurface, SelectAll,
+    SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8,
+    SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp, ToggleAgentPanel, ToggleLeftPanel,
+    TogglePaneScopePicker, TogglePaneZoom, ToggleVerticalTabs, Undo,
 };
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
@@ -109,6 +116,7 @@ mod chrome_actions;
 mod control_agent_tools;
 mod control_requests;
 mod control_surfaces;
+mod editor_actions;
 mod helpers;
 mod input_events;
 mod lifecycle;
@@ -310,4 +318,6 @@ pub struct ConWorkspace {
     left_panel_open: bool,
     /// File tree view — global singleton, root follows active tab cwd.
     file_tree_view: Entity<FileTreeView>,
+    /// Search view — global singleton, root follows the same sidebar root.
+    search_view: Entity<SidebarSearchView>,
 }

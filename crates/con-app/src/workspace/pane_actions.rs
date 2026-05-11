@@ -581,8 +581,13 @@ impl ConWorkspace {
         }
 
         let pane_count = self.tabs[self.active_tab].pane_tree.pane_count();
-        let focused_pane_id = self.tabs[self.active_tab].pane_tree.focused_pane_id();
-        let contains = self.tabs[self.active_tab].pane_tree.contains_pane(focused_pane_id);
+        let focused_pane_id = self.tabs[self.active_tab]
+            .pane_tree
+            .active_editor_pane_id(window, cx)
+            .unwrap_or_else(|| self.tabs[self.active_tab].pane_tree.focused_pane_id());
+        let contains = self.tabs[self.active_tab]
+            .pane_tree
+            .contains_pane(focused_pane_id);
 
         if pane_count > 1 {
             let valid_pane_id = if contains {
@@ -595,7 +600,10 @@ impl ConWorkspace {
         }
 
         if self.tabs.len() > 1 {
-            log::debug!("[close_pane] single pane, closing tab (tabs={})", self.tabs.len());
+            log::debug!(
+                "[close_pane] single pane, closing tab (tabs={})",
+                self.tabs.len()
+            );
             self.close_tab_by_index(self.active_tab, window, cx);
             return;
         }
@@ -816,34 +824,39 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
         shutdown_closing_terminals: bool,
     ) -> bool {
-        if tab_idx >= self.tabs.len() || self.tabs[tab_idx].pane_tree.pane_count() <= 1 {
+        if tab_idx >= self.tabs.len() {
             return false;
         }
 
+        let pane_count = self.tabs[tab_idx].pane_tree.pane_count();
         let pane_tree = &mut self.tabs[tab_idx].pane_tree;
 
         if let Some(editor_view) = pane_tree.editor_view_for_pane(pane_id) {
-            let should_close_pane = editor_view.update(cx, |editor, cx| {
-                let tab_count = editor.tab_count();
-                let intent = workspace_close_intent(1, Some(tab_count), 1);
-                if intent != WorkspaceCloseIntent::CloseEditorFile {
+            let editor_pane_empty = editor_view.update(cx, |editor, cx| {
+                let editor_pane_empty = editor.close_active_tab();
+                if editor.active_path().is_some() {
+                    cx.emit(ActiveFileChanged);
+                }
+                cx.notify();
+                editor_pane_empty
+            });
+
+            match editor_file_close_outcome(pane_count, editor_pane_empty) {
+                EditorFileCloseOutcome::KeepEditorPane => {
+                    if tab_idx == self.active_tab {
+                        let focus_handle = editor_view.read(cx).focus_handle(cx).clone();
+                        focus_handle.focus(window, cx);
+                    }
+                    cx.notify();
                     return true;
                 }
-
-                let should_close_pane = editor.close_active_tab();
-                if let Some(path) = editor.active_path().map(Path::to_path_buf) {
-                    cx.emit(ActiveFileChanged { path });
-                }
-                cx.notify();
-                should_close_pane
-            });
-            if !should_close_pane {
-                if tab_idx == self.active_tab {
-                    self.workspace_focus.clone().focus(window, cx);
-                }
-                cx.notify();
-                return true;
+                EditorFileCloseOutcome::CloseWorkspaceTabOrWindow => return false,
+                EditorFileCloseOutcome::CloseEditorPane => {}
             }
+        }
+
+        if pane_count <= 1 {
+            return false;
         }
 
         // Check if this is an editor pane (no terminal surfaces).
@@ -918,10 +931,7 @@ impl ConWorkspace {
             if tab_idx == self.active_tab {
                 // Only try to focus a terminal if one still exists.
                 // The tab may now contain only editor panes.
-                focus_after_close = self.tabs[tab_idx]
-                    .pane_tree
-                    .try_focused_terminal()
-                    .cloned();
+                focus_after_close = self.tabs[tab_idx].pane_tree.try_focused_terminal().cloned();
             }
         }
         if tab_idx == self.active_tab {

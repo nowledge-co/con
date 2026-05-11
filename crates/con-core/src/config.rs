@@ -319,7 +319,7 @@ fn default_toggle_pane_scope() -> String {
 #[cfg(target_os = "macos")]
 fn default_toggle_vertical_tabs() -> String {
     // Cmd+B is the established macOS/editor convention for showing or
-    // hiding a sidebar, and Cmd chords do not steal terminal input.
+    // hiding the left sidebar, and Cmd chords do not steal terminal input.
     "secondary-b".into()
 }
 #[cfg(not(target_os = "macos"))]

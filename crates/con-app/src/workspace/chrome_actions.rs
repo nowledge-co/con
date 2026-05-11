@@ -79,15 +79,10 @@ impl ConWorkspace {
     pub(super) fn toggle_vertical_tabs(
         &mut self,
         _: &ToggleVerticalTabs,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let next = if self.vertical_tabs_active() {
-            TabsOrientation::Horizontal
-        } else {
-            TabsOrientation::Vertical
-        };
-        self.apply_tabs_orientation(next, true, cx);
+        self.toggle_left_panel(&ToggleLeftPanel, window, cx);
     }
 
     pub(super) fn toggle_left_panel(
@@ -108,16 +103,8 @@ impl ConWorkspace {
         &mut self,
         _: &CollapseSidebar,
         _window: &mut Window,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) {
-        if !self.vertical_tabs_active() {
-            return;
-        }
-        self.sidebar.update(cx, |sidebar, cx| {
-            sidebar.toggle_pinned(cx);
-        });
-        self.save_session(cx);
-        cx.notify();
     }
 
     pub(super) fn toggle_pane_scope_picker(
@@ -434,10 +421,7 @@ impl ConWorkspace {
             terminal.ensure_surface(window, cx);
         }
         self.sync_active_tab_native_view_visibility(cx);
-        if let Some(terminal) = self.tabs[self.active_tab]
-            .pane_tree
-            .try_focused_terminal()
-        {
+        if let Some(terminal) = self.tabs[self.active_tab].pane_tree.try_focused_terminal() {
             terminal.focus(window, cx);
         }
         self.sync_active_terminal_focus_states(cx);

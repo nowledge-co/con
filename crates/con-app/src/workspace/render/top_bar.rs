@@ -1079,14 +1079,14 @@ impl ConWorkspace {
                 ),
         );
 
-        let vertical_tabs_tooltip = if self.vertical_tabs_active() {
-            "Use horizontal tabs"
+        let left_sidebar_tooltip = if self.left_panel_open {
+            "Hide left sidebar"
         } else {
-            "Use vertical tabs"
+            "Show left sidebar"
         };
         tab_controls = tab_controls.child(
             div()
-                .id("toggle-vertical-tabs")
+                .id("toggle-left-sidebar")
                 .flex()
                 .items_center()
                 .justify_center()
@@ -1097,8 +1097,8 @@ impl ConWorkspace {
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
                 .tooltip(move |window, cx| {
                     chrome_tooltip(
-                        vertical_tabs_tooltip,
-                        crate::keycaps::first_action_keystroke(&ToggleVerticalTabs, window),
+                        left_sidebar_tooltip,
+                        crate::keycaps::first_action_keystroke(&ToggleLeftPanel, window),
                         window,
                         cx,
                     )
@@ -1107,13 +1107,13 @@ impl ConWorkspace {
                     cx.stop_propagation();
                 })
                 .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_vertical_tabs(&ToggleVerticalTabs, window, cx);
+                    this.toggle_left_panel(&ToggleLeftPanel, window, cx);
                 }))
                 .child(
                     svg()
                         .path("phosphor/sidebar-fill.svg")
                         .size(px(12.0))
-                        .text_color(if self.vertical_tabs_active() {
+                        .text_color(if self.left_panel_open {
                             theme.primary
                         } else {
                             theme.muted_foreground.opacity(0.4)

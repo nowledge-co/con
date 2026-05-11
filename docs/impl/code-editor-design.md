@@ -1,372 +1,144 @@
-# Code Editor Integration Design
+# Code Editor and Left Sidebar
 
-**Date**: 2026-05-09  
-**Status**: Draft  
-**Scope**: Activity bar, file tree, editor area, `con-editor` crate
+Status: Implemented
+Scope: editor pane surface, left sidebar activity rail, file explorer, search,
+keybinding/focus integration.
 
----
+## Current Model
 
-## Overview
+The code editor is a normal pane surface inside the workspace `PaneTree`. It is
+not a separate top-level editor area and there is no standalone `con-editor`
+crate. Terminal panes, editor panes, the input bar, and the agent panel all
+share the existing workspace layout and close/focus machinery.
 
-con gains a lightweight code editor integrated into the main window. The editor
-area sits above the terminal area in a vertically split layout. A new activity
-bar on the far left replaces the current "vertical tabs is a separate setting"
-model — tab management becomes one slot in the activity bar, alongside file
-explorer and future panels (search, git, etc.).
+The left side of the window is split into two layers:
 
-The guiding constraint: **existing code changes as little as possible**. The
-activity bar wraps the existing `SessionSidebar`; the terminal pane tree is
-unchanged; the agent panel is unchanged. New surface area is additive.
+- `ActivityBar`: a fixed 40 px icon rail that is always visible.
+- Left panel content: user-resizable content shown only when the panel is open.
 
----
+Horizontal tabs remain the active tab UI. The old vertical tabs feature is no
+longer part of the active product design; see `docs/impl/vertical-tabs.md` for
+the compatibility note.
 
-## Layout
+## Left Sidebar
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  title bar / horizontal tab strip (existing, optional)           │
-├────┬─────────────────────────────────────────────┬───────────────┤
-│    │                                             │               │
-│    │  left panel (240 px, collapsible)           │               │
-│    │  ┌──────────────────────────────────────┐   │               │
-│ A  │  │  FileTree  │  EditorView             │   │  AgentPanel   │
-│ c  │  │  (240 px)  │  (flex-1)               │   │  (existing)   │
-│ t  │  └──────────────────────────────────────┘   │               │
-│ i  │  ← editor area (height: drag-resizable) →   │               │
-│ v  ├─────────────────────────────────────────────┤               │
-│ i  │                                             │               │
-│ t  │  terminal area  (existing pane tree)        │               │
-│ y  │                                             │               │
-│    ├─────────────────────────────────────────────┤               │
-│ B  │  input bar (existing)                       │               │
-│ a  │                                             │               │
-│ r  │                                             │               │
-└────┴─────────────────────────────────────────────┴───────────────┘
- 40px        flex-1                                   agent_panel_width
-```
+`crates/con-app/src/activity_bar.rs` owns the rail. `ActivitySlot::Files` shows
+the file explorer and `ActivitySlot::Search` shows workspace search. Clicking a
+different icon switches content and opens the panel. Clicking the already active
+icon toggles the panel open or closed.
 
-### Width budget
+`Cmd+B` is bound to `ToggleLeftPanel` and the user-facing label is "Toggle Left
+Sidebar". The top bar sidebar button remains a first-class toggle for the same
+left panel. The rail stays visible even when the panel content is collapsed so
+Files/Search can reopen it directly.
 
-```
-window_width = activity_bar_width(40)
-             + left_panel_width(0 or 240..360, collapsible)
-             + terminal_content_width(≥ 360)
-             + agent_panel_width(0 or 200..600)
-```
+The panel width is stored through the existing session sidebar width field for
+backward-compatible persistence. The active resize gesture is owned by the
+workspace because it needs the full window width, agent panel width, and pane
+layout constraints. While resizing, `render.rs` installs a capture overlay so
+mouse movement and mouse-up events end the drag even if the cursor leaves the
+handle.
 
-`terminal_content_left` in `render.rs` gains `ACTIVITY_BAR_WIDTH (40)` as a
-fixed addend. The existing `vertical_tabs_width` calculation is unchanged — it
-now describes the left panel width when the `Tabs` slot is active.
+## File Explorer
 
-### Vertical split
+`FileTreeView` has an optional root. The workspace keeps it in sync with the
+active focus:
 
-The main content column (between activity bar and agent panel) is split
-vertically into:
+- Terminal focus uses the active terminal cwd.
+- Editor focus uses the active editor file's parent directory.
+- If an editor file is inside the existing root, the root is preserved.
+- If the root is missing at render time, the workspace performs a fallback sync
+  from the currently focused pane.
 
-- **editor area**: height = `editor_area_height` (f32, 0.0 = collapsed).
-  Minimum when open: 120 px. Default when first opened: 40% of available height.
-- **horizontal resize handle**: 6 px drag target, same snap-guard pattern as
-  the agent panel drag divider.
-- **terminal area**: takes remaining height (minimum 120 px).
+Opening a file from the explorer routes through
+`ConWorkspace::open_path_in_active_editor`, which reuses the active tab's shared
+editor pane when possible.
 
-`editor_area_height` is persisted in `SessionState` alongside
-`agent_panel_width`.
+## Search Panel
 
----
+`SidebarSearchView` searches below the same root used by the file explorer. The
+query input auto-grows from one to three lines and supports case-sensitive and
+regular-expression modes.
 
-## New crate: `con-editor`
+Search intentionally has bounded work:
 
-Location: `crates/con-editor/`  
-Dependencies: `ropey`, `sum-tree` (already in workspace), `tree-sitter` (add),
-`lsp-types` (already in workspace), `tokio`, `serde`. **Zero GPUI dependency.**
+- `MAX_SEARCH_FILES = 800`
+- `MAX_FILE_BYTES = 512 KiB`
+- `MAX_RESULTS = 200`
+- `MAX_MATCHES_PER_FILE = 20`
 
-### `Buffer`
+Results are grouped by file, show a per-file match count, and highlight the
+matched text. The result list uses a real vertical scrollbar; it only becomes
+visually relevant when the result content overflows.
 
-```rust
-pub struct Buffer {
-    rope: ropey::Rope,
-    path: Option<PathBuf>,
-    language: Option<Language>,
-    history: EditHistory,       // undo/redo stack
-    version: u64,               // incremented on every edit
-    dirty: bool,
-}
-```
+## Editor Pane
 
-Operations: `insert`, `delete`, `replace_range`, `undo`, `redo`.  
-All edits produce an `EditEvent` broadcast via a `tokio::sync::broadcast`
-channel so the GPUI `EditorView` can subscribe and call `cx.notify()`.
+`EditorView` is a lightweight multi-file editor pane:
 
-### `Selection`
+- `EditorTab` pairs a `PathBuf`, `EditorBuffer`, and render cache.
+- `EditorBuffer` owns text, cursor, selection, undo/redo, and revision state.
+- Rendering uses GPUI `uniform_list` so only visible rows are laid out.
+- Syntax highlighting is provided by `editor_syntax`.
+- Basic language-server diagnostics are provided by `editor_lsp` when a server
+  is available.
+- Font family and size follow the terminal/code font settings instead of using
+  a separate editor default.
 
-```rust
-pub struct Selection {
-    pub anchor: Point,   // (row, col) in UTF-16 code units — matches LSP
-    pub head: Point,
-}
+The editor supports long single lines with horizontal scrolling. Cursor movement
+and line-boundary actions scroll the cursor into view, including `Ctrl+A` and
+`Ctrl+E`. The current cursor line renders with a subtle background, and double
+click selects the word under the cursor.
 
-pub struct MultiSelection {
-    selections: SmallVec<[Selection; 1]>,
-    primary: usize,
-}
-```
+Closing follows the pane model: `Cmd+W` closes editor files one by one. When the
+last editor file in an editor pane closes, the pane is closed instead of
+rendering a "No file open" placeholder.
 
-### `SyntaxLayer`
+## Focus and Keybindings
 
-Wraps `tree-sitter`. Holds a `tree_sitter::Tree` and re-parses incrementally on
-edit. Exposes `highlight_spans(line: u32) -> Vec<HighlightSpan>` where
-`HighlightSpan` carries a `HighlightKind` enum (keyword, string, comment,
-function, type, …) mapped to theme colors in `EditorView`.
+Editor text-editing bindings are scoped to `EditorView` so terminal keys such as
+Enter and Backspace are not intercepted globally. App-level shortcuts remain
+global by default so `Cmd+T`, `Cmd+W`, tab navigation, command palette, and
+left-sidebar toggles still work when an editor pane is focused or when a tab
+contains only an editor pane.
 
-Language detection: file extension → grammar. Phase 1 ships Rust, TypeScript,
-Python, TOML, JSON, Markdown grammars (the languages most relevant to con's
-own development workflow).
+See `docs/impl/keybindings.md` for the binding-spec table and scope rules.
 
-### `LspClient`
+## Code Map
 
-Thin async wrapper around `lsp-types` + `tokio::process`. One `LspClient` per
-language server process. Lifecycle: `start`, `shutdown`. Methods:
-`did_open`, `did_change`, `did_save`, `hover`, `goto_definition`,
-`diagnostics_stream`.
+```text
+crates/con-app/src/activity_bar.rs
+  Fixed icon rail and Files/Search slot events.
 
-`LspClient` is optional — the editor works without it. Phase 1 ships without
-LSP; Phase 3 adds it.
+crates/con-app/src/file_tree_view.rs
+  File explorer rows and OpenFile events.
 
-### `FileTree`
+crates/con-app/src/sidebar_search_view.rs
+  Sidebar search query/options/results rendering and bounded filesystem scan.
 
-```rust
-pub struct FileTree {
-    root: PathBuf,
-    entries: Vec<FileEntry>,   // flat list, depth-encoded
-    expanded: HashSet<PathBuf>,
-    watcher: notify::RecommendedWatcher,
-}
+crates/con-app/src/editor_buffer.rs
+  Text, cursor, selection, undo/redo, and line movement primitives.
+
+crates/con-app/src/editor_view.rs
+  Multi-file editor pane, tabs, hit-testing, scrolling, rendering, LSP events.
+
+crates/con-app/src/editor_syntax.rs
+  File type detection and syntax highlight runs.
+
+crates/con-app/src/editor_lsp.rs
+  Best-effort language-server process integration and diagnostics parsing.
+
+crates/con-app/src/workspace/editor_actions.rs
+  Editor action dispatch and text-key fallback handling.
+
+crates/con-app/src/workspace/render.rs
+  Activity rail, left panel layout, resize overlay, editor pane composition.
 ```
 
-Global singleton owned by `ConWorkspace`. Root updates when
-`GhosttyCwdChanged` fires on the active tab (same event already used to update
-the input bar CWD display). File system changes from `notify` trigger a
-`FileTreeChanged` event that `ConWorkspace` forwards to the `FileTree` entity.
+## Validation
 
----
+Relevant checks:
 
-## New UI components (in `con-app/src/`)
-
-### `activity_bar.rs`
-
-```rust
-pub enum ActivitySlot {
-    Tabs,
-    Files,
-    // Search, Git — future
-}
-
-pub struct ActivityBar {
-    active_slot: ActivitySlot,
-    left_panel_open: bool,
-}
-```
-
-Events emitted: `ActivitySlotChanged { slot: ActivitySlot }`,
-`ToggleLeftPanel`.
-
-Renders as a 40 px wide column of icon buttons (Phosphor icons). Active slot
-gets accent-colored icon; inactive slots get `muted_foreground`. No text
-labels — icons only, consistent with the design language.
-
-Icons:
-- `Tabs` → `phosphor/terminal-window.svg`
-- `Files` → `phosphor/folder-open.svg`
-
-Clicking the active slot's icon toggles the left panel open/closed (same
-behavior as clicking the active item in VS Code's activity bar).
-
-### `file_tree_view.rs`
-
-GPUI `Render` for `FileTree`. Virtualised list (only renders visible rows).
-Row height: 24 px. Indent: 12 px per depth level. Icons: Phosphor
-`folder.svg` / `folder-open.svg` / `file.svg` (language-specific file icons
-are a future enhancement).
-
-Events emitted: `OpenFile { path: PathBuf }`.
-
-### `editor_view.rs`
-
-GPUI `Render` for `Buffer` + `MultiSelection` + `SyntaxLayer`.
-
-Rendering approach: per-line `StyledText` (same as the Linux terminal renderer
-already in the codebase). Each line is a `StyledText` built from
-`SyntaxLayer::highlight_spans`. Cursor is an absolute-positioned 2 px wide
-`div` overlay. Scrolling via GPUI's built-in scroll handle.
-
-Font: IoskeleyMono (same as terminal chrome — consistent with the design
-language rule that code contexts use mono font).
-
-Key bindings handled in `editor_view.rs` (not global actions — editor captures
-keys only when focused):
-- Movement: arrows, Home/End, Ctrl+Home/End, Page Up/Down
-- Edit: printable chars, Backspace, Delete, Enter, Tab (inserts spaces)
-- Selection: Shift+movement
-- Clipboard: Cmd+C, Cmd+X, Cmd+V, Cmd+A
-- Undo/Redo: Cmd+Z, Cmd+Shift+Z
-- Save: Cmd+S → `fs::write` + emit `FileSaved`
-
----
-
-## Workspace changes
-
-### `workspace/mod.rs` — new state fields
-
-```rust
-// Activity bar
-activity_slot: ActivitySlot,
-left_panel_open: bool,
-
-// Editor area
-editor_area_height: f32,          // 0.0 = collapsed
-editor_area_drag: Option<f32>,    // active drag start y
-open_buffers: HashMap<PathBuf, Entity<Buffer>>,
-active_buffer: Option<PathBuf>,
-
-// Global file tree
-file_tree: Entity<FileTree>,
-
-// New UI entities
-activity_bar: Entity<ActivityBar>,
-editor_view: Option<Entity<EditorView>>,
-file_tree_view: Entity<FileTreeView>,
-```
-
-### `workspace/render.rs` — layout changes
-
-The existing two-column layout:
-
-```
-[sidebar?] [terminal + agent]
-```
-
-becomes three-column:
-
-```
-[activity_bar(40px)] [left_panel(0..360px)?] [main_column] [agent_panel]
-```
-
-`main_column` is a vertical flex container:
-
-```
-[editor_area(editor_area_height px)]
-[resize_handle(6px)]
-[terminal_area(flex-1)]
-[input_bar]
-```
-
-When `editor_area_height == 0.0`, the resize handle is hidden and the
-terminal area takes full height (no visible change from today).
-
-The existing `terminal_content_left` calculation gains `ACTIVITY_BAR_WIDTH`:
-
-```rust
-let terminal_content_left = ACTIVITY_BAR_WIDTH
-    + if self.left_panel_open { left_panel_width } else { 0.0 };
-```
-
-All existing snap-guard, release-cover, and seam-cover logic for the sidebar
-continues to work — it now applies to the left panel (which is still backed by
-`SessionSidebar` when `activity_slot == Tabs`).
-
-### `workspace/session_state.rs` — persistence
-
-Add to `SessionState`:
-
-```rust
-pub editor_area_height: f32,
-pub left_panel_open: bool,
-pub activity_slot: String,   // "tabs" | "files"
-pub file_tree_root: Option<String>,
-```
-
-### New actions
-
-```rust
-actions!(
-    ToggleEditorArea,       // Cmd+Shift+E
-    ToggleLeftPanel,        // Cmd+B  (matches VS Code / Zed muscle memory)
-    OpenFileInEditor,       // triggered by FileTreeView click
-    SaveActiveBuffer,       // Cmd+S when editor focused
-    CloseActiveBuffer,
-);
-```
-
----
-
-## Agent integration
-
-The existing `edit_file` tool in `con-agent/src/tools.rs` writes directly to
-disk. In Phase 3, it gains an optional path: if the file is open in a
-`Buffer`, apply the edit to the buffer (triggering live re-render) instead of
-writing to disk directly. The buffer's `dirty` flag and `Cmd+S` save flow
-handle the actual write.
-
-This means the agent's file edits become visible in the editor in real time —
-consistent with the "agent transparency" principle already in DESIGN.md.
-
----
-
-## Implementation phases
-
-### Phase 1 — Layout + file tree + read-only preview
-
-Deliverables:
-- `ActivityBar` component, two slots (Tabs, Files)
-- `FileTree` + `FileTreeView` — directory listing, expand/collapse, cwd-tracking
-- `EditorView` read-only mode — open file, render text with IoskeleyMono, scroll
-- Workspace layout: editor area above terminal, drag-resizable, collapsible
-- `ToggleLeftPanel` (Cmd+B), `ToggleEditorArea` (Cmd+Shift+E) actions
-- Session persistence for `editor_area_height`, `left_panel_open`, `activity_slot`
-
-No `con-editor` crate yet — Phase 1 uses `std::fs::read_to_string` directly
-into a `String` held by `EditorView`.
-
-### Phase 2 — Editable buffer + syntax highlighting
-
-Deliverables:
-- `con-editor` crate: `Buffer`, `Selection`, `MultiSelection`, `EditHistory`
-- `SyntaxLayer` with tree-sitter (Rust, TS, Python, TOML, JSON, Markdown)
-- `EditorView` edit mode: full key binding set, multi-cursor, Cmd+S save
-- Dirty indicator (dot) in file tree row and editor tab header
-
-### Phase 3 — LSP + agent integration
-
-Deliverables:
-- `LspClient` in `con-editor`: diagnostics, hover tooltip, go-to-definition
-- Inline diagnostics rendered as underlines in `EditorView`
-- `edit_file` agent tool upgraded to write through open `Buffer` when available
-- Agent can open files in the editor via new `open_file` tool
-
----
-
-## What does NOT change
-
-- `SessionSidebar` — zero modifications. It becomes the content of the left
-  panel when `activity_slot == Tabs`.
-- `PaneTree` and all terminal pane logic — unchanged.
-- `AgentPanel` — unchanged.
-- `InputBar` — unchanged.
-- Horizontal tab strip — unchanged.
-- All existing keybindings — unchanged.
-- `con-core`, `con-agent`, `con-ghostty`, `con-terminal` crates — unchanged
-  until Phase 3 agent integration.
-
----
-
-## Open questions (deferred)
-
-- **Editor tabs**: when multiple files are open, show a tab strip inside the
-  editor area. Deferred to Phase 2.
-- **Split editor panes**: open two files side by side inside the editor area.
-  Deferred post-Phase 3.
-- **Language server management**: which LSP binary to use, how to install,
-  per-project config. Deferred to Phase 3.
-- **Windows / Linux**: activity bar and file tree are platform-agnostic GPUI
-  components and will work on all platforms. `LspClient` uses `tokio::process`
-  which works everywhere. No platform-specific blockers identified.
+- `cargo check -p con`
+- `cargo test -p con workspace -- --nocapture`
+- `cargo test -p con sidebar_search -- --nocapture`
+- `cargo test -p con editor_view -- --nocapture`

@@ -1,6 +1,8 @@
-//! Vertical tabs side panel.
+//! Legacy session sidebar implementation.
 //!
-//! Toggle in *Settings → Appearance → Tabs → Vertical Tabs*.
+//! The active product surface now uses a left sidebar whose first content
+//! view is the file tree. This module is kept for session/tab sidebar internals
+//! that have not been deleted yet.
 //!
 //! Two runtime states (no auto-expand-on-hover anymore — see design
 //! note at the bottom of this docblock):
@@ -65,6 +67,7 @@ pub const PANEL_MAX_WIDTH: f32 = 360.0;
 /// Width of the floating hover card shown when the cursor is over a
 /// rail icon. Slightly wider than the panel so two-line rows are
 /// comfortable at this magnification.
+#[allow(dead_code)]
 const HOVER_CARD_WIDTH: f32 = 240.0;
 /// Per-row height in pinned mode (two-line layout — name + subtitle).
 const ROW_HEIGHT: f32 = 44.0;
@@ -418,17 +421,19 @@ impl SessionSidebar {
     }
 
     pub fn set_panel_width(&mut self, width: f32, cx: &mut Context<Self>) {
-        let width = width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
+        let width = width.max(PANEL_MIN_WIDTH);
         if (self.panel_width - width).abs() > f32::EPSILON {
             self.panel_width = width;
             cx.notify();
         }
     }
 
+    #[allow(dead_code)]
     pub fn set_effective_panel_max_width(&mut self, width: f32) {
-        self.effective_panel_max_width = width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
+        self.effective_panel_max_width = width.max(PANEL_MIN_WIDTH);
     }
 
+    #[allow(dead_code)]
     pub fn update_drag_preview_from_mouse(
         &mut self,
         mouse: Point<Pixels>,
@@ -474,6 +479,7 @@ impl SessionSidebar {
         *self.drag_preview.borrow_mut() = None;
     }
 
+    #[allow(dead_code)]
     pub fn drag_preview_overlay(
         &self,
         window: &mut Window,
@@ -533,10 +539,7 @@ impl SessionSidebar {
     }
 
     pub fn clamped_panel_width(width: f32, effective_max_width: f32) -> f32 {
-        width.clamp(
-            PANEL_MIN_WIDTH,
-            effective_max_width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH),
-        )
+        width.clamp(PANEL_MIN_WIDTH, effective_max_width.max(PANEL_MIN_WIDTH))
     }
 
     fn effective_panel_width(&self) -> f32 {
@@ -863,7 +866,11 @@ impl SessionSidebar {
             let tab_bounds = self.tab_bounds.clone();
             // No accent-color background fill — keep pills monochrome.
             // Accent color is expressed only via the active dot below.
-            let pill_bg = if is_active { active_bg } else { gpui::transparent_black() };
+            let pill_bg = if is_active {
+                active_bg
+            } else {
+                gpui::transparent_black()
+            };
             let inactive_hover_bg = hover_bg;
             let mut pill = div()
                 .id(SharedString::from(format!("rail-tab-{i}")))
@@ -978,6 +985,7 @@ impl SessionSidebar {
     /// computing the rail layout from this side, which is brittle —
     /// the cursor IS the icon, and "follow the cursor" is the
     /// established Apple tooltip pattern (Finder, Mail, Safari).
+    #[allow(dead_code)]
     pub fn render_hover_card_overlay(
         &mut self,
         window: &mut Window,
@@ -2076,6 +2084,7 @@ fn blur_should_commit_for_lifecycle(
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct SidebarDragPreviewState {
     pub label: SharedString,
     pub icon: &'static str,
@@ -2094,6 +2103,7 @@ pub fn vertical_drag_preview_size(pinned: bool) -> Size<Pixels> {
     }
 }
 
+#[allow(dead_code)]
 pub fn vertical_drag_overlay_origin(
     mouse: Point<Pixels>,
     preview: &SidebarDragPreviewState,
@@ -2107,6 +2117,7 @@ pub fn vertical_drag_overlay_origin(
     )
 }
 
+#[allow(dead_code)]
 pub fn vertical_drag_overlay_probe_position(
     mouse: Point<Pixels>,
     preview: &SidebarDragPreviewState,

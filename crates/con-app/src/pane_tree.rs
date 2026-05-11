@@ -181,7 +181,9 @@ impl PaneContent {
 
     fn active_surface_id(&self) -> SurfaceId {
         match self {
-            PaneContent::Terminal { active_surface_id, .. } => *active_surface_id,
+            PaneContent::Terminal {
+                active_surface_id, ..
+            } => *active_surface_id,
             PaneContent::Editor { .. } => 0,
         }
     }
@@ -246,7 +248,13 @@ impl PaneTree {
         surface.owner = options.owner;
         surface.close_pane_when_last = options.close_pane_when_last;
         Self {
-            root: PaneNode::Leaf { id: 0, content: PaneContent::Terminal { surfaces: vec![surface], active_surface_id: 0 } },
+            root: PaneNode::Leaf {
+                id: 0,
+                content: PaneContent::Terminal {
+                    surfaces: vec![surface],
+                    active_surface_id: 0,
+                },
+            },
             focused_pane_id: 0,
             zoomed_pane_id: None,
             next_id: 1,
@@ -425,7 +433,10 @@ impl PaneTree {
         let new_split_id = self.next_split_id;
         self.next_split_id += 1;
 
-        let new_leaf = PaneNode::Leaf { id: new_id, content: PaneContent::Editor { view: editor_view } };
+        let new_leaf = PaneNode::Leaf {
+            id: new_id,
+            content: PaneContent::Editor { view: editor_view },
+        };
 
         let focused = self.focused_pane_id;
         if !Self::insert_editor_leaf(&mut self.root, focused, new_leaf, new_split_id) {
@@ -444,11 +455,14 @@ impl PaneTree {
 
     fn find_editor_pane_node(node: &PaneNode) -> Option<PaneId> {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Editor { .. }, .. } => Some(*id),
+            PaneNode::Leaf {
+                id,
+                content: PaneContent::Editor { .. },
+                ..
+            } => Some(*id),
             PaneNode::Leaf { .. } => None,
             PaneNode::Split { first, second, .. } => {
-                Self::find_editor_pane_node(first)
-                    .or_else(|| Self::find_editor_pane_node(second))
+                Self::find_editor_pane_node(first).or_else(|| Self::find_editor_pane_node(second))
             }
         }
     }
@@ -457,19 +471,50 @@ impl PaneTree {
         Self::editor_view_for_pane_node(&self.root, pane_id)
     }
 
-    pub fn editor_active_path_for_pane(&self, pane_id: PaneId, cx: &App) -> Option<std::path::PathBuf> {
-        self.editor_view_for_pane(pane_id)
-            .and_then(|view| view.read(cx).active_path().map(std::path::Path::to_path_buf))
+    pub fn editor_views(&self) -> Vec<Entity<EditorView>> {
+        let mut views = Vec::new();
+        Self::collect_editor_views(&self.root, &mut views);
+        views
+    }
+
+    pub fn editor_active_path_for_pane(
+        &self,
+        pane_id: PaneId,
+        cx: &App,
+    ) -> Option<std::path::PathBuf> {
+        self.editor_view_for_pane(pane_id).and_then(|view| {
+            view.read(cx)
+                .active_path()
+                .map(std::path::Path::to_path_buf)
+        })
     }
 
     fn editor_view_for_pane_node(node: &PaneNode, pane_id: PaneId) -> Option<Entity<EditorView>> {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Editor { view }, .. } if *id == pane_id => {
-                Some(view.clone())
-            }
+            PaneNode::Leaf {
+                id,
+                content: PaneContent::Editor { view },
+                ..
+            } if *id == pane_id => Some(view.clone()),
             PaneNode::Leaf { .. } => None,
-            PaneNode::Split { first, second, .. } => Self::editor_view_for_pane_node(first, pane_id)
-                .or_else(|| Self::editor_view_for_pane_node(second, pane_id)),
+            PaneNode::Split { first, second, .. } => {
+                Self::editor_view_for_pane_node(first, pane_id)
+                    .or_else(|| Self::editor_view_for_pane_node(second, pane_id))
+            }
+        }
+    }
+
+    fn collect_editor_views(node: &PaneNode, views: &mut Vec<Entity<EditorView>>) {
+        match node {
+            PaneNode::Leaf {
+                content: PaneContent::Editor { view },
+                ..
+            } => views.push(view.clone()),
+            PaneNode::Leaf { .. } => {}
+            PaneNode::Split { first, second, .. } => {
+                Self::collect_editor_views(first, views);
+                Self::collect_editor_views(second, views);
+            }
         }
     }
 
@@ -764,6 +809,11 @@ impl PaneTree {
     pub fn sync_focus(&mut self, window: &Window, cx: &App) {
         if let Some(id) = Self::find_focused_pane(&self.root, window, cx) {
             self.focused_pane_id = id;
+            return;
+        }
+
+        if let Some(id) = Self::focused_editor_pane_id(&self.root, window, cx) {
+            self.focused_pane_id = id;
         }
     }
 
@@ -797,8 +847,51 @@ impl PaneTree {
         Self::find_active_surface_id(&self.root, pane_id)
     }
 
-    pub fn focused_editor_tab_count(&self, cx: &App) -> Option<usize> {
-        let pane_id = self.focused_pane_id;
+    pub fn active_editor_pane_id(&self, window: &Window, cx: &App) -> Option<PaneId> {
+        let focused_entity = Self::focused_editor_entity_id(&self.root, window, cx)?;
+        Self::find_editor_pane_id_by_entity_id(&self.root, focused_entity)
+    }
+
+    fn focused_editor_pane_id(node: &PaneNode, window: &Window, cx: &App) -> Option<PaneId> {
+        let focused_entity = Self::focused_editor_entity_id(node, window, cx)?;
+        Self::find_editor_pane_id_by_entity_id(node, focused_entity)
+    }
+
+    fn focused_editor_entity_id(node: &PaneNode, window: &Window, cx: &App) -> Option<EntityId> {
+        match node {
+            PaneNode::Leaf {
+                content: PaneContent::Editor { view },
+                ..
+            } => view
+                .read(cx)
+                .focus_handle(cx)
+                .contains_focused(window, cx)
+                .then_some(view.entity_id()),
+            PaneNode::Leaf { .. } => None,
+            PaneNode::Split { first, second, .. } => {
+                Self::focused_editor_entity_id(first, window, cx)
+                    .or_else(|| Self::focused_editor_entity_id(second, window, cx))
+            }
+        }
+    }
+
+    fn find_editor_pane_id_by_entity_id(node: &PaneNode, entity_id: EntityId) -> Option<PaneId> {
+        match node {
+            PaneNode::Leaf {
+                id,
+                content: PaneContent::Editor { view },
+                ..
+            } if view.entity_id() == entity_id => Some(*id),
+            PaneNode::Leaf { .. } => None,
+            PaneNode::Split { first, second, .. } => {
+                Self::find_editor_pane_id_by_entity_id(first, entity_id)
+                    .or_else(|| Self::find_editor_pane_id_by_entity_id(second, entity_id))
+            }
+        }
+    }
+
+    pub fn focused_editor_tab_count(&self, window: &Window, cx: &App) -> Option<usize> {
+        let pane_id = self.active_editor_pane_id(window, cx)?;
         self.editor_view_for_pane(pane_id)
             .map(|view| view.read(cx).tab_count())
     }
@@ -945,13 +1038,14 @@ impl PaneTree {
         let close_pane_cb = std::sync::Arc::new(close_pane_cb);
         let toggle_zoom_cb = std::sync::Arc::new(toggle_zoom_cb);
         let has_splits = self.pane_count() > 1;
+        let focused_pane_id = self.focused_pane_id;
         let zoomed_pane_id = self.zoomed_pane_id;
 
         if let Some(zoomed_id) = zoomed_pane_id {
             if let Some(zoomed) = Self::render_zoomed_leaf(
                 &self.root,
                 zoomed_id,
-                self.focused_pane_id,
+                focused_pane_id,
                 focus_surface_cb.clone(),
                 focus_pane_cb.clone(),
                 rename_surface_cb.clone(),
@@ -973,7 +1067,7 @@ impl PaneTree {
 
         Self::render_node(
             &self.root,
-            self.focused_pane_id,
+            focused_pane_id,
             has_splits,
             std::sync::Arc::new(begin_drag_cb),
             focus_surface_cb,
@@ -998,7 +1092,14 @@ impl PaneTree {
 
     fn find_terminal(node: &PaneNode, target_id: PaneId) -> Option<&TerminalPane> {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Terminal { surfaces, active_surface_id }, ..
+            PaneNode::Leaf {
+                id,
+                content:
+                    PaneContent::Terminal {
+                        surfaces,
+                        active_surface_id,
+                    },
+                ..
             } if *id == target_id => {
                 Self::active_surface(surfaces, *active_surface_id).map(|surface| &surface.terminal)
             }
@@ -1089,7 +1190,11 @@ impl PaneTree {
     fn collect_terminals<'a>(node: &'a PaneNode, result: &mut Vec<&'a TerminalPane>) {
         match node {
             PaneNode::Leaf {
-                content: PaneContent::Terminal { surfaces, active_surface_id },
+                content:
+                    PaneContent::Terminal {
+                        surfaces,
+                        active_surface_id,
+                    },
                 ..
             } => {
                 if let Some(surface) = Self::active_surface(surfaces, *active_surface_id) {
@@ -1106,7 +1211,10 @@ impl PaneTree {
 
     fn collect_all_surface_terminals<'a>(node: &'a PaneNode, result: &mut Vec<&'a TerminalPane>) {
         match node {
-            PaneNode::Leaf { content: PaneContent::Terminal { surfaces, .. }, .. } => {
+            PaneNode::Leaf {
+                content: PaneContent::Terminal { surfaces, .. },
+                ..
+            } => {
                 result.extend(surfaces.iter().map(|surface| &surface.terminal));
             }
             PaneNode::Leaf { .. } => {}
@@ -1137,9 +1245,10 @@ impl PaneTree {
 
     fn max_surface_id(node: &PaneNode) -> SurfaceId {
         match node {
-            PaneNode::Leaf { content: PaneContent::Terminal { surfaces, .. }, .. } => {
-                surfaces.iter().map(|surface| surface.id).max().unwrap_or(0)
-            }
+            PaneNode::Leaf {
+                content: PaneContent::Terminal { surfaces, .. },
+                ..
+            } => surfaces.iter().map(|surface| surface.id).max().unwrap_or(0),
             PaneNode::Leaf { .. } => 0,
             PaneNode::Split { first, second, .. } => {
                 Self::max_surface_id(first).max(Self::max_surface_id(second))
@@ -1259,9 +1368,21 @@ impl PaneTree {
                 surface.close_pane_when_last = options.close_pane_when_last;
                 let old_node = std::mem::replace(
                     node,
-                    PaneNode::Leaf { id: new_id, content: PaneContent::Terminal { surfaces: vec![surface.clone()], active_surface_id: new_surface_id } },
+                    PaneNode::Leaf {
+                        id: new_id,
+                        content: PaneContent::Terminal {
+                            surfaces: vec![surface.clone()],
+                            active_surface_id: new_surface_id,
+                        },
+                    },
                 );
-                let new_leaf = PaneNode::Leaf { id: new_id, content: PaneContent::Terminal { surfaces: vec![surface], active_surface_id: new_surface_id } };
+                let new_leaf = PaneNode::Leaf {
+                    id: new_id,
+                    content: PaneContent::Terminal {
+                        surfaces: vec![surface],
+                        active_surface_id: new_surface_id,
+                    },
+                };
                 let (first, second) = match placement {
                     SplitPlacement::Before => (Box::new(new_leaf), Box::new(old_node)),
                     SplitPlacement::After => (Box::new(old_node), Box::new(new_leaf)),
@@ -1304,7 +1425,14 @@ impl PaneTree {
 
     fn push_surface(node: &mut PaneNode, pane_id: PaneId, surface: PaneSurface) -> bool {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Terminal { surfaces, active_surface_id }, ..
+            PaneNode::Leaf {
+                id,
+                content:
+                    PaneContent::Terminal {
+                        surfaces,
+                        active_surface_id,
+                    },
+                ..
             } if *id == pane_id => {
                 let surface_id = surface.id;
                 surfaces.push(surface);
@@ -1321,7 +1449,15 @@ impl PaneTree {
 
     fn activate_surface(node: &mut PaneNode, surface_id: SurfaceId) -> Option<(PaneId, bool)> {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Terminal { surfaces, active_surface_id }, .. } => {
+            PaneNode::Leaf {
+                id,
+                content:
+                    PaneContent::Terminal {
+                        surfaces,
+                        active_surface_id,
+                    },
+                ..
+            } => {
                 if surfaces.iter().any(|surface| surface.id == surface_id) {
                     let changed = *active_surface_id != surface_id;
                     *active_surface_id = surface_id;
@@ -1342,7 +1478,10 @@ impl PaneTree {
         title: Option<String>,
     ) -> bool {
         match node {
-            PaneNode::Leaf { content: PaneContent::Terminal { surfaces, .. }, .. } => {
+            PaneNode::Leaf {
+                content: PaneContent::Terminal { surfaces, .. },
+                ..
+            } => {
                 if let Some(surface) = surfaces.iter_mut().find(|surface| surface.id == surface_id)
                 {
                     surface.title = title;
@@ -1364,7 +1503,15 @@ impl PaneTree {
         surface_id: SurfaceId,
     ) -> Option<(PaneId, TerminalPane)> {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Terminal { surfaces, active_surface_id }, .. } => {
+            PaneNode::Leaf {
+                id,
+                content:
+                    PaneContent::Terminal {
+                        surfaces,
+                        active_surface_id,
+                    },
+                ..
+            } => {
                 if surfaces.len() <= 1 {
                     return None;
                 }
@@ -1392,7 +1539,11 @@ impl PaneTree {
         surface_id: SurfaceId,
     ) -> Option<SurfaceCloseCandidate> {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Terminal { surfaces, .. }, .. } => {
+            PaneNode::Leaf {
+                id,
+                content: PaneContent::Terminal { surfaces, .. },
+                ..
+            } => {
                 let surface = surfaces.iter().find(|surface| surface.id == surface_id)?;
                 Some(SurfaceCloseCandidate {
                     pane_id: *id,
@@ -1439,7 +1590,13 @@ impl PaneTree {
     }
 
     fn empty_placeholder_node() -> PaneNode {
-        PaneNode::Leaf { id: PaneId::MAX, content: PaneContent::Terminal { surfaces: Vec::new(), active_surface_id: 0 } }
+        PaneNode::Leaf {
+            id: PaneId::MAX,
+            content: PaneContent::Terminal {
+                surfaces: Vec::new(),
+                active_surface_id: 0,
+            },
+        }
     }
 
     fn contains_leaf(node: &PaneNode, pane_id: PaneId) -> bool {
@@ -2034,6 +2191,7 @@ impl PaneTree {
         tab_accent_inactive_alpha: f32,
         close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
+        focus_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         cx: &App,
     ) -> AnyElement {
         let theme = cx.theme();
@@ -2046,16 +2204,15 @@ impl PaneTree {
         let btn_hover_bg = theme.foreground.opacity(0.08);
 
         // Active-pane indicator dot — same color as the tab accent (or green fallback)
-        let dot = Self::active_pane_dot_color(is_focused, tab_accent_color, theme, cx).map(
-            |dot_color| {
+        let dot =
+            Self::active_pane_dot_color(is_focused, tab_accent_color, theme, cx).map(|dot_color| {
                 div()
                     .flex_shrink_0()
                     .size(px(6.0))
                     .rounded_full()
                     .mr(px(5.0))
                     .bg(dot_color)
-            },
-        );
+            });
 
         // ⛶/⛶ fullscreen toggle button — always visible
         let zoom_icon = if is_zoomed {
@@ -2134,6 +2291,7 @@ impl PaneTree {
             .text_color(title_color)
             .text_center()
             .child(SharedString::from(title));
+        let focus_cb_bar = focus_pane_cb.clone();
         let dragged = DraggedTab {
             session_id,
             label: drag_label,
@@ -2165,6 +2323,9 @@ impl PaneTree {
             .px(px(6.0))
             .bg(bar_bg)
             .cursor_grab()
+            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                focus_cb_bar(pane_id, window, cx);
+            })
             .on_drag(
                 dragged,
                 move |dragged: &DraggedTab, _offset, _window, cx| {
@@ -2229,18 +2390,30 @@ impl PaneTree {
                 .flex()
                 .flex_col()
                 .size_full()
-                .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                    log::warn!(
+                        "[editor-focus] editor-pane mouse_down: pane={} pos=({:.1},{:.1})",
+                        pane_id,
+                        f32::from(event.position.x),
+                        f32::from(event.position.y)
+                    );
                     focus_cb_click(pane_id, window, cx);
                 })
                 .context_menu(move |menu, _window, _cx| {
                     let close_cb = close_pane_cb_menu.clone();
                     let zoom_cb = toggle_zoom_cb_menu.clone();
-                    menu.item(PopupMenuItem::new(if is_zoomed { "Exit Fullscreen" } else { "Fullscreen" }).on_click(
-                        move |_, window, cx| zoom_cb(pane_id, window, cx),
-                    ))
-                    .item(PopupMenuItem::new("Close Pane").on_click(
-                        move |_, window, cx| close_cb(pane_id, window, cx),
-                    ))
+                    menu.item(
+                        PopupMenuItem::new(if is_zoomed {
+                            "Exit Fullscreen"
+                        } else {
+                            "Fullscreen"
+                        })
+                        .on_click(move |_, window, cx| zoom_cb(pane_id, window, cx)),
+                    )
+                    .item(
+                        PopupMenuItem::new("Close Pane")
+                            .on_click(move |_, window, cx| close_cb(pane_id, window, cx)),
+                    )
                 });
 
             if tree_has_splits && !hide_pane_title_bar {
@@ -2255,6 +2428,7 @@ impl PaneTree {
                     tab_accent_inactive_alpha,
                     close_pane_cb,
                     toggle_zoom_cb,
+                    focus_pane_cb.clone(),
                     cx,
                 );
                 col = col.child(title_bar);
@@ -2321,6 +2495,7 @@ impl PaneTree {
                 tab_accent_inactive_alpha,
                 close_pane_cb,
                 toggle_zoom_cb,
+                focus_pane_cb.clone(),
                 cx,
             );
             col = col.child(title_bar);
@@ -2559,7 +2734,15 @@ impl PaneTree {
 
     fn find_focused_pane(node: &PaneNode, window: &Window, cx: &App) -> Option<PaneId> {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Terminal { surfaces, active_surface_id }, .. } => {
+            PaneNode::Leaf {
+                id,
+                content:
+                    PaneContent::Terminal {
+                        surfaces,
+                        active_surface_id,
+                    },
+                ..
+            } => {
                 if let Some(surface) = Self::active_surface(surfaces, *active_surface_id)
                     && surface.terminal.is_focused(window, cx)
                 {
@@ -2576,7 +2759,11 @@ impl PaneTree {
 
     fn check_terminal_pane_id(node: &PaneNode, entity_id: EntityId, pane_id: PaneId) -> bool {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Terminal { surfaces, .. }, .. } => {
+            PaneNode::Leaf {
+                id,
+                content: PaneContent::Terminal { surfaces, .. },
+                ..
+            } => {
                 *id == pane_id
                     && surfaces
                         .iter()
@@ -2592,7 +2779,11 @@ impl PaneTree {
 
     fn find_pane_id_by_entity_id(node: &PaneNode, entity_id: EntityId) -> Option<PaneId> {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Terminal { surfaces, .. }, .. } => {
+            PaneNode::Leaf {
+                id,
+                content: PaneContent::Terminal { surfaces, .. },
+                ..
+            } => {
                 if surfaces
                     .iter()
                     .any(|surface| surface.terminal.entity_id() == entity_id)
@@ -2612,7 +2803,15 @@ impl PaneTree {
 
     fn collect_pane_terminals(node: &PaneNode, result: &mut Vec<(PaneId, TerminalPane)>) {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Terminal { surfaces, active_surface_id }, .. } => {
+            PaneNode::Leaf {
+                id,
+                content:
+                    PaneContent::Terminal {
+                        surfaces,
+                        active_surface_id,
+                    },
+                ..
+            } => {
                 if let Some(surface) = Self::active_surface(surfaces, *active_surface_id) {
                     result.push((*id, surface.terminal.clone()));
                 }
@@ -2627,7 +2826,15 @@ impl PaneTree {
 
     fn collect_surface_terminals(node: &PaneNode, result: &mut Vec<(PaneId, bool, TerminalPane)>) {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Terminal { surfaces, active_surface_id }, .. } => {
+            PaneNode::Leaf {
+                id,
+                content:
+                    PaneContent::Terminal {
+                        surfaces,
+                        active_surface_id,
+                    },
+                ..
+            } => {
                 result.extend(surfaces.iter().map(|surface| {
                     (
                         *id,
@@ -2652,7 +2859,15 @@ impl PaneTree {
         result: &mut Vec<PaneSurfaceInfo>,
     ) {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Terminal { surfaces, active_surface_id }, .. } => {
+            PaneNode::Leaf {
+                id,
+                content:
+                    PaneContent::Terminal {
+                        surfaces,
+                        active_surface_id,
+                    },
+                ..
+            } => {
                 *pane_index += 1;
                 if target_pane_id.is_some_and(|target| target != *id) {
                     return;
@@ -2696,7 +2911,10 @@ impl PaneTree {
         match node {
             PaneNode::Leaf {
                 id,
-                content: PaneContent::Terminal { active_surface_id, .. },
+                content:
+                    PaneContent::Terminal {
+                        active_surface_id, ..
+                    },
             } if *id == pane_id => Some(*active_surface_id),
             PaneNode::Leaf { .. } => None,
             PaneNode::Split { first, second, .. } => Self::find_active_surface_id(first, pane_id)
@@ -2716,7 +2934,15 @@ impl PaneTree {
 
     fn node_to_state(node: &PaneNode, cx: &App, capture_screen_text: bool) -> PaneLayoutState {
         match node {
-            PaneNode::Leaf { id, content: PaneContent::Terminal { surfaces, active_surface_id }, .. } => {
+            PaneNode::Leaf {
+                id,
+                content:
+                    PaneContent::Terminal {
+                        surfaces,
+                        active_surface_id,
+                    },
+                ..
+            } => {
                 let surface_states = surfaces
                     .iter()
                     .map(|surface| {

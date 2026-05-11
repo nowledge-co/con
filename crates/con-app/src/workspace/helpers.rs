@@ -31,6 +31,43 @@ pub(super) enum WorkspaceCloseIntent {
     CloseWindow,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EditorFileCloseOutcome {
+    KeepEditorPane,
+    CloseEditorPane,
+    CloseWorkspaceTabOrWindow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EditorLineBoundary {
+    Start,
+    End,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ActivePaneFocusTarget {
+    Terminal,
+    Editor,
+    Workspace,
+}
+
+pub(super) fn active_pane_focus_target(
+    has_focused_terminal: bool,
+    has_focused_editor: bool,
+) -> ActivePaneFocusTarget {
+    if has_focused_terminal {
+        ActivePaneFocusTarget::Terminal
+    } else if has_focused_editor {
+        ActivePaneFocusTarget::Editor
+    } else {
+        ActivePaneFocusTarget::Workspace
+    }
+}
+
+pub(super) fn resize_drag_should_continue(pressed_button: Option<MouseButton>) -> bool {
+    pressed_button == Some(MouseButton::Left)
+}
+
 pub(super) fn workspace_close_intent(
     pane_count: usize,
     editor_file_tabs: Option<usize>,
@@ -46,6 +83,58 @@ pub(super) fn workspace_close_intent(
         return WorkspaceCloseIntent::CloseTab;
     }
     WorkspaceCloseIntent::CloseWindow
+}
+
+pub(super) fn workspace_close_intent_for_close_tab(
+    pane_count: usize,
+    keyboard_focused_editor_file_tabs: Option<usize>,
+    focused_pane_editor_file_tabs: Option<usize>,
+    tab_count: usize,
+) -> WorkspaceCloseIntent {
+    workspace_close_intent(
+        pane_count,
+        keyboard_focused_editor_file_tabs.or(focused_pane_editor_file_tabs),
+        tab_count,
+    )
+}
+
+pub(super) fn editor_file_close_outcome(
+    pane_count: usize,
+    editor_pane_empty: bool,
+) -> EditorFileCloseOutcome {
+    if !editor_pane_empty {
+        return EditorFileCloseOutcome::KeepEditorPane;
+    }
+    if pane_count > 1 {
+        return EditorFileCloseOutcome::CloseEditorPane;
+    }
+    EditorFileCloseOutcome::CloseWorkspaceTabOrWindow
+}
+
+pub(super) fn editor_line_boundary_for_key(
+    key: &str,
+    control: bool,
+    platform: bool,
+    alt: bool,
+    shift: bool,
+) -> Option<EditorLineBoundary> {
+    if !control || platform || alt || shift {
+        return None;
+    }
+
+    match key {
+        "a" => Some(EditorLineBoundary::Start),
+        "e" => Some(EditorLineBoundary::End),
+        _ => None,
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn should_show_activity_bar(
+    _vertical_tabs_active: bool,
+    _activity_slot: ActivitySlot,
+) -> bool {
+    true
 }
 
 pub(super) fn point_in_bounds(

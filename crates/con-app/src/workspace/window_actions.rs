@@ -346,20 +346,44 @@ impl ConWorkspace {
         // Cmd+W maps to CloseTab, but for a focused EditorPane it should close
         // the active editor file first. Only empty editors fall through to pane/tab close.
         let active_tree = &self.tabs[self.active_tab].pane_tree;
-        let close_intent = workspace_close_intent(
+        let keyboard_focused_editor_tabs = active_tree.focused_editor_tab_count(window, cx);
+        let focused_pane_id = active_tree.focused_pane_id();
+        let focused_pane_editor_tabs = active_tree
+            .editor_view_for_pane(focused_pane_id)
+            .map(|view| view.read(cx).tab_count());
+        let close_intent = workspace_close_intent_for_close_tab(
             active_tree.pane_count(),
-            active_tree.focused_editor_tab_count(cx),
+            keyboard_focused_editor_tabs,
+            focused_pane_editor_tabs,
             self.tabs.len(),
         );
+        log::warn!(
+            "[editor-close] CloseTab: active_tab={} focused_pane={} pane_count={} keyboard_focused_editor_tabs={:?} focused_pane_editor_tabs={:?} intent={:?}",
+            self.active_tab,
+            focused_pane_id,
+            active_tree.pane_count(),
+            keyboard_focused_editor_tabs,
+            focused_pane_editor_tabs,
+            close_intent
+        );
         if close_intent == WorkspaceCloseIntent::CloseEditorFile {
-            let pane_id = active_tree.focused_pane_id();
-            let _ = self.close_pane_in_tab(self.active_tab, pane_id, window, cx);
+            let pane_id = active_tree
+                .active_editor_pane_id(window, cx)
+                .unwrap_or(focused_pane_id);
+            if !self.close_pane_in_tab(self.active_tab, pane_id, window, cx) {
+                self.close_tab_by_index(self.active_tab, window, cx);
+            }
             return;
         }
 
         // If the active tab has multiple panes, close the focused pane first.
         // Only close the entire tab when it's down to a single pane.
         if self.tabs[self.active_tab].pane_tree.pane_count() > 1 {
+            log::warn!(
+                "[editor-close] CloseTab fallback closing pane: active_tab={} focused_pane={}",
+                self.active_tab,
+                self.tabs[self.active_tab].pane_tree.focused_pane_id()
+            );
             let tab = &mut self.tabs[self.active_tab];
             let pane_id = tab.pane_tree.focused_pane_id();
             let closing_terminals = tab

@@ -668,8 +668,8 @@ impl ConWorkspace {
             "toggle-input-bar" => {
                 self.toggle_input_bar(&crate::ToggleInputBar, window, cx);
             }
-            "toggle-vertical-tabs" => {
-                self.toggle_vertical_tabs(&ToggleVerticalTabs, window, cx);
+            "toggle-left-sidebar" => {
+                self.toggle_left_panel(&ToggleLeftPanel, window, cx);
             }
             "collapse-sidebar" => {
                 self.collapse_sidebar(&CollapseSidebar, window, cx);
@@ -839,10 +839,11 @@ impl ConWorkspace {
 
     pub(super) fn apply_tabs_orientation(
         &mut self,
-        orientation: TabsOrientation,
+        _orientation: TabsOrientation,
         persist_config: bool,
         cx: &mut Context<Self>,
     ) {
+        let orientation = TabsOrientation::Horizontal;
         if self.tabs_orientation == orientation {
             return;
         }
@@ -993,6 +994,16 @@ impl ConWorkspace {
         self.ui_font_family = next_ui_font_family;
         self.ui_font_size = next_ui_font_size;
         self.font_size = next_font_size;
+        if font_changed {
+            let editor_views = self
+                .tabs
+                .iter()
+                .flat_map(|tab| tab.pane_tree.editor_views())
+                .collect::<Vec<_>>();
+            for editor_view in editor_views {
+                editor_view.update(cx, |editor, cx| editor.set_font_size(next_font_size, cx));
+            }
+        }
         self.terminal_cursor_style = next_terminal_cursor_style;
         self.terminal_opacity = next_terminal_opacity;
         self.terminal_blur = next_terminal_blur;
@@ -1008,7 +1019,7 @@ impl ConWorkspace {
         self.background_image_fit = next_background_image_fit;
         self.background_image_repeat = next_background_image_repeat;
 
-        if self.tabs_orientation != appearance_config.tabs_orientation {
+        if self.tabs_orientation != TabsOrientation::Horizontal {
             #[cfg(target_os = "macos")]
             if self.terminal_opacity >= 0.999 {
                 self.arm_chrome_transition_underlay(Duration::from_millis(260));
@@ -1021,10 +1032,7 @@ impl ConWorkspace {
             } else {
                 0.0
             };
-            self.tabs_orientation = appearance_config.tabs_orientation;
-            // Tab strip motion drives the top-bar height. In vertical
-            // mode the strip is always hidden, so collapse the motion now
-            // and avoid an unrelated transition.
+            self.tabs_orientation = TabsOrientation::Horizontal;
             if self.sync_tab_strip_motion() {
                 #[cfg(target_os = "macos")]
                 self.arm_top_chrome_snap_guard(cx);

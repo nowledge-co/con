@@ -1,4 +1,4 @@
-//! Activity bar — the narrow icon rail on the far left of the workspace.
+//! Activity bar — the narrow feature rail inside the left sidebar.
 //!
 //! Clicking a slot icon switches the left panel content. Clicking the
 //! already-active slot toggles the left panel open/closed (same behaviour
@@ -23,10 +23,13 @@ pub const ACTIVITY_BAR_WIDTH: f32 = 40.0;
 /// The content slot currently shown in the left panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivitySlot {
-    /// Terminal tab list — backed by `SessionSidebar`.
+    /// Legacy terminal tab list slot. Kept only for old session data.
+    #[allow(dead_code)]
     Tabs,
     /// File explorer — backed by `FileTreeView`.
     Files,
+    /// Workspace text search — backed by `SidebarSearchView`.
+    Search,
 }
 
 impl ActivitySlot {
@@ -34,13 +37,16 @@ impl ActivitySlot {
         match self {
             ActivitySlot::Tabs => "tabs",
             ActivitySlot::Files => "files",
+            ActivitySlot::Search => "search",
         }
     }
 
+    #[allow(dead_code)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "files" => ActivitySlot::Files,
-            _ => ActivitySlot::Tabs,
+            "search" => ActivitySlot::Search,
+            _ => ActivitySlot::Files,
         }
     }
 }
@@ -64,7 +70,7 @@ pub struct ActivityBar {
 impl ActivityBar {
     pub fn new() -> Self {
         Self {
-            active_slot: ActivitySlot::Tabs,
+            active_slot: ActivitySlot::Files,
             left_panel_open: true,
         }
     }
@@ -86,7 +92,6 @@ impl Render for ActivityBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let active_slot = self.active_slot;
-        let left_panel_open = self.left_panel_open;
 
         let bg = theme.background;
 
@@ -101,21 +106,21 @@ impl Render for ActivityBar {
             .gap(px(4.0))
             .bg(bg)
             .child(activity_slot_button(
-                "activity-tabs",
-                "phosphor/terminal.svg",
-                active_slot == ActivitySlot::Tabs && left_panel_open,
-                theme,
-                cx.listener(|this, _: &MouseDownEvent, _window, cx| {
-                    this.set_slot(ActivitySlot::Tabs, cx);
-                }),
-            ))
-            .child(activity_slot_button(
                 "activity-files",
                 "phosphor/folder-open.svg",
-                active_slot == ActivitySlot::Files && left_panel_open,
+                active_slot == ActivitySlot::Files,
                 theme,
                 cx.listener(|this, _: &MouseDownEvent, _window, cx| {
                     this.set_slot(ActivitySlot::Files, cx);
+                }),
+            ))
+            .child(activity_slot_button(
+                "activity-search",
+                "phosphor/magnifying-glass.svg",
+                active_slot == ActivitySlot::Search,
+                theme,
+                cx.listener(|this, _: &MouseDownEvent, _window, cx| {
+                    this.set_slot(ActivitySlot::Search, cx);
                 }),
             ))
     }
