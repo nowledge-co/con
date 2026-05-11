@@ -282,6 +282,23 @@ impl ConWorkspace {
             || self.command_palette.read(cx).is_visible()
     }
 
+    pub(super) fn new_window(
+        &mut self,
+        _: &crate::NewWindow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = self
+            .has_active_tab()
+            .then(|| self.active_terminal().current_dir(cx))
+            .flatten();
+        let config = con_core::Config::load().unwrap_or_default();
+        let session = crate::fresh_window_session_with_history_for_cwd(
+            cwd.as_deref().map(std::path::PathBuf::from),
+        );
+        crate::open_con_window(config, session, false, cx);
+    }
+
     pub(super) fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
         let cwd = self
             .has_active_tab()

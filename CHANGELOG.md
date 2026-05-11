@@ -29,6 +29,14 @@ con is still pre-release, so entries may group related beta work while the produ
   _(PR [#184](https://github.com/nowledge-co/con-terminal/pull/184) by
   [@wey-gu](https://github.com/wey-gu))_
 
+**Windows, macOS, and Linux**
+
+- New windows opened from an existing Con window now inherit the focused
+  terminal's current directory instead of falling back to the shell default
+  home directory. _(PR
+  [#185](https://github.com/nowledge-co/con-terminal/pull/185) by
+  [@iknowu10](https://github.com/iknowu10))_
+
 **Windows**
 
 - Improved Windows CJK rendering by anchoring fallback CJK glyphs to the
