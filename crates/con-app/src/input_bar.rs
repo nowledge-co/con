@@ -5,7 +5,7 @@ use gpui_component::{
     tooltip::Tooltip,
 };
 
-use crate::ui_scale::{mono_font_scale, mono_px};
+use crate::ui_scale::{mono_density_scale, mono_px, mono_space_px};
 
 actions!(
     input_bar,
@@ -1176,10 +1176,10 @@ impl Render for InputBar {
         let has_text = !input_state.read(cx).value().trim().is_empty();
         let input_value = input_state.read(cx).value().to_string();
         let input_cursor = input_state.read(cx).cursor();
-        let mono_scale = mono_font_scale(theme);
-        let control_size = mono_px(theme, 24.0);
-        let mode_icon_size = mono_px(theme, 14.0);
-        let compact_icon_size = mono_px(theme, 11.0);
+        let mono_scale = mono_density_scale(theme);
+        let control_size = mono_space_px(theme, 24.0);
+        let mode_icon_size = mono_space_px(theme, 14.0);
+        let compact_icon_size = mono_space_px(theme, 11.0);
 
         let mode_tint = self.mode.tint(cx);
 
@@ -1324,7 +1324,7 @@ impl Render for InputBar {
             .child(
                 svg()
                     .path("phosphor/arrow-up.svg")
-                    .size(mono_px(theme, 12.0))
+                    .size(mono_space_px(theme, 12.0))
                     .text_color(if has_text {
                         theme.primary_foreground
                     } else {

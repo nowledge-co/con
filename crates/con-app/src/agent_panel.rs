@@ -35,7 +35,9 @@ use crate::chat_markdown::{
 use crate::input_bar::SkillEntry;
 use crate::motion::{MotionValue, vertical_reveal_offset};
 use crate::settings_panel::provider_label;
-use crate::ui_scale::{mono_font_scale, mono_px, ui_font_scale, ui_px};
+use crate::ui_scale::{
+    mono_density_scale, mono_px, mono_space_px, ui_density_scale, ui_px, ui_space_px,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AgentStatus {
@@ -2752,7 +2754,7 @@ fn render_inline_state(
     color: Hsla,
     theme: &gpui_component::Theme,
 ) -> AnyElement {
-    let scale = ui_font_scale(theme);
+    let scale = ui_density_scale(theme);
     div()
         .flex()
         .items_center()
@@ -2785,9 +2787,9 @@ fn render_meta_chip(
     mono: bool,
 ) -> AnyElement {
     let scale = if mono {
-        mono_font_scale(theme)
+        mono_density_scale(theme)
     } else {
-        ui_font_scale(theme)
+        ui_density_scale(theme)
     };
     let mut label_el = div()
         .text_size(if mono {
@@ -2861,7 +2863,7 @@ fn render_model_chips(
     theme: &gpui_component::Theme,
 ) -> AnyElement {
     let (provider, label) = split_model_identity(model);
-    let scale = ui_font_scale(theme);
+    let scale = ui_density_scale(theme);
     let mut row = div().flex().items_center().gap(px(6.0 * scale));
 
     if let Some(provider) = provider {
@@ -2918,8 +2920,8 @@ fn render_result_toggle_chrome(
     div()
         .flex()
         .items_center()
-        .gap(px(5.0 * mono_font_scale(theme)))
-        .py(px(2.0 * mono_font_scale(theme)))
+        .gap(mono_space_px(theme, 5.0))
+        .py(mono_space_px(theme, 2.0))
         .child(
             svg()
                 .path(if expanded {
@@ -2927,7 +2929,7 @@ fn render_result_toggle_chrome(
                 } else {
                     "phosphor/caret-down.svg"
                 })
-                .size(mono_px(theme, 9.5))
+                .size(mono_space_px(theme, 9.5))
                 .text_color(theme.muted_foreground.opacity(0.30)),
         )
         .child(
@@ -2988,7 +2990,7 @@ fn render_user_message_text(
     let mut block = div()
         .flex()
         .flex_col()
-        .gap(px(4.0 * ui_font_scale(theme)))
+        .gap(ui_space_px(theme, 4.0))
         .text_size(ui_px(theme, 13.5))
         .line_height(ui_px(theme, 21.0))
         .text_color(theme.foreground);
@@ -3206,10 +3208,10 @@ fn render_assistant_message(
                             .id(SharedString::from(format!("assistant-more-{msg_idx}")))
                             .flex()
                             .items_center()
-                            .gap(px(6.0 * mono_font_scale(theme)))
-                            .px(px(8.0 * mono_font_scale(theme)))
-                            .py(px(4.0 * mono_font_scale(theme)))
-                            .rounded(px(7.0 * mono_font_scale(theme)))
+                            .gap(mono_space_px(theme, 6.0))
+                            .px(mono_space_px(theme, 8.0))
+                            .py(mono_space_px(theme, 4.0))
+                            .rounded(mono_space_px(theme, 7.0))
                             .cursor_pointer()
                             .bg(theme.muted.opacity(0.05))
                             .hover(|s| s.bg(theme.muted.opacity(0.09)))
@@ -3230,7 +3232,7 @@ fn render_assistant_message(
                             .child(
                                 svg()
                                     .path("phosphor/caret-down.svg")
-                                    .size(mono_px(theme, 10.0))
+                                    .size(mono_space_px(theme, 10.0))
                                     .text_color(theme.muted_foreground.opacity(0.55)),
                             )
                             .child(
@@ -3264,8 +3266,8 @@ fn render_assistant_message(
     }
 
     if !msg.steps.is_empty() {
-        let ui_scale = ui_font_scale(theme);
-        let mono_scale = mono_font_scale(theme);
+        let ui_scale = ui_density_scale(theme);
+        let mono_scale = mono_density_scale(theme);
         let step_count = msg.steps.len();
         let collapsed = msg.steps_collapsed;
         let chevron = if collapsed {
@@ -3329,7 +3331,7 @@ fn render_assistant_message(
                 .child(
                     svg()
                         .path(chevron)
-                        .size(ui_px(theme, 11.0))
+                        .size(ui_space_px(theme, 11.0))
                         .text_color(theme.muted_foreground.opacity(0.34)),
                 )
                 .child(
@@ -3412,7 +3414,7 @@ fn render_assistant_message(
                     .child(
                         svg()
                             .path(step.icon)
-                            .size(ui_px(theme, 12.0))
+                            .size(ui_space_px(theme, 12.0))
                             .flex_shrink_0()
                             .text_color(icon_color),
                     )
@@ -3460,7 +3462,7 @@ fn render_assistant_message(
                                     } else {
                                         "phosphor/caret-down.svg"
                                     })
-                                    .size(mono_px(theme, 10.0))
+                                    .size(mono_space_px(theme, 10.0))
                                     .flex_shrink_0()
                                     .text_color(theme.muted_foreground.opacity(0.30)),
                             ),
@@ -3692,8 +3694,8 @@ impl AgentPanel {
         if is_system {
             msg_el = msg_el.child(
                 div()
-                    .px(px(6.0 * ui_font_scale(theme)))
-                    .py(px(8.0 * ui_font_scale(theme)))
+                    .px(ui_space_px(theme, 6.0))
+                    .py(ui_space_px(theme, 8.0))
                     .text_size(ui_px(theme, 12.5))
                     .text_color(theme.muted_foreground.opacity(0.40))
                     .line_height(ui_px(theme, 19.0))
@@ -3951,8 +3953,8 @@ impl Render for AgentPanel {
             .collect();
 
         if !visible_tool_calls.is_empty() {
-            let ui_scale = ui_font_scale(theme);
-            let mono_scale = mono_font_scale(theme);
+            let ui_scale = ui_density_scale(theme);
+            let mono_scale = mono_density_scale(theme);
             let mut tc_container = div()
                 .flex()
                 .flex_col()
@@ -4024,7 +4026,7 @@ impl Render for AgentPanel {
                 let icon_el: AnyElement = if is_done {
                     svg()
                         .path(icon)
-                        .size(ui_px(theme, 12.0))
+                        .size(ui_space_px(theme, 12.0))
                         .flex_shrink_0()
                         .text_color(icon_color)
                         .into_any_element()
@@ -4531,7 +4533,7 @@ impl Render for AgentPanel {
 
         let live_activity_strip = if let Some(approval) = self.state.pending_approvals.first() {
             let args_display = format_tool_args(&approval.tool_name, &approval.args);
-            let ui_scale = ui_font_scale(theme);
+            let ui_scale = ui_density_scale(theme);
             Some(
                 div()
                     .flex()
@@ -4568,7 +4570,7 @@ impl Render for AgentPanel {
         } else if let Some(tc) = self.running_tool_call() {
             let args_display = format_tool_args(&tc.tool_name, &tc.args);
             let human_name = humanize_tool_name(&tc.tool_name);
-            let ui_scale = ui_font_scale(theme);
+            let ui_scale = ui_density_scale(theme);
             Some(
                 div()
                     .flex()
@@ -4606,7 +4608,7 @@ impl Render for AgentPanel {
                     .into_any_element(),
             )
         } else if let Some((_icon, label)) = self.status_text() {
-            let ui_scale = ui_font_scale(theme);
+            let ui_scale = ui_density_scale(theme);
             Some(
                 div()
                     .flex()
@@ -4885,8 +4887,8 @@ impl Render for AgentPanel {
 
             let has_text = self.inline_input_has_text;
             let has_skills = self.inline_input_has_skills;
-            let mono_scale = mono_font_scale(theme);
-            let inline_control_size = mono_px(theme, 24.0);
+            let mono_scale = mono_density_scale(theme);
+            let inline_control_size = mono_space_px(theme, 24.0);
             let inline_input_text_size = mono_px(theme, 13.0);
 
             // Send button — circular, matches main input bar
@@ -4926,7 +4928,7 @@ impl Render for AgentPanel {
                 .child(
                     svg()
                         .path("phosphor/arrow-up.svg")
-                        .size(mono_px(theme, 12.0))
+                        .size(mono_space_px(theme, 12.0))
                         .text_color(if has_text && !has_skills {
                             theme.primary_foreground
                         } else {

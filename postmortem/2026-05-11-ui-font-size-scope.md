@@ -21,6 +21,11 @@ active GPUI theme. The helper preserves the shipped default sizes exactly, then
 scales only the relevant terminal-adjacent typography, spacing, and control
 heights when the user changes UI Size.
 
+After testing at UI Size 24, the scaling was refined into two tracks: text uses
+the full font scale, while dense chrome uses a slower density scale. This keeps
+large text readable without turning titlebar buttons, pills, icons, and trace
+cards into oversized blocks.
+
 The fix covers:
 
 - Bottom input bar text, mode button, pane selector, inline suggestion overlay,
@@ -36,3 +41,7 @@ Theme-level font settings are not enough if component code pins dense UI with
 literal pixel sizes. New terminal-adjacent UI should either inherit the theme
 font size or use a theme-derived scale helper, with the default scale resolving
 to `1.0` to avoid accidental visual drift.
+
+Readable text and spatial density should not share the exact same scale curve.
+Accessibility sizing needs larger glyphs; polished app chrome needs controlled
+growth so the layout remains stable at large UI sizes.
