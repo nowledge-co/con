@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use std::ffi::{CStr, CString};
 use std::io::Write;
 use std::os::raw::c_void;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Arc, Once};
@@ -358,18 +358,39 @@ fn ensure_resources_dir_env() {
         return;
     }
 
-    let Some(resources_dir) = option_env!("CON_GHOSTTY_RESOURCES_DIR") else {
+    let resources_dir = installed_app_ghostty_resources_dir().or_else(|| {
+        let resources_dir = option_env!("CON_GHOSTTY_RESOURCES_DIR")?;
+        Path::new(resources_dir)
+            .is_dir()
+            .then(|| PathBuf::from(resources_dir))
+    });
+
+    let Some(resources_dir) = resources_dir else {
         return;
     };
-    if !Path::new(resources_dir).exists() {
-        return;
-    }
 
     // SAFETY: this runs during Ghostty initialization before the app spins up
     // worker threads, so mutating process env here is acceptable.
     unsafe {
         std::env::set_var("GHOSTTY_RESOURCES_DIR", resources_dir);
     }
+}
+
+fn installed_app_ghostty_resources_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    installed_app_ghostty_resources_dir_for_exe(&exe)
+}
+
+fn installed_app_ghostty_resources_dir_for_exe(exe: &Path) -> Option<PathBuf> {
+    for ancestor in exe.ancestors() {
+        if ancestor.extension().is_some_and(|ext| ext == "app") {
+            let resources_dir = ancestor.join("Contents/Resources/ghostty");
+            if resources_dir.is_dir() {
+                return Some(resources_dir);
+            }
+        }
+    }
+    None
 }
 
 // ── GhosttyApp — singleton managing all surfaces ────────────
@@ -1576,7 +1597,7 @@ unsafe extern "C" fn close_surface_callback(userdata: *mut c_void, _process_aliv
 
 #[cfg(test)]
 mod tests {
-    use super::{GhosttyConfigPatch, TerminalColors};
+    use super::{GhosttyConfigPatch, TerminalColors, installed_app_ghostty_resources_dir_for_exe};
 
     fn sample_colors(seed: u8) -> TerminalColors {
         TerminalColors {
@@ -1659,5 +1680,34 @@ mod tests {
         let config = GhosttyConfigPatch::default().to_config_string();
 
         assert!(config.contains("shell-integration-features = no-cursor,ssh-env,ssh-terminfo"));
+    }
+
+    #[test]
+    fn finds_ghostty_resources_inside_installed_app_bundle() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "con-ghostty-resources-test-{}-{unique}",
+            std::process::id()
+        ));
+        let _cleanup = Cleanup(root.clone());
+        let app_root = root.join("con Beta.app");
+        let macos_dir = app_root.join("Contents/MacOS");
+        let resources_dir = app_root.join("Contents/Resources/ghostty");
+        std::fs::create_dir_all(&macos_dir).unwrap();
+        std::fs::create_dir_all(&resources_dir).unwrap();
+
+        let found = installed_app_ghostty_resources_dir_for_exe(&macos_dir.join("con"));
+
+        assert_eq!(found.as_deref(), Some(resources_dir.as_path()));
     }
 }
