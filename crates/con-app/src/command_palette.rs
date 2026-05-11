@@ -68,6 +68,13 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
     },
     #[cfg(target_os = "macos")]
     PaletteAction {
+        id: "minimize-window",
+        label: "Minimize Window",
+        shortcut: "secondary-m",
+        category: "App",
+    },
+    #[cfg(target_os = "macos")]
+    PaletteAction {
         id: "quick-terminal",
         label: "Quick Terminal",
         shortcut: "",

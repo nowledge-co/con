@@ -550,6 +550,10 @@ impl ConWorkspace {
                 cx.dispatch_action(&crate::NewWindow);
             }
             #[cfg(target_os = "macos")]
+            "minimize-window" => {
+                cx.dispatch_action(&crate::Minimize);
+            }
+            #[cfg(target_os = "macos")]
             "quick-terminal" => {
                 cx.dispatch_action(&crate::ToggleQuickTerminal);
             }
