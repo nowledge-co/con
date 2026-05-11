@@ -26,6 +26,11 @@ the full font scale, while dense chrome uses a slower density scale. This keeps
 large text readable without turning titlebar buttons, pills, icons, and trace
 cards into oversized blocks.
 
+Review feedback also caught that text scaling must honor the full configured
+range, including the minimum UI size. Font scale clamps are now derived from
+the same UI Size bounds the settings panel exposes, while density scale remains
+separately capped for layout stability.
+
 The fix covers:
 
 - Bottom input bar text, mode button, pane selector, inline suggestion overlay,

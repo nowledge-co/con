@@ -4056,7 +4056,8 @@ impl Render for AgentPanel {
                     .child(
                         div()
                             .flex_shrink_0()
-                            .text_size(ui_px(theme, 10.0))
+                            .text_size(mono_px(theme, 10.0))
+                            .font_family(theme.mono_font_family.clone())
                             .text_color(theme.muted_foreground.opacity(0.36))
                             .child(format_step_duration(dur)),
                     );
