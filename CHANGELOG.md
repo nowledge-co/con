@@ -39,6 +39,19 @@ con is still pre-release, so entries may group related beta work while the produ
   [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
   [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
   [@wey-gu](https://github.com/wey-gu))_
+- Raised the Windows alternate-screen background opacity floor for full-screen
+  TUIs such as htop and vim, so their default-background canvas stays readable
+  while ordinary shell panes keep the configured terminal glass effect. _(Issue
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Polished Windows and Linux caption-button hover states so minimize and
+  maximize/restore give visible feedback instead of only the close button
+  feeling interactive. _(Issues
+  [#18](https://github.com/nowledge-co/con-terminal/issues/18) and
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.68` - 2026-05-09
 

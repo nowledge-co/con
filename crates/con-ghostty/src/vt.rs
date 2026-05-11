@@ -635,6 +635,7 @@ pub struct ScreenSnapshot {
     pub cells: Vec<Cell>,
     pub dirty_rows: Vec<u16>,
     pub cursor: Cursor,
+    pub alternate_screen: bool,
     pub title: Option<String>,
     pub generation: u64,
 }
@@ -952,6 +953,7 @@ impl VtScreen {
                 cells: Vec::new(),
                 dirty_rows: Vec::new(),
                 cursor: Cursor::default(),
+                alternate_screen: false,
                 title: None,
                 generation: inner.generation,
             };
@@ -1008,6 +1010,17 @@ impl VtScreen {
         }
         cols = cols.max(1);
         rows = rows.max(1);
+
+        let mut active_screen = GhosttyTerminalScreen::Primary;
+        let active_screen_rc = unsafe {
+            ghostty_terminal_get(
+                inner.terminal,
+                GhosttyTerminalData::ActiveScreen,
+                &mut active_screen as *mut _ as *mut c_void,
+            )
+        };
+        let alternate_screen =
+            active_screen_rc == 0 && active_screen == GhosttyTerminalScreen::Alternate;
 
         let mut force_all_dirty = inner.force_full_snapshot;
         let mut full_redraw = force_all_dirty;
@@ -1187,6 +1200,7 @@ impl VtScreen {
             cells,
             dirty_rows,
             cursor,
+            alternate_screen,
             title: None,
             generation: inner.generation,
         };
@@ -1479,6 +1493,7 @@ fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
         cells: Vec::new(),
         dirty_rows: Vec::new(),
         cursor: Cursor::default(),
+        alternate_screen: false,
         title: None,
         generation,
     }

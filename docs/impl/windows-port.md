@@ -360,6 +360,9 @@ Phase 3c details now covered by the beta baseline:
   not a cosmetic overlay that desynchronizes terminal coordinates. The gutter is
   painted with the same terminal clear color and opacity as the renderer image
   rather than falling through to transparent window content.
+- Alternate-screen TUIs keep a higher default-background opacity floor than the
+  ordinary shell. That preserves Con's glass effect for prompts while keeping
+  htop/vim-style application canvases readable on Windows.
 - CJK fallback glyphs are baseline-aligned inside the glyph atlas instead of
   being top-aligned as one-character `DrawText` lines. This keeps fallback
   CJK runs anchored to the same terminal-cell baseline as the primary face.

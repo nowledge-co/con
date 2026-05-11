@@ -57,6 +57,7 @@ pub use super::vt::ThemeColors;
 pub use atlas::CellMetrics;
 
 const ATLAS_SIZE_PX: u32 = 2048;
+const ALTERNATE_SCREEN_BACKGROUND_OPACITY_FLOOR: f32 = 0.94;
 /// Initial instance-buffer capacity. 16 384 covers a 200×80 grid
 /// without reallocation; panes larger than that grow via
 /// `Pipeline::ensure_instance_capacity` in the hot path.
@@ -520,7 +521,7 @@ impl Renderer {
             // under GPUI's premultiplied-alpha blend (otherwise
             // translucent pixels look washed out / haloed against the
             // visual beneath).
-            let opacity = config.background_opacity.clamp(0.0, 1.0);
+            let opacity = effective_background_opacity(snapshot, config);
             let clear = [
                 config.clear_color[0] * opacity,
                 config.clear_color[1] * opacity,
@@ -894,7 +895,8 @@ impl Renderer {
         // path injects an `0x......00` value into cell.bg without
         // meaning the sentinel, it would be silently rewritten — keep
         // the producers honest.
-        let opacity_byte: u8 = (config.background_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let background_opacity = effective_background_opacity(snapshot, config);
+        let opacity_byte: u8 = (background_opacity * 255.0).round() as u8;
         let apply_opacity = |bg: u32| -> u32 {
             if (bg & 0xFF) == 0 {
                 (bg & 0xFFFFFF00) | opacity_byte as u32
@@ -943,7 +945,9 @@ impl Renderer {
             // cells when it would be pixel-identical to the clear. This
             // preserves explicit SGR backgrounds, selection / inverse,
             // and underline / strike decorations on spaces.
-            if !is_cursor_cell && is_default_blank_cell(cell, effective_attrs, config) {
+            if !is_cursor_cell
+                && is_default_blank_cell(cell, effective_attrs, config, background_opacity)
+            {
                 continue;
             }
 
@@ -1165,7 +1169,27 @@ fn log_render_profile(
     );
 }
 
-fn is_default_blank_cell(cell: &Cell, effective_attrs: u8, config: &RendererConfig) -> bool {
+fn effective_background_opacity(snapshot: &ScreenSnapshot, config: &RendererConfig) -> f32 {
+    let opacity = config.background_opacity.clamp(0.0, 1.0);
+    // Full-screen TUIs use the terminal default background as their
+    // application canvas. At Con's default glass level, Windows Mica /
+    // DComp backdrops can wash that canvas out compared with Windows
+    // Terminal. Keep ordinary shells fully user-configurable, but give
+    // alternate-screen apps a readable floor. If the user explicitly
+    // sets the terminal to fully transparent, respect that.
+    if snapshot.alternate_screen && opacity > f32::EPSILON {
+        opacity.max(ALTERNATE_SCREEN_BACKGROUND_OPACITY_FLOOR)
+    } else {
+        opacity
+    }
+}
+
+fn is_default_blank_cell(
+    cell: &Cell,
+    effective_attrs: u8,
+    config: &RendererConfig,
+    background_opacity: f32,
+) -> bool {
     let is_blank = cell.codepoint == 0 || cell.codepoint == 0x20;
     if !is_blank {
         return false;
@@ -1184,8 +1208,7 @@ fn is_default_blank_cell(cell: &Cell, effective_attrs: u8, config: &RendererConf
         return false;
     }
 
-    let opacity = config.background_opacity.clamp(0.0, 1.0);
-    if opacity <= f32::EPSILON {
+    if background_opacity <= f32::EPSILON {
         return true;
     }
 

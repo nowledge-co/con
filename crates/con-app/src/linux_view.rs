@@ -1619,6 +1619,7 @@ mod tests {
                 row: 2,
                 visible: true,
             },
+            alternate_screen: false,
             title: None,
             generation: 7,
         };

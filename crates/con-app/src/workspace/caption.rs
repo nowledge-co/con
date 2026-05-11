@@ -95,7 +95,12 @@ pub(super) fn caption_buttons(
     }
     .into();
     let fg = theme.muted_foreground.opacity(0.9);
-    let hover_bg = theme.muted.opacity(0.12);
+    let hover_bg = if theme.is_dark() {
+        theme.foreground.opacity(0.11)
+    } else {
+        theme.foreground.opacity(0.075)
+    };
+    let hover_fg = theme.foreground.opacity(0.96);
 
     let button = |id: &'static str, icon: &'static str, area: WindowControlArea, close: bool| {
         let hover = if close { close_red } else { hover_bg };
@@ -105,7 +110,7 @@ pub(super) fn caption_buttons(
         // matches Windows 11 convention. Parent div declares itself as
         // a `group(id)` so the svg's `.group_hover(id, ...)` fires when
         // the 36px hit-target is hovered, not just the 10px icon ink.
-        let hover_fg = if close { gpui::white() } else { fg };
+        let hover_fg = if close { gpui::white() } else { hover_fg };
         let el = div()
             .id(id)
             .group(id)
