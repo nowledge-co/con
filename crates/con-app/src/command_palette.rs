@@ -64,6 +64,13 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
     },
     #[cfg(target_os = "macos")]
     PaletteAction {
+        id: "minimize-window",
+        label: "Minimize Window",
+        shortcut: "secondary-m",
+        category: "App",
+    },
+    #[cfg(target_os = "macos")]
+    PaletteAction {
         id: "quick-terminal",
         label: "Quick Terminal",
         shortcut: "",
@@ -291,22 +298,32 @@ impl CommandPalette {
     }
 
     pub fn toggle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.visible = !self.visible;
-        if self.visible {
+        if !self.visible {
+            self.show(window, cx);
+        } else {
+            self.visible = false;
             self.overlay_motion
-                .set_target(1.0, std::time::Duration::from_millis(180));
+                .set_target(0.0, std::time::Duration::from_millis(150));
+            cx.notify();
+        }
+    }
+
+    pub fn show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let was_visible = self.visible;
+        self.visible = true;
+        self.overlay_motion
+            .set_target(1.0, std::time::Duration::from_millis(180));
+        if !was_visible {
             self.query_text.clear();
             self.selected_index = 0;
             self.reveal_selected = true;
             self.query.update(cx, |s, cx| {
                 s.set_value("", window, cx);
-                // Focus the input directly so the user can type immediately
-                s.focus(window, cx);
             });
-        } else {
-            self.overlay_motion
-                .set_target(0.0, std::time::Duration::from_millis(150));
         }
+        self.query.update(cx, |s, cx| {
+            s.focus(window, cx);
+        });
         cx.notify();
     }
 

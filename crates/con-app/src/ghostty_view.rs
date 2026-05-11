@@ -1415,8 +1415,8 @@ impl GhosttyView {
                 "q" | "w" | "t" | "," | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => {
                     return false;
                 }
-                // Window cycling (cmd-`, cmd-shift-`)
-                "`" | "~" | ">" | "<" => return false,
+                // Window management (cmd-m, cmd-`, cmd-shift-`)
+                "m" | "`" | "~" | ">" | "<" => return false,
                 // Splits (cmd-d, cmd-shift-d)
                 "d" => return false,
                 // Agent & input

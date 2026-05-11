@@ -112,10 +112,10 @@ fn ctrl_a_and_ctrl_e_have_workspace_fallback_for_focused_editor_pane() {
 
 #[test]
 fn activity_bar_is_always_visible_as_left_sidebar_rail() {
-    assert!(should_show_activity_bar(false, ActivitySlot::Tabs));
     assert!(should_show_activity_bar(false, ActivitySlot::Files));
-    assert!(should_show_activity_bar(true, ActivitySlot::Tabs));
+    assert!(should_show_activity_bar(false, ActivitySlot::Search));
     assert!(should_show_activity_bar(true, ActivitySlot::Files));
+    assert!(should_show_activity_bar(true, ActivitySlot::Search));
 }
 
 #[test]

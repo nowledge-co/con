@@ -448,6 +448,92 @@ pub struct KeybindingConfig {
     pub quick_terminal: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeybindingConflict {
+    pub binding: String,
+    pub actions: Vec<String>,
+}
+
+impl KeybindingConfig {
+    pub fn active_shortcuts(&self) -> Vec<(&'static str, &str)> {
+        let mut shortcuts = vec![
+            ("New Window", self.new_window.as_str()),
+            ("New Tab", self.new_tab.as_str()),
+            ("Next Tab", self.next_tab.as_str()),
+            ("Previous Tab", self.previous_tab.as_str()),
+            ("Close Tab", self.close_tab.as_str()),
+            ("Close Pane", self.close_pane.as_str()),
+            ("Toggle Pane Zoom", self.toggle_pane_zoom.as_str()),
+            ("Settings", self.settings.as_str()),
+            ("Command Palette", self.command_palette.as_str()),
+            ("Toggle Agent", self.toggle_agent.as_str()),
+            ("Toggle Input Bar", self.toggle_input_bar.as_str()),
+            ("Toggle Input / Terminal", self.focus_input.as_str()),
+            ("Cycle Input Mode", self.cycle_input_mode.as_str()),
+            ("Split Right", self.split_right.as_str()),
+            ("Split Down", self.split_down.as_str()),
+            ("Toggle Pane Scope", self.toggle_pane_scope.as_str()),
+            ("Toggle Vertical Tabs", self.toggle_vertical_tabs.as_str()),
+            ("Collapse/Expand Sidebar", self.collapse_sidebar.as_str()),
+            ("New Surface Tab", self.new_surface.as_str()),
+            (
+                "New Surface Pane Right",
+                self.new_surface_split_right.as_str(),
+            ),
+            (
+                "New Surface Pane Down",
+                self.new_surface_split_down.as_str(),
+            ),
+            ("Next Surface Tab", self.next_surface.as_str()),
+            ("Previous Surface Tab", self.previous_surface.as_str()),
+            ("Rename Surface", self.rename_surface.as_str()),
+            ("Close Surface", self.close_surface.as_str()),
+            ("Quit", self.quit.as_str()),
+        ];
+
+        if self.global_summon_enabled {
+            shortcuts.push(("Summon / Hide Con", self.global_summon.as_str()));
+        }
+        if self.quick_terminal_enabled {
+            shortcuts.push(("Quick Terminal", self.quick_terminal.as_str()));
+        }
+
+        shortcuts
+            .into_iter()
+            .filter(|(_, binding)| !binding.trim().is_empty())
+            .collect()
+    }
+
+    pub fn shortcut_conflicts(
+        &self,
+        reserved_shortcuts: &[(&'static str, &'static str)],
+    ) -> Vec<KeybindingConflict> {
+        let mut seen = std::collections::BTreeMap::<String, (String, Vec<String>)>::new();
+
+        for (label, binding) in self
+            .active_shortcuts()
+            .into_iter()
+            .chain(reserved_shortcuts.iter().copied())
+        {
+            let Some(canonical) = canonical_keybinding(binding) else {
+                continue;
+            };
+            let entry = seen
+                .entry(canonical.clone())
+                .or_insert_with(|| (canonical, Vec::new()));
+            if !entry.1.iter().any(|existing| existing == label) {
+                entry.1.push(label.to_string());
+            }
+        }
+
+        seen.into_values()
+            .filter_map(|(binding, actions)| {
+                (actions.len() > 1).then_some(KeybindingConflict { binding, actions })
+            })
+            .collect()
+    }
+}
+
 impl Default for KeybindingConfig {
     fn default() -> Self {
         Self {
@@ -482,6 +568,71 @@ impl Default for KeybindingConfig {
             quick_terminal_enabled: default_quick_terminal_enabled(),
             quick_terminal: default_quick_terminal(),
         }
+    }
+}
+
+pub fn canonical_keybinding(binding: &str) -> Option<String> {
+    let strokes = binding
+        .split_whitespace()
+        .filter_map(canonical_keystroke)
+        .collect::<Vec<_>>();
+    (!strokes.is_empty()).then(|| strokes.join(" "))
+}
+
+fn canonical_keystroke(stroke: &str) -> Option<String> {
+    let mut modifiers = Vec::<&'static str>::new();
+    // A trailing separator is the literal minus key, e.g. "ctrl--"
+    // means Control-Minus rather than a missing key token.
+    let is_minus_key = stroke.ends_with('-');
+    let mut key = is_minus_key.then(|| "-".to_string());
+    let mut parts = stroke
+        .split('-')
+        .map(|part| part.trim().to_ascii_lowercase())
+        .collect::<Vec<_>>();
+    if is_minus_key {
+        parts.pop();
+    }
+
+    for raw in parts {
+        if raw.is_empty() {
+            continue;
+        }
+        match raw.as_str() {
+            "cmd" | "command" | "meta" => push_unique_modifier(&mut modifiers, "cmd"),
+            "platform" | "secondary" => {
+                push_unique_modifier(&mut modifiers, platform_modifier_name())
+            }
+            "ctrl" | "control" => push_unique_modifier(&mut modifiers, "ctrl"),
+            "alt" | "option" => push_unique_modifier(&mut modifiers, "alt"),
+            "shift" => push_unique_modifier(&mut modifiers, "shift"),
+            "fn" => push_unique_modifier(&mut modifiers, "fn"),
+            "return" => key = Some("enter".to_string()),
+            "esc" => key = Some("escape".to_string()),
+            other => key = Some(other.to_string()),
+        }
+    }
+
+    let key = key?;
+    let mut parts = ["cmd", "ctrl", "alt", "shift", "fn"]
+        .into_iter()
+        .filter(|modifier| modifiers.contains(modifier))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    parts.push(key);
+    Some(parts.join("-"))
+}
+
+fn platform_modifier_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "cmd"
+    } else {
+        "ctrl"
+    }
+}
+
+fn push_unique_modifier(modifiers: &mut Vec<&'static str>, modifier: &'static str) {
+    if !modifiers.contains(&modifier) {
+        modifiers.push(modifier);
     }
 }
 
@@ -831,6 +982,84 @@ quick_terminal = "cmd-\\"
 
         assert!(config.keybindings.quick_terminal_enabled);
         assert_eq!(config.keybindings.quick_terminal, "cmd-\\");
+    }
+
+    #[test]
+    fn keybinding_conflicts_detect_duplicate_configured_shortcuts() {
+        let mut config = Config::default();
+        config.keybindings.command_palette = "ctrl-shift-p".to_string();
+        config.keybindings.toggle_agent = "control-shift-p".to_string();
+
+        let conflicts = config.keybindings.shortcut_conflicts(&[]);
+
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(
+            conflicts[0].actions,
+            vec!["Command Palette".to_string(), "Toggle Agent".to_string()]
+        );
+    }
+
+    #[test]
+    fn keybinding_conflicts_match_secondary_to_platform_modifier() {
+        let mut config = Config::default();
+        config.keybindings.command_palette = "secondary-shift-p".to_string();
+        config.keybindings.toggle_agent = if cfg!(target_os = "macos") {
+            "cmd-shift-p".to_string()
+        } else {
+            "ctrl-shift-p".to_string()
+        };
+
+        let conflicts = config.keybindings.shortcut_conflicts(&[]);
+
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(
+            conflicts[0].actions,
+            vec!["Command Palette".to_string(), "Toggle Agent".to_string()]
+        );
+    }
+
+    #[test]
+    fn keybinding_conflicts_include_minus_key_shortcuts() {
+        let mut config = Config::default();
+        config.keybindings.command_palette = "ctrl--".to_string();
+        config.keybindings.toggle_agent = "control--".to_string();
+
+        let conflicts = config.keybindings.shortcut_conflicts(&[]);
+
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(
+            conflicts[0].actions,
+            vec!["Command Palette".to_string(), "Toggle Agent".to_string()]
+        );
+    }
+
+    #[test]
+    fn keybinding_conflicts_ignore_disabled_global_shortcuts() {
+        let mut config = Config::default();
+        config.keybindings.global_summon_enabled = false;
+        config.keybindings.global_summon = config.keybindings.command_palette.clone();
+
+        assert!(config.keybindings.shortcut_conflicts(&[]).is_empty());
+    }
+
+    #[test]
+    fn keybinding_conflicts_include_reserved_shortcuts() {
+        let mut config = Config::default();
+        config.keybindings.command_palette = if cfg!(target_os = "macos") {
+            "cmd-m".to_string()
+        } else {
+            "ctrl-m".to_string()
+        };
+
+        let conflicts = config
+            .keybindings
+            .shortcut_conflicts(&[("Minimize Window", "secondary-m")]);
+
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(
+            conflicts[0].actions,
+            vec!["Command Palette".to_string(), "Minimize Window".to_string()]
+        );
     }
 
     #[test]

@@ -562,6 +562,10 @@ impl ConWorkspace {
                 cx.dispatch_action(&crate::NewWindow);
             }
             #[cfg(target_os = "macos")]
+            "minimize-window" => {
+                cx.dispatch_action(&crate::Minimize);
+            }
+            #[cfg(target_os = "macos")]
             "quick-terminal" => {
                 cx.dispatch_action(&crate::ToggleQuickTerminal);
             }
@@ -720,6 +724,7 @@ impl ConWorkspace {
     ) {
         let full_config = settings.read(cx).config().clone();
         let restore_terminal_text_was_enabled = self.config.appearance.restore_terminal_text;
+        let old_keybindings = self.config.keybindings.clone();
         self.config = full_config.clone();
         let new_agent_config = full_config.agent.clone();
         let auto_approve = new_agent_config.auto_approve_tools;
@@ -787,7 +792,7 @@ impl ConWorkspace {
 
         // Re-apply keybindings at runtime so changes take effect immediately
         let kb = full_config.keybindings.clone();
-        crate::bind_app_keybindings(cx, &kb);
+        crate::rebind_app_keybindings(cx, &old_keybindings, &kb);
         #[cfg(target_os = "macos")]
         crate::global_hotkey::update_from_keybindings(&kb);
 

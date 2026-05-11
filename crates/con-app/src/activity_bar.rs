@@ -23,9 +23,6 @@ pub const ACTIVITY_BAR_WIDTH: f32 = 40.0;
 /// The content slot currently shown in the left panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActivitySlot {
-    /// Legacy terminal tab list slot. Kept only for old session data.
-    #[allow(dead_code)]
-    Tabs,
     /// File explorer — backed by `FileTreeView`.
     Files,
     /// Workspace text search — backed by `SidebarSearchView`.
@@ -35,16 +32,13 @@ pub enum ActivitySlot {
 impl ActivitySlot {
     pub fn as_str(self) -> &'static str {
         match self {
-            ActivitySlot::Tabs => "tabs",
             ActivitySlot::Files => "files",
             ActivitySlot::Search => "search",
         }
     }
 
-    #[allow(dead_code)]
     pub fn from_str(s: &str) -> Self {
         match s {
-            "files" => ActivitySlot::Files,
             "search" => ActivitySlot::Search,
             _ => ActivitySlot::Files,
         }

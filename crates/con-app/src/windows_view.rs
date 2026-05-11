@@ -63,6 +63,8 @@ use con_ghostty::windows::render::{FrameBgra, RenderOutcome};
 const SCROLLBAR_INSET_PX: f32 = 4.0;
 const SCROLLBAR_WIDTH_PX: f32 = 6.0;
 const SCROLLBAR_MIN_THUMB_PX: f32 = 28.0;
+const TERMINAL_PADDING_X_PX: f32 = 10.0;
+const TERMINAL_PADDING_Y_PX: f32 = 8.0;
 
 #[derive(Debug, Clone, Copy)]
 struct ScrollbarDrag {
@@ -137,6 +139,7 @@ pub struct GhosttyView {
     /// required while the terminal background is translucent: GPUI image
     /// children alpha-composite, so row-strip overlays would blend with
     /// stale text instead of erasing it.
+    cached_image_size: Option<(u32, u32)>,
     cached_frame: Option<Vec<u8>>,
     cached_frame_size: Option<(u32, u32)>,
     /// `GHOSTTY_TERMINAL_DATA_SCROLLBAR` is an expensive VT query.
@@ -148,6 +151,7 @@ pub struct GhosttyView {
     /// `Window::drop_image` to evict sprite-atlas tiles.
     images_to_drop: Vec<Arc<RenderImage>>,
     scrollbar_drag: Option<ScrollbarDrag>,
+    terminal_mouse_sequence_active: bool,
     mouse_down_link: Option<TerminalLink>,
     suppress_link_mouse_up: bool,
     hovered_link: Option<TerminalLink>,
@@ -223,11 +227,13 @@ impl GhosttyView {
             last_physical_size: None,
             last_scale_factor: 0.0,
             cached_image: None,
+            cached_image_size: None,
             cached_frame: None,
             cached_frame_size: None,
             scrollbar_cache: None,
             images_to_drop: Vec::new(),
             scrollbar_drag: None,
+            terminal_mouse_sequence_active: false,
             mouse_down_link: None,
             suppress_link_mouse_up: false,
             hovered_link: None,
@@ -284,10 +290,12 @@ impl GhosttyView {
         // the window closes; no way to reach `Window::drop_image` from
         // here. A per-pane ~2×framebytes residue is acceptable.
         self.cached_image = None;
+        self.cached_image_size = None;
         self.cached_frame = None;
         self.cached_frame_size = None;
         self.scrollbar_cache = None;
         self.scrollbar_drag = None;
+        self.terminal_mouse_sequence_active = false;
         self.ime_marked_text = None;
         self.ime_selected_range = None;
         self.mouse_down_link = None;
@@ -672,6 +680,7 @@ impl GhosttyView {
             if let Some(old) = self.cached_image.replace(image) {
                 self.images_to_drop.push(old);
             }
+            self.cached_image_size = Some((frame_width, frame_height));
             self.cached_frame_size = Some((frame_width, frame_height));
             return true;
         }
@@ -688,21 +697,60 @@ impl GhosttyView {
         self.restored_screen_text = None;
     }
 
-    fn image_children(&self) -> Vec<AnyElement> {
-        let mut children = Vec::with_capacity(usize::from(self.cached_image.is_some()));
-        // `ObjectFit::Fill` keeps each image quad exactly equal to its
-        // logical bounds. The default `Contain` applies aspect-ratio
-        // letterboxing using float math, which produces a quad a
-        // fraction of a pixel smaller than our source texture; the
-        // LINEAR sprite sampler then blends neighbouring texels and the
-        // terminal cells show faint speckles below the glyph baseline.
+    fn image_children(&self, gap_background: Option<Hsla>) -> Vec<AnyElement> {
+        let mut children = Vec::with_capacity(usize::from(self.cached_image.is_some()) + 2);
         if let Some(img_arc) = self.cached_image.clone() {
-            children.push(
-                img(ImageSource::Render(img_arc))
-                    .size_full()
-                    .object_fit(ObjectFit::Fill)
-                    .into_any_element(),
-            );
+            // Keep stale D3D readback frames at their original logical
+            // size while pane layout is changing. Stretching the old
+            // texture to the new pane bounds makes terminal text appear
+            // zoomed for a frame when closing/splitting panes; the
+            // clipped parent background is a safer placeholder until the
+            // resized renderer publishes the next frame.
+            let image = img(ImageSource::Render(img_arc)).object_fit(ObjectFit::Fill);
+            let image = if let Some((frame_width, frame_height)) = self.cached_image_size {
+                let scale_factor = self.scale_factor.max(f32::EPSILON);
+                let image_width = frame_width as f32 / scale_factor;
+                let image_height = frame_height as f32 / scale_factor;
+                if let (Some(bounds), Some(background)) = (self.pane_bounds, gap_background) {
+                    let content_width = f32::from(bounds.size.width);
+                    let content_height = f32::from(bounds.size.height);
+                    if image_width + 0.5 < content_width {
+                        children.push(
+                            div()
+                                .absolute()
+                                .left(px(image_width))
+                                .right_0()
+                                .top_0()
+                                .bottom_0()
+                                .bg(background)
+                                .into_any_element(),
+                        );
+                    }
+                    if image_height + 0.5 < content_height {
+                        children.push(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .w(px(image_width.min(content_width).max(0.0)))
+                                .top(px(image_height))
+                                .bottom_0()
+                                .bg(background)
+                                .into_any_element(),
+                        );
+                    }
+                }
+                image.w(px(image_width)).h(px(image_height))
+            } else {
+                // `ObjectFit::Fill` keeps each image quad exactly equal
+                // to its logical bounds. The default `Contain` applies
+                // aspect-ratio letterboxing using float math, which
+                // produces a quad a fraction of a pixel smaller than our
+                // source texture; the LINEAR sprite sampler then blends
+                // neighbouring texels and terminal cells show faint
+                // speckles below the glyph baseline.
+                image.size_full()
+            };
+            children.push(image.into_any_element());
         }
 
         children
@@ -712,6 +760,18 @@ impl GhosttyView {
     /// (col, row) cell address. Returns `None` when we don't yet have a
     /// session / bounds to project into.
     fn cell_from_event_position(&self, pos: Point<Pixels>) -> Option<(u16, u16)> {
+        self.cell_from_event_position_impl(pos, false)
+    }
+
+    fn clamped_cell_from_event_position(&self, pos: Point<Pixels>) -> Option<(u16, u16)> {
+        self.cell_from_event_position_impl(pos, true)
+    }
+
+    fn cell_from_event_position_impl(
+        &self,
+        pos: Point<Pixels>,
+        clamp_to_grid: bool,
+    ) -> Option<(u16, u16)> {
         let bounds = self.pane_bounds?;
         let terminal = self.terminal.as_ref()?;
         let inner = terminal.inner();
@@ -721,12 +781,31 @@ impl GhosttyView {
         if metrics.cell_width_px == 0 || metrics.cell_height_px == 0 {
             return None;
         }
-        let local_x = (f32::from(pos.x) - f32::from(bounds.origin.x)).max(0.0);
-        let local_y = (f32::from(pos.y) - f32::from(bounds.origin.y)).max(0.0);
-        let phys_x = (local_x * self.scale_factor) as u32;
-        let phys_y = (local_y * self.scale_factor) as u32;
-        let col = (phys_x / metrics.cell_width_px.max(1)) as u16;
-        let row = (phys_y / metrics.cell_height_px.max(1)) as u16;
+        let scale = self.scale_factor.max(f32::EPSILON);
+        let width_px = ((f32::from(bounds.size.width) * scale).ceil() as u32).max(1);
+        let height_px = ((f32::from(bounds.size.height) * scale).ceil() as u32).max(1);
+        let cols = (width_px / metrics.cell_width_px.max(1)).max(1);
+        let rows = (height_px / metrics.cell_height_px.max(1)).max(1);
+        let grid_width_px = (cols * metrics.cell_width_px.max(1)) as f32;
+        let grid_height_px = (rows * metrics.cell_height_px.max(1)) as f32;
+        let local_x = f32::from(pos.x) - f32::from(bounds.origin.x);
+        let local_y = f32::from(pos.y) - f32::from(bounds.origin.y);
+        let mut phys_x = local_x * scale;
+        let mut phys_y = local_y * scale;
+        if clamp_to_grid {
+            phys_x = phys_x.clamp(0.0, (grid_width_px - f32::EPSILON).max(0.0));
+            phys_y = phys_y.clamp(0.0, (grid_height_px - f32::EPSILON).max(0.0));
+        } else if phys_x < 0.0
+            || phys_y < 0.0
+            || phys_x >= width_px as f32
+            || phys_y >= height_px as f32
+            || phys_x >= grid_width_px
+            || phys_y >= grid_height_px
+        {
+            return None;
+        }
+        let col = ((phys_x as u32) / metrics.cell_width_px.max(1)).min(cols - 1) as u16;
+        let row = ((phys_y as u32) / metrics.cell_height_px.max(1)).min(rows - 1) as u16;
         Some((col, row))
     }
 
@@ -785,19 +864,26 @@ impl GhosttyView {
         )
     }
 
-    fn forward_mouse_down(&self, pos: Point<Pixels>, mods: MouseEventMods) {
+    fn forward_mouse_down(&self, pos: Point<Pixels>, mods: MouseEventMods) -> bool {
         if let Some((col, row)) = self.cell_from_event_position(pos) {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
                     session.mouse_down(col, row, mods);
+                    return true;
                 }
             }
         }
+        false
     }
 
-    fn forward_mouse_drag(&self, pos: Point<Pixels>, mods: MouseEventMods) {
-        if let Some((col, row)) = self.cell_from_event_position(pos) {
+    fn forward_mouse_drag(&self, pos: Point<Pixels>, mods: MouseEventMods, clamp: bool) {
+        let cell = if clamp {
+            self.clamped_cell_from_event_position(pos)
+        } else {
+            self.cell_from_event_position(pos)
+        };
+        if let Some((col, row)) = cell {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
@@ -807,8 +893,13 @@ impl GhosttyView {
         }
     }
 
-    fn forward_mouse_up(&self, pos: Point<Pixels>, mods: MouseEventMods) {
-        if let Some((col, row)) = self.cell_from_event_position(pos) {
+    fn forward_mouse_up(&self, pos: Point<Pixels>, mods: MouseEventMods, clamp: bool) {
+        let cell = if clamp {
+            self.clamped_cell_from_event_position(pos)
+        } else {
+            self.cell_from_event_position(pos)
+        };
+        if let Some((col, row)) = cell {
             if let Some(terminal) = &self.terminal {
                 let inner = terminal.inner();
                 if let Some(session) = inner.lock().as_ref() {
@@ -818,14 +909,14 @@ impl GhosttyView {
         }
     }
 
-    fn forward_scroll(&self, pos: Point<Pixels>, delta: ScrollDelta, mods: MouseEventMods) {
+    fn forward_scroll(&self, pos: Point<Pixels>, delta: ScrollDelta, mods: MouseEventMods) -> bool {
         let Some(terminal) = &self.terminal else {
-            return;
+            return false;
         };
         let inner = terminal.inner();
         let guard = inner.lock();
         let Some(session) = guard.as_ref() else {
-            return;
+            return false;
         };
         let delta_y_px = match delta {
             ScrollDelta::Pixels(p) => f32::from(p.y),
@@ -835,7 +926,7 @@ impl GhosttyView {
             }
         };
         if delta_y_px.abs() < f32::EPSILON {
-            return;
+            return false;
         }
 
         // Only report wheel to the shell when it has explicitly enabled
@@ -845,14 +936,15 @@ impl GhosttyView {
         // `set mouse=a`.
         if !session.mouse_tracking_active() || mods.shift {
             session.scroll_viewport_or_alt_screen(delta_y_px, !mods.shift);
-            return;
+            return true;
         }
 
         let Some((col0, row0)) = self.cell_from_event_position(pos) else {
-            return;
+            return false;
         };
         // `forward_wheel` expects 1-based SGR coordinates.
         session.forward_wheel(col0 + 1, row0 + 1, delta_y_px, mods);
+        false
     }
 
     fn scrollbar_visible(scrollbar: &GhosttyScrollbar) -> bool {
@@ -1060,6 +1152,19 @@ impl GhosttyView {
             return false;
         }
 
+        // Plain Ctrl+C should copy terminal selection on Windows/Linux when
+        // text is selected; otherwise it must keep its shell meaning (^C).
+        if keystroke.modifiers.control
+            && !keystroke.modifiers.shift
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.platform
+            && keystroke.key == "c"
+            && copy_selection_to_clipboard(terminal, cx)
+        {
+            cx.notify();
+            return true;
+        }
+
         // Ctrl+Shift+C / Ctrl+Shift+V → clipboard. These must run ahead
         // of the generic Ctrl-letter path below, which would otherwise
         // emit ^C / ^V to the shell.
@@ -1070,7 +1175,9 @@ impl GhosttyView {
         {
             match keystroke.key.as_str() {
                 "c" => {
-                    copy_selection_to_clipboard(terminal, cx);
+                    if copy_selection_to_clipboard(terminal, cx) {
+                        cx.notify();
+                    }
                     return true;
                 }
                 "v" => {
@@ -1413,16 +1520,18 @@ impl Render for GhosttyView {
             | SyncRenderResult::Unchanged => {}
         }
 
-        let placeholder_background = if self.cached_image.is_none() {
-            self.placeholder_background()
+        let terminal_background = self.placeholder_background();
+        let background = if self.cached_image.is_none() {
+            terminal_background
         } else {
             None
-        };
-        let background =
-            placeholder_background.unwrap_or_else(|| cx.theme().background.opacity(0.0));
+        }
+        .unwrap_or_else(|| cx.theme().background.opacity(0.0));
+        let padding_background =
+            terminal_background.unwrap_or_else(|| cx.theme().background.opacity(0.0));
         let entity = cx.entity().downgrade();
         let input_entity = entity.clone();
-        let mut terminal_children = self.image_children();
+        let mut terminal_children = self.image_children(terminal_background);
         if let Some(overlay) = self.render_link_cursor_overlay() {
             terminal_children.push(overlay);
         }
@@ -1467,7 +1576,9 @@ impl Render for GhosttyView {
             }))
             .on_action(cx.listener(|this, _: &crate::Copy, _window, cx| {
                 if let Some(terminal) = &this.terminal {
-                    copy_selection_to_clipboard(terminal, cx);
+                    if copy_selection_to_clipboard(terminal, cx) {
+                        cx.notify();
+                    }
                 }
             }))
             .on_action(cx.listener(|this, _: &crate::Paste, _window, cx| {
@@ -1523,6 +1634,7 @@ impl Render for GhosttyView {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&context_focus, cx);
                     this.last_mouse_position = Some(event.position);
+                    this.terminal_mouse_sequence_active = false;
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
@@ -1535,6 +1647,7 @@ impl Render for GhosttyView {
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     window.focus(&focus, cx);
                     this.last_mouse_position = Some(event.position);
+                    this.terminal_mouse_sequence_active = false;
                     this.mouse_down_link = None;
                     this.suppress_link_mouse_up = false;
                     let _ = this.update_hovered_link(&event.modifiers);
@@ -1549,7 +1662,8 @@ impl Render for GhosttyView {
                         cx.notify();
                         return;
                     }
-                    this.forward_mouse_down(event.position, mouse_mods_from(&event.modifiers));
+                    this.terminal_mouse_sequence_active =
+                        this.forward_mouse_down(event.position, mouse_mods_from(&event.modifiers));
                     cx.emit(GhosttyFocusChanged);
                     cx.notify();
                 }),
@@ -1588,7 +1702,19 @@ impl Render for GhosttyView {
                 }
                 let hover_changed = this.update_hovered_link(&event.modifiers);
                 if event.pressed_button == Some(MouseButton::Left) {
-                    this.forward_mouse_drag(event.position, mouse_mods_from(&event.modifiers));
+                    if this.terminal_mouse_sequence_active {
+                        this.forward_mouse_drag(
+                            event.position,
+                            mouse_mods_from(&event.modifiers),
+                            true,
+                        );
+                        cx.notify();
+                    } else if hover_changed {
+                        cx.notify();
+                    }
+                } else if this.terminal_mouse_sequence_active {
+                    this.forward_mouse_up(event.position, mouse_mods_from(&event.modifiers), true);
+                    this.terminal_mouse_sequence_active = false;
                     cx.notify();
                 } else if hover_changed {
                     cx.notify();
@@ -1603,6 +1729,7 @@ impl Render for GhosttyView {
                         cx.notify();
                         return;
                     }
+                    let had_terminal_mouse_sequence = this.terminal_mouse_sequence_active;
                     if this.suppress_link_mouse_up {
                         let down_link = this.mouse_down_link.take();
                         this.suppress_link_mouse_up = false;
@@ -1617,7 +1744,14 @@ impl Render for GhosttyView {
                         cx.notify();
                         return;
                     }
-                    this.forward_mouse_up(event.position, mouse_mods_from(&event.modifiers));
+                    if had_terminal_mouse_sequence {
+                        this.forward_mouse_up(
+                            event.position,
+                            mouse_mods_from(&event.modifiers),
+                            true,
+                        );
+                    }
+                    this.terminal_mouse_sequence_active = false;
                     let _ = this.update_hovered_link(&event.modifiers);
                     cx.notify();
                 }),
@@ -1625,17 +1759,23 @@ impl Render for GhosttyView {
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
                 this.last_mouse_position = Some(event.position);
                 let _ = this.update_hovered_link(&event.modifiers);
-                this.forward_scroll(
+                let scrolled_viewport = this.forward_scroll(
                     event.position,
                     event.delta,
                     mouse_mods_from(&event.modifiers),
                 );
+                if scrolled_viewport && this.terminal_mouse_sequence_active {
+                    this.forward_mouse_drag(
+                        event.position,
+                        mouse_mods_from(&event.modifiers),
+                        true,
+                    );
+                }
                 cx.notify();
             }))
             .child(
                 div()
-                    .flex()
-                    .flex_col()
+                    .relative()
                     .size_full()
                     .min_w_0()
                     .min_h_0()
@@ -1653,13 +1793,16 @@ impl Render for GhosttyView {
                             });
                         }
                     })
-                    // Measure a dedicated full-size wrapper child so the
-                    // prepaint callback always sees pane bounds rather than
-                    // whichever image/layout child happens to be present.
+                    // Keep the terminal content as the first measured child:
+                    // prepaint uses bounds_list.first() to size the D3D grid,
+                    // while the gutter fills below only cover the inset edges.
                     .child(
                         div()
-                            .relative()
-                            .size_full()
+                            .absolute()
+                            .left(px(TERMINAL_PADDING_X_PX))
+                            .right(px(TERMINAL_PADDING_X_PX))
+                            .top(px(TERMINAL_PADDING_Y_PX))
+                            .bottom(px(TERMINAL_PADDING_Y_PX))
                             .overflow_hidden()
                             .children(terminal_children)
                             .child(
@@ -1676,6 +1819,42 @@ impl Render for GhosttyView {
                                 .absolute()
                                 .size_full(),
                             ),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .top_0()
+                            .h(px(TERMINAL_PADDING_Y_PX))
+                            .bg(padding_background),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom_0()
+                            .h(px(TERMINAL_PADDING_Y_PX))
+                            .bg(padding_background),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top(px(TERMINAL_PADDING_Y_PX))
+                            .bottom(px(TERMINAL_PADDING_Y_PX))
+                            .w(px(TERMINAL_PADDING_X_PX))
+                            .bg(padding_background),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .right_0()
+                            .top(px(TERMINAL_PADDING_Y_PX))
+                            .bottom(px(TERMINAL_PADDING_Y_PX))
+                            .w(px(TERMINAL_PADDING_X_PX))
+                            .bg(padding_background),
                     ),
             )
             .context_menu(move |menu, window, cx| {

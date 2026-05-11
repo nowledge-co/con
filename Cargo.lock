@@ -1304,6 +1304,7 @@ name = "con-agent"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "chrono",
  "con-paths",
  "crossbeam-channel",
@@ -1318,6 +1319,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "url",
  "uuid",
 ]
 

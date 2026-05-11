@@ -171,7 +171,8 @@ actions!(
         Cut,
         Copy,
         Paste,
-        SelectAll
+        SelectAll,
+        Minimize
     ]
 );
 
@@ -943,6 +944,19 @@ pub(crate) fn toggle_global_summon(cx: &mut App) {
     }
 }
 
+fn minimize_frontmost_window(cx: &mut App) {
+    let frontmost_window = cx.active_window().or_else(|| {
+        cx.window_stack()
+            .and_then(|windows| windows.first().cloned())
+    });
+
+    if let Some(window_handle) = frontmost_window {
+        let _ = cx.update_window(window_handle, |_, window, _| {
+            window.minimize_window();
+        });
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn bundle_info_value(key: &'static [u8]) -> Option<String> {
     use objc::{class, msg_send, sel, sel_impl};
@@ -1222,6 +1236,7 @@ struct BindingSpec {
     action: TypeId,
     scope: BindingScope,
     to_key_binding: fn(&str, Option<&str>) -> KeyBinding,
+    action_name: fn() -> SharedString,
 }
 
 impl std::fmt::Debug for BindingSpec {
@@ -1245,17 +1260,33 @@ impl BindingSpec {
         ) -> KeyBinding {
             KeyBinding::new(key, A::default(), scope)
         }
+        fn action_name<A: Action + Default + Clone + 'static>() -> SharedString {
+            gpui::Action::name(&A::default()).into()
+        }
 
         Self {
             key: key.into(),
             action: TypeId::of::<A>(),
             scope,
             to_key_binding: make::<A>,
+            action_name: action_name::<A>,
         }
     }
 
     fn to_key_binding(&self) -> KeyBinding {
         (self.to_key_binding)(self.key.as_ref(), self.scope.name())
+    }
+
+    fn action_name(&self) -> SharedString {
+        (self.action_name)()
+    }
+
+    fn to_unbind_key_binding(&self) -> KeyBinding {
+        KeyBinding::new(
+            self.key.as_ref(),
+            gpui::Unbind(self.action_name()),
+            self.scope.name(),
+        )
     }
 }
 
@@ -1298,7 +1329,7 @@ fn push_app_override<A: Action + Default + Clone + 'static>(
     push_scoped::<A>(specs, key, APP_OVERRIDE_SCOPES);
 }
 
-fn binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
+fn configurable_app_binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
     let mut specs = Vec::new();
 
     // App-level shortcuts are global by default. GPUI `scope = None` is the
@@ -1308,17 +1339,6 @@ fn binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
     push_global::<NewTab>(&mut specs, &kb.new_tab);
     push_global::<NextTab>(&mut specs, &kb.next_tab);
     push_global::<PreviousTab>(&mut specs, &kb.previous_tab);
-    push_global::<NextTab>(&mut specs, "secondary-shift-]");
-    push_global::<PreviousTab>(&mut specs, "secondary-shift-[");
-    push_global::<SelectTab1>(&mut specs, "secondary-1");
-    push_global::<SelectTab2>(&mut specs, "secondary-2");
-    push_global::<SelectTab3>(&mut specs, "secondary-3");
-    push_global::<SelectTab4>(&mut specs, "secondary-4");
-    push_global::<SelectTab5>(&mut specs, "secondary-5");
-    push_global::<SelectTab6>(&mut specs, "secondary-6");
-    push_global::<SelectTab7>(&mut specs, "secondary-7");
-    push_global::<SelectTab8>(&mut specs, "secondary-8");
-    push_global::<SelectTab9>(&mut specs, "secondary-9");
     push_global::<ToggleAgentPanel>(&mut specs, &kb.toggle_agent);
     push_global::<CloseTab>(&mut specs, &kb.close_tab);
     push_global::<ClosePane>(&mut specs, &kb.close_pane);
@@ -1340,6 +1360,43 @@ fn binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
     push_global::<TogglePaneScopePicker>(&mut specs, &kb.toggle_pane_scope);
     push_global::<ToggleLeftPanel>(&mut specs, &kb.toggle_vertical_tabs);
     push_global::<CollapseSidebar>(&mut specs, &kb.collapse_sidebar);
+
+    specs
+}
+
+fn fixed_app_binding_specs() -> Vec<BindingSpec> {
+    let mut specs = Vec::new();
+
+    push_global::<NextTab>(&mut specs, "secondary-shift-]");
+    push_global::<PreviousTab>(&mut specs, "secondary-shift-[");
+    push_global::<SelectTab1>(&mut specs, "secondary-1");
+    push_global::<SelectTab2>(&mut specs, "secondary-2");
+    push_global::<SelectTab3>(&mut specs, "secondary-3");
+    push_global::<SelectTab4>(&mut specs, "secondary-4");
+    push_global::<SelectTab5>(&mut specs, "secondary-5");
+    push_global::<SelectTab6>(&mut specs, "secondary-6");
+    push_global::<SelectTab7>(&mut specs, "secondary-7");
+    push_global::<SelectTab8>(&mut specs, "secondary-8");
+    push_global::<SelectTab9>(&mut specs, "secondary-9");
+
+    #[cfg(target_os = "macos")]
+    {
+        push_global::<HideApp>(&mut specs, "cmd-h");
+        push_global::<HideOtherApps>(&mut specs, "cmd-alt-h");
+        push_global::<ShowAllApps>(&mut specs, "cmd-alt-shift-h");
+        push_global::<NextWindow>(&mut specs, "cmd-`");
+        push_global::<NextWindow>(&mut specs, "cmd->");
+        push_global::<PreviousWindow>(&mut specs, "cmd-shift-`");
+        push_global::<PreviousWindow>(&mut specs, "cmd-~");
+        push_global::<PreviousWindow>(&mut specs, "cmd-<");
+        push_global::<Minimize>(&mut specs, "cmd-m");
+    }
+
+    specs
+}
+
+fn editor_binding_specs() -> Vec<BindingSpec> {
+    let mut specs = Vec::new();
 
     // Editor-only editing shortcuts must not bind to Global/ConWorkspace/Input,
     // otherwise terminal input such as Enter can be intercepted.
@@ -1370,6 +1427,13 @@ fn binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
     specs
 }
 
+fn binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
+    let mut specs = configurable_app_binding_specs(kb);
+    specs.extend(fixed_app_binding_specs());
+    specs.extend(editor_binding_specs());
+    specs
+}
+
 fn bind_specs(cx: &mut App, specs: Vec<BindingSpec>) {
     cx.bind_keys(
         specs
@@ -1381,25 +1445,74 @@ fn bind_specs(cx: &mut App, specs: Vec<BindingSpec>) {
 
 pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
     bind_specs(cx, binding_specs(kb));
-    bind_macos_system_keybindings(cx);
 }
 
-#[cfg(target_os = "macos")]
-fn bind_macos_system_keybindings(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("cmd-h", HideApp, None),
-        KeyBinding::new("cmd-alt-h", HideOtherApps, None),
-        KeyBinding::new("cmd-alt-shift-h", ShowAllApps, None),
-        KeyBinding::new("cmd-`", NextWindow, None),
-        KeyBinding::new("cmd->", NextWindow, None),
-        KeyBinding::new("cmd-shift-`", PreviousWindow, None),
-        KeyBinding::new("cmd-~", PreviousWindow, None),
-        KeyBinding::new("cmd-<", PreviousWindow, None),
-    ]);
+pub(crate) fn fixed_app_keybinding_shortcuts() -> Vec<(&'static str, &'static str)> {
+    let mut shortcuts = vec![
+        ("Next Tab", "secondary-shift-]"),
+        ("Previous Tab", "secondary-shift-["),
+        ("Select Tab 1", "secondary-1"),
+        ("Select Tab 2", "secondary-2"),
+        ("Select Tab 3", "secondary-3"),
+        ("Select Tab 4", "secondary-4"),
+        ("Select Tab 5", "secondary-5"),
+        ("Select Tab 6", "secondary-6"),
+        ("Select Tab 7", "secondary-7"),
+        ("Select Tab 8", "secondary-8"),
+        ("Select Tab 9", "secondary-9"),
+    ];
+
+    #[cfg(target_os = "macos")]
+    {
+        shortcuts.extend([
+            ("Hide Con", "cmd-h"),
+            ("Hide Other Apps", "cmd-alt-h"),
+            ("Show All Apps", "cmd-alt-shift-h"),
+            ("Next Window", "cmd-`"),
+            ("Next Window", "cmd->"),
+            ("Previous Window", "cmd-shift-`"),
+            ("Previous Window", "cmd-~"),
+            ("Previous Window", "cmd-<"),
+            ("Minimize Window", "cmd-m"),
+        ]);
+    }
+
+    shortcuts
 }
 
-#[cfg(not(target_os = "macos"))]
-fn bind_macos_system_keybindings(_cx: &mut App) {}
+fn is_fixed_configurable_app_keybinding(key: &str, action_name: &SharedString) -> bool {
+    let Some(key) = con_core::config::canonical_keybinding(key) else {
+        return false;
+    };
+    let fixed_next_tab = con_core::config::canonical_keybinding("secondary-shift-]")
+        .expect("fixed shortcut is valid");
+    let fixed_previous_tab = con_core::config::canonical_keybinding("secondary-shift-[")
+        .expect("fixed shortcut is valid");
+    let next_tab: SharedString = gpui::Action::name(&NextTab).into();
+    let previous_tab: SharedString = gpui::Action::name(&PreviousTab).into();
+
+    (key == fixed_next_tab && action_name == &next_tab)
+        || (key == fixed_previous_tab && action_name == &previous_tab)
+}
+
+fn bind_configurable_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
+    bind_specs(cx, configurable_app_binding_specs(kb));
+}
+
+pub(crate) fn rebind_app_keybindings(cx: &mut App, old: &KeybindingConfig, new: &KeybindingConfig) {
+    let unbinds = configurable_app_binding_specs(old)
+        .into_iter()
+        .filter_map(|spec| {
+            if is_fixed_configurable_app_keybinding(spec.key.as_ref(), &spec.action_name()) {
+                None
+            } else {
+                Some(spec.to_unbind_key_binding())
+            }
+        })
+        .collect::<Vec<_>>();
+    cx.bind_keys(unbinds);
+    bind_configurable_app_keybindings(cx, new);
+}
 
 /// Install a panic hook that writes every panic (including from
 /// background threads) to both stderr and a log file in the platform
@@ -2007,6 +2120,9 @@ fn main() {
         cx.on_action(|_: &PreviousWindow, _cx: &mut App| {
             macos_windowing::cycle_app_window(true);
         });
+        cx.on_action(|_: &Minimize, cx: &mut App| {
+            minimize_frontmost_window(cx);
+        });
         cx.on_action(|_: &NewTab, cx: &mut App| {
             if cx.active_window().is_none() {
                 let config = con_core::Config::load().unwrap_or_default();
@@ -2126,6 +2242,8 @@ fn main() {
             Menu {
                 name: "Window".into(),
                 items: vec![
+                    MenuItem::action("Minimize", Minimize),
+                    MenuItem::separator(),
                     MenuItem::action("Next Window", NextWindow),
                     MenuItem::action("Previous Window", PreviousWindow),
                 ],

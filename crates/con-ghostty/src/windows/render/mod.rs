@@ -57,6 +57,7 @@ pub use super::vt::ThemeColors;
 pub use atlas::CellMetrics;
 
 const ATLAS_SIZE_PX: u32 = 2048;
+const ALTERNATE_SCREEN_BACKGROUND_OPACITY_FLOOR: f32 = 1.0;
 /// Initial instance-buffer capacity. 16 384 covers a 200×80 grid
 /// without reallocation; panes larger than that grow via
 /// `Pipeline::ensure_instance_capacity` in the hot path.
@@ -187,24 +188,32 @@ pub enum RenderOutcome {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Selection {
-    pub anchor: (u16, u16),
-    pub extent: (u16, u16),
+    pub anchor: (u16, u64),
+    pub extent: (u16, u64),
 }
 
 impl Selection {
-    pub fn contains(&self, col: u16, row: u16, cols: u16) -> bool {
-        let to_lin = |p: (u16, u16)| (p.1 as u32) * (cols as u32) + (p.0 as u32);
+    pub fn contains(&self, col: u16, row: u16, cols: u16, viewport_offset: u64) -> bool {
+        let to_lin = |p: (u16, u64)| (p.1 as u128) * (cols as u128) + (p.0 as u128);
         let a = to_lin(self.anchor);
         let b = to_lin(self.extent);
         let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-        let here = to_lin((col, row));
+        let here = to_lin((col, viewport_offset.saturating_add(row as u64)));
         here >= lo && here <= hi
     }
 
     pub fn hash_u64(&self) -> u64 {
-        let a = ((self.anchor.0 as u64) << 16) | (self.anchor.1 as u64);
-        let b = ((self.extent.0 as u64) << 16) | (self.extent.1 as u64);
-        (a << 32) | b
+        let mut hash = 0x9E37_79B9_7F4A_7C15u64;
+        for value in [
+            self.anchor.0 as u64,
+            self.anchor.1,
+            self.extent.0 as u64,
+            self.extent.1,
+        ] {
+            hash ^= value;
+            hash = hash.rotate_left(13).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        }
+        hash
     }
 }
 
@@ -520,7 +529,7 @@ impl Renderer {
             // under GPUI's premultiplied-alpha blend (otherwise
             // translucent pixels look washed out / haloed against the
             // visual beneath).
-            let opacity = config.background_opacity.clamp(0.0, 1.0);
+            let opacity = effective_background_opacity(snapshot, config);
             let clear = [
                 config.clear_color[0] * opacity,
                 config.clear_color[1] * opacity,
@@ -894,7 +903,8 @@ impl Renderer {
         // path injects an `0x......00` value into cell.bg without
         // meaning the sentinel, it would be silently rewritten — keep
         // the producers honest.
-        let opacity_byte: u8 = (config.background_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let background_opacity = effective_background_opacity(snapshot, config);
+        let opacity_byte: u8 = (background_opacity * 255.0).round() as u8;
         let apply_opacity = |bg: u32| -> u32 {
             if (bg & 0xFF) == 0 {
                 (bg & 0xFFFFFF00) | opacity_byte as u32
@@ -920,6 +930,7 @@ impl Renderer {
         } else {
             None
         };
+        let viewport_offset = snapshot.scrollbar.map_or(0, |scrollbar| scrollbar.offset);
         let mut cursor_source: Option<Instance> = None;
         let mut has_wide_glyph = false;
 
@@ -928,7 +939,7 @@ impl Renderer {
             let row = (i / snapshot.cols as usize) as u16;
 
             let in_sel = selection
-                .map(|s| s.contains(col, row, snapshot.cols))
+                .map(|s| s.contains(col, row, snapshot.cols, viewport_offset))
                 .unwrap_or(false);
             let effective_attrs = if in_sel {
                 cell.attrs ^ 0x10
@@ -943,7 +954,9 @@ impl Renderer {
             // cells when it would be pixel-identical to the clear. This
             // preserves explicit SGR backgrounds, selection / inverse,
             // and underline / strike decorations on spaces.
-            if !is_cursor_cell && is_default_blank_cell(cell, effective_attrs, config) {
+            if !is_cursor_cell
+                && is_default_blank_cell(cell, effective_attrs, config, background_opacity)
+            {
                 continue;
             }
 
@@ -1165,7 +1178,26 @@ fn log_render_profile(
     );
 }
 
-fn is_default_blank_cell(cell: &Cell, effective_attrs: u8, config: &RendererConfig) -> bool {
+fn effective_background_opacity(snapshot: &ScreenSnapshot, config: &RendererConfig) -> f32 {
+    let opacity = config.background_opacity.clamp(0.0, 1.0);
+    // Full-screen TUIs use the terminal default background as their
+    // application canvas. Match Windows Terminal/Ghostty behavior
+    // here: ordinary shells keep the configured glass level, but
+    // alternate-screen apps paint a solid canvas. If the user
+    // explicitly sets the terminal to fully transparent, respect that.
+    if snapshot.alternate_screen && opacity > f32::EPSILON {
+        opacity.max(ALTERNATE_SCREEN_BACKGROUND_OPACITY_FLOOR)
+    } else {
+        opacity
+    }
+}
+
+fn is_default_blank_cell(
+    cell: &Cell,
+    effective_attrs: u8,
+    config: &RendererConfig,
+    background_opacity: f32,
+) -> bool {
     let is_blank = cell.codepoint == 0 || cell.codepoint == 0x20;
     if !is_blank {
         return false;
@@ -1184,8 +1216,7 @@ fn is_default_blank_cell(cell: &Cell, effective_attrs: u8, config: &RendererConf
         return false;
     }
 
-    let opacity = config.background_opacity.clamp(0.0, 1.0);
-    if opacity <= f32::EPSILON {
+    if background_opacity <= f32::EPSILON {
         return true;
     }
 

@@ -85,6 +85,58 @@ Linux is in preview. Follow the
 [Linux tracker](https://github.com/nowledge-co/con-terminal/issues/18) for
 current limits and fixes.
 
+## Shell integration
+
+con embeds Ghostty's shell-integration scripts and tries to auto-inject them
+into the shells it spawns. Most users will never notice: Ghostty handles this
+through `ZDOTDIR` for zsh, `XDG_DATA_DIRS` for fish, and `--rcfile` for bash.
+
+Auto-injection can be skipped, though, when something else owns the shell
+startup path: tmux, `exec zsh`, login-shell mode, a framework that resets
+`ZDOTDIR`, and similar setups. When that happens, con still works as a
+terminal, but it loses shell metadata: new panes may open at `$HOME`, the
+sidebar may miss the foreground process or cwd, and AI tab labels have less
+context.
+
+You can check whether integration loaded in a fresh con tab:
+
+- zsh: `echo $precmd_functions | grep _ghostty_precmd`
+- bash: `declare -F | grep __ghostty_precmd`
+- fish: `functions -a | grep __ghostty_mark_prompt_start`
+
+If the command prints nothing, source the integration script explicitly. Add
+the line for your shell to its startup file, save it, and open a new tab:
+
+**zsh** (`~/.zshrc`):
+
+```zsh
+[[ -n $GHOSTTY_RESOURCES_DIR ]] && \
+  source "$GHOSTTY_RESOURCES_DIR/shell-integration/zsh/ghostty-integration"
+```
+
+**bash** (`~/.bashrc`):
+
+```bash
+if [[ -n "$GHOSTTY_RESOURCES_DIR" ]]; then
+  builtin source "$GHOSTTY_RESOURCES_DIR/shell-integration/bash/ghostty.bash"
+fi
+```
+
+If you run bash as a login shell, put the same snippet in `~/.bash_profile` or
+`~/.profile`, or make that file source `~/.bashrc`. Login bash does not always
+read `~/.bashrc` on its own.
+
+**fish** (`~/.config/fish/config.fish`):
+
+```fish
+if set -q GHOSTTY_RESOURCES_DIR; and string length -q -- "$GHOSTTY_RESOURCES_DIR"
+    source "$GHOSTTY_RESOURCES_DIR/shell-integration/fish/vendor_conf.d/ghostty-shell-integration.fish"
+end
+```
+
+`$GHOSTTY_RESOURCES_DIR` resolves correctly under both the installed app
+bundle and a `cargo run` debug build, so the same line works in either.
+
 ## Build from source
 
 If you want to build or change con itself, use the

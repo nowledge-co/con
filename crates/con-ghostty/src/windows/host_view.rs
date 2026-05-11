@@ -42,6 +42,7 @@ pub struct RenderSession {
     vt: Arc<VtScreen>,
     transcript: Arc<Mutex<TranscriptBuffer>>,
     conpty: Arc<ConPty>,
+    shell_cwd: Option<PathBuf>,
     config: Mutex<RendererConfig>,
     base_font_size_px: f32,
     dpi: AtomicU32,
@@ -65,7 +66,7 @@ pub struct RenderSession {
     /// so fractional deltas accumulate here instead of turning every
     /// tiny touchpad event into a full-row jump.
     scroll_remainder: Mutex<ScrollRemainder>,
-    drag_anchor: Mutex<Option<(u16, u16)>>,
+    drag_anchor: Mutex<Option<(u16, u64)>>,
 }
 
 unsafe impl Send for RenderSession {}
@@ -202,6 +203,7 @@ impl RenderSession {
             vt,
             transcript,
             conpty,
+            shell_cwd,
             config: Mutex::new(renderer_config),
             base_font_size_px,
             dpi: AtomicU32::new(current_dpi),
@@ -390,6 +392,7 @@ impl RenderSession {
     /// Send UTF-8 text to the child shell. Handles the ConPTY Enter
     /// quirk (shell expects CR, not LF).
     pub fn write_input(&self, text: &str) {
+        self.scroll_viewport_to_bottom();
         self.request_low_latency_after_next_generation();
         let bytes: std::borrow::Cow<[u8]> = if text.as_bytes().contains(&b'\n') {
             std::borrow::Cow::Owned(text.replace('\n', "\r").into_bytes())
@@ -402,6 +405,7 @@ impl RenderSession {
     /// Raw PTY write — no CR/LF normalization. Used for bracketed-paste
     /// wrappers (ESC [200~ / ESC [201~) whose bytes mustn't be touched.
     pub fn write_pty_raw(&self, data: &[u8]) {
+        self.scroll_viewport_to_bottom();
         self.request_low_latency_after_next_generation();
         let _ = self.conpty.write(data);
     }
@@ -426,20 +430,21 @@ impl RenderSession {
             return;
         }
         self.request_low_latency_present();
+        let point = self.selection_point(col, row);
         if mods.shift {
             let renderer = self.renderer.lock();
-            let existing_anchor = renderer.selection().map(|s| s.anchor).unwrap_or((col, row));
+            let existing_anchor = renderer.selection().map(|s| s.anchor).unwrap_or(point);
             *self.drag_anchor.lock() = Some(existing_anchor);
             renderer.set_selection(Some(Selection {
                 anchor: existing_anchor,
-                extent: (col, row),
+                extent: point,
             }));
             return;
         }
-        *self.drag_anchor.lock() = Some((col, row));
+        *self.drag_anchor.lock() = Some(point);
         self.renderer.lock().set_selection(Some(Selection {
-            anchor: (col, row),
-            extent: (col, row),
+            anchor: point,
+            extent: point,
         }));
     }
 
@@ -460,7 +465,7 @@ impl RenderSession {
         if let Some(anchor) = anchor {
             self.renderer.lock().set_selection(Some(Selection {
                 anchor,
-                extent: (col, row),
+                extent: self.selection_point(col, row),
             }));
         }
     }
@@ -480,10 +485,15 @@ impl RenderSession {
         self.request_low_latency_present();
         let anchor = self.drag_anchor.lock().take();
         if let Some(anchor) = anchor
-            && anchor == (col, row)
+            && anchor == self.selection_point(col, row)
         {
             self.renderer.lock().set_selection(None);
         }
+    }
+
+    fn selection_point(&self, col: u16, row: u16) -> (u16, u64) {
+        let viewport_offset = self.vt.scrollbar().map_or(0, |scrollbar| scrollbar.offset);
+        (col, viewport_offset.saturating_add(row as u64))
     }
 
     fn report_sgr_button(
@@ -594,6 +604,14 @@ impl RenderSession {
         }
     }
 
+    /// Return the viewport to the prompt before writing user input.
+    pub fn scroll_viewport_to_bottom(&self) {
+        self.scroll_remainder.lock().reset();
+        if self.vt.scroll_viewport_bottom() {
+            self.request_low_latency_present();
+        }
+    }
+
     /// Snap to a scrollbar offset and forward the resulting libghostty-vt
     /// signed delta through `scroll_viewport_rows`.
     ///
@@ -647,7 +665,11 @@ impl RenderSession {
     }
 
     pub fn current_dir(&self) -> Option<String> {
-        self.vt.current_dir()
+        self.vt.current_dir().or_else(|| {
+            self.shell_cwd
+                .as_ref()
+                .map(|cwd| cwd.to_string_lossy().to_string())
+        })
     }
 
     pub fn read_recent_lines(&self, max_lines: usize) -> Vec<String> {
@@ -753,6 +775,7 @@ fn extract_selection_text(snapshot: &ScreenSnapshot, sel: Selection) -> String {
     if cols == 0 || snapshot.cells.is_empty() {
         return String::new();
     }
+    let viewport_offset = snapshot.scrollbar.map_or(0, |scrollbar| scrollbar.offset);
     let mut out = String::new();
     let rows = snapshot.rows;
     for row in 0..rows {
@@ -760,7 +783,7 @@ fn extract_selection_text(snapshot: &ScreenSnapshot, sel: Selection) -> String {
         let mut row_has_cell = false;
         let mut last_non_blank: i32 = -1;
         for col in 0..cols {
-            if !sel.contains(col, row, cols) {
+            if !sel.contains(col, row, cols, viewport_offset) {
                 continue;
             }
             row_has_cell = true;

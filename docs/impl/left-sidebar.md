@@ -20,9 +20,6 @@ switch between sidebar features.
 
 `ActivitySlot::Search` renders `SidebarSearchView`.
 
-`ActivitySlot::Tabs` is legacy-only and maps to file explorer content when old
-session data restores it.
-
 ## Toggle Rules
 
 - `Cmd+B` dispatches `ToggleLeftPanel`.

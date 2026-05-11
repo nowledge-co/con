@@ -1,6 +1,10 @@
 use super::*;
 
 impl ConWorkspace {
+    pub(super) fn minimize(&mut self, _: &Minimize, window: &mut Window, _cx: &mut Context<Self>) {
+        window.minimize_window();
+    }
+
     pub(super) fn quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_all_sessions();
         self.flush_session_save(cx);
@@ -126,13 +130,13 @@ impl ConWorkspace {
                 panel.toggle(window, cx);
             });
         }
+        // The action keeps its historic "toggle" name for keymap
+        // compatibility, but keyboard invocation is intentionally idempotent:
+        // repeated key-down events while modifiers are held should focus the
+        // palette, not close it and strand focus.
         self.command_palette.update(cx, |palette, cx| {
-            palette.toggle(window, cx);
+            palette.show(window, cx);
         });
-        // Restore terminal focus if palette just closed
-        if !self.is_modal_open(cx) {
-            self.focus_terminal(window, cx);
-        }
         cx.notify();
     }
 
@@ -276,6 +280,23 @@ impl ConWorkspace {
     pub(super) fn is_modal_open(&self, cx: &App) -> bool {
         self.settings_panel.read(cx).is_overlay_visible()
             || self.command_palette.read(cx).is_visible()
+    }
+
+    pub(super) fn new_window(
+        &mut self,
+        _: &crate::NewWindow,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = self
+            .has_active_tab()
+            .then(|| self.active_terminal().current_dir(cx))
+            .flatten();
+        let config = con_core::Config::load().unwrap_or_default();
+        let session = crate::fresh_window_session_with_history_for_cwd(
+            cwd.as_deref().map(std::path::PathBuf::from),
+        );
+        crate::open_con_window(config, session, false, cx);
     }
 
     pub(super) fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {

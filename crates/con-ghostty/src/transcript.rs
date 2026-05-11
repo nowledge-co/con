@@ -274,6 +274,8 @@ mod tests {
             cells,
             dirty_rows: vec![0, 1],
             cursor: Cursor::default(),
+            alternate_screen: false,
+            scrollbar: None,
             title: None,
             generation: 1,
         };

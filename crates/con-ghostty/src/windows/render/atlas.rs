@@ -32,8 +32,9 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_METRICS, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC,
-    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL,
-    DWRITE_GLYPH_METRICS, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PIXEL_GEOMETRY_FLAT,
+    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_BOLD,
+    DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_METRICS,
+    DWRITE_LINE_METRICS, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PIXEL_GEOMETRY_FLAT,
     DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC, IDWriteFactory, IDWriteFontCollection,
     IDWriteFontFace, IDWriteFontFallback, IDWriteRenderingParams, IDWriteTextFormat,
     IDWriteTextFormat1,
@@ -42,6 +43,9 @@ use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SA
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
 use windows::core::Interface;
 use windows_numerics::Matrix3x2;
+
+const TEXT_ENHANCED_CONTRAST: f32 = 1.15;
+const CJK_TEXT_ENHANCED_CONTRAST: f32 = 1.45;
 
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)] // offset_x/offset_y are wired in Phase 3b-2 (glyph bearing).
@@ -84,6 +88,44 @@ pub struct CellMetrics {
     pub baseline_px: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct TextFormatBaselines {
+    regular: f32,
+    bold: f32,
+    italic: f32,
+    bold_italic: f32,
+}
+
+impl TextFormatBaselines {
+    fn measure(
+        dwrite: &IDWriteFactory,
+        fallback_baseline: f32,
+        regular: &IDWriteTextFormat,
+        bold: &IDWriteTextFormat,
+        italic: &IDWriteTextFormat,
+        bold_italic: &IDWriteTextFormat,
+    ) -> Self {
+        let baseline = |format: &IDWriteTextFormat| {
+            text_layout_baseline(dwrite, format, &[b'M' as u16]).unwrap_or(fallback_baseline)
+        };
+        Self {
+            regular: baseline(regular),
+            bold: baseline(bold),
+            italic: baseline(italic),
+            bold_italic: baseline(bold_italic),
+        }
+    }
+
+    fn for_style(self, bold: bool, italic: bool) -> f32 {
+        match (bold, italic) {
+            (true, true) => self.bold_italic,
+            (true, false) => self.bold,
+            (false, true) => self.italic,
+            (false, false) => self.regular,
+        }
+    }
+}
+
 pub struct GlyphCache {
     device: ID3D11Device,
     _context: ID3D11DeviceContext,
@@ -104,6 +146,8 @@ pub struct GlyphCache {
     _atlas_texture: ID3D11Texture2D,
     atlas_srv: ID3D11ShaderResourceView,
     d2d_rt: ID2D1RenderTarget,
+    text_rendering_params: Option<IDWriteRenderingParams>,
+    cjk_text_rendering_params: Option<IDWriteRenderingParams>,
     white_brush: ID2D1SolidColorBrush,
     /// Opaque-black brush. Used to clear each slot before `DrawText` so
     /// any stale pixels — from a neighbouring scaled-PUA glyph that bled
@@ -119,6 +163,8 @@ pub struct GlyphCache {
     text_format_bold: IDWriteTextFormat,
     text_format_italic: IDWriteTextFormat,
     text_format_bold_italic: IDWriteTextFormat,
+    text_format_cjk_regular: IDWriteTextFormat,
+    text_format_cjk_italic: IDWriteTextFormat,
 
     /// Regular-weight face of the primary family, kept around so we can
     /// query per-glyph design metrics at rasterize time and scale wide
@@ -132,6 +178,7 @@ pub struct GlyphCache {
     primary_upm: f32,
 
     metrics: CellMetrics,
+    layout_baselines: TextFormatBaselines,
     font_size_px: f32,
     font_family: String,
 }
@@ -198,8 +245,34 @@ impl GlyphCache {
             true,
             true,
         )?;
+        let text_format_cjk_regular = make_text_format_with_weight(
+            dwrite,
+            text_collection,
+            font_fallback.as_ref(),
+            &resolved_family,
+            font_size_px,
+            DWRITE_FONT_WEIGHT_MEDIUM,
+            false,
+        )?;
+        let text_format_cjk_italic = make_text_format_with_weight(
+            dwrite,
+            text_collection,
+            font_fallback.as_ref(),
+            &resolved_family,
+            font_size_px,
+            DWRITE_FONT_WEIGHT_MEDIUM,
+            true,
+        )?;
 
         let metrics = measure_cell(dwrite, text_collection, &resolved_family, font_size_px)?;
+        let layout_baselines = TextFormatBaselines::measure(
+            dwrite,
+            metrics.baseline_px as f32,
+            &text_format_regular,
+            &text_format_bold,
+            &text_format_italic,
+            &text_format_bold_italic,
+        );
 
         // Resolve a face for per-glyph design-metrics lookups. The face
         // comes from the same collection `measure_cell` walked, so
@@ -305,26 +378,25 @@ impl GlyphCache {
         // coverage in our offscreen atlas. A mild contrast bump offsets
         // the perceived weight loss from dropping ClearType.
         //
+        // CJK fallback glyphs need a separate, stronger grayscale
+        // contrast. The user-visible complaint in #78 was not Latin
+        // weight after the RGB-fringe fix; it was CJK strokes looking
+        // too thin. Keep Latin / PUA conservative and only switch to
+        // the heavier params for wide fallback glyph rasterization.
+        //
         // If CreateCustomRenderingParams fails (very rare — it's a pure
         // parameter validator) we leave the default params in place.
-        // SAFETY: constants are valid for IDWriteFactory.
-        let custom_params: Option<IDWriteRenderingParams> = unsafe {
-            dwrite
-                .CreateCustomRenderingParams(
-                    1.8, // gamma
-                    0.8, // enhanced contrast
-                    0.0, // ClearType level; zero means no RGB subpixel coverage
-                    DWRITE_PIXEL_GEOMETRY_FLAT,
-                    DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
-                )
-                .ok()
-        };
+        let text_rendering_params = custom_text_rendering_params(dwrite, TEXT_ENHANCED_CONTRAST);
+        let cjk_text_rendering_params = text_rendering_params
+            .is_some()
+            .then(|| custom_text_rendering_params(dwrite, CJK_TEXT_ENHANCED_CONTRAST))
+            .flatten();
         // SAFETY: grayscale AA. Setting the mode is cheap; if a driver
         // clamps it, the shader still collapses coverage to one scalar
         // so colored subpixel fringe cannot escape to the final frame.
         unsafe {
             d2d_rt.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
-            if let Some(params) = custom_params.as_ref() {
+            if let Some(params) = text_rendering_params.as_ref() {
                 d2d_rt.SetTextRenderingParams(params);
             }
         }
@@ -380,6 +452,8 @@ impl GlyphCache {
             _atlas_texture: atlas_texture,
             atlas_srv,
             d2d_rt,
+            text_rendering_params,
+            cjk_text_rendering_params,
             white_brush,
             black_brush,
             allocator,
@@ -388,9 +462,12 @@ impl GlyphCache {
             text_format_bold,
             text_format_italic,
             text_format_bold_italic,
+            text_format_cjk_regular,
+            text_format_cjk_italic,
             primary_face,
             primary_upm,
             metrics,
+            layout_baselines,
             font_size_px,
             // Store the RESOLVED family and collection — downstream
             // rebuilds must use the same source to keep metrics and
@@ -447,6 +524,7 @@ impl GlyphCache {
         let is_scalable_pua =
             matches!(codepoint, 0xE000..=0xF8FF) && !matches!(codepoint, 0xE0A0..=0xE0D4);
         let is_wide_text = is_wide_codepoint(codepoint);
+        let is_cjk_text = is_cjk_codepoint(codepoint);
         let metrics = if is_scalable_pua {
             self.primary_glyph_metrics_px(codepoint)
         } else {
@@ -495,12 +573,22 @@ impl GlyphCache {
         let mut utf16 = [0u16; 2];
         let utf16_slice = ch.encode_utf16(&mut utf16);
 
-        let format = match (key.bold, key.italic) {
+        let base_format = match (key.bold, key.italic) {
             (true, true) => &self.text_format_bold_italic,
             (true, false) => &self.text_format_bold,
             (false, true) => &self.text_format_italic,
             (false, false) => &self.text_format_regular,
         };
+        let format = if is_cjk_text && !key.bold {
+            if key.italic {
+                &self.text_format_cjk_italic
+            } else {
+                &self.text_format_cjk_regular
+            }
+        } else {
+            base_format
+        };
+        let target_baseline = self.layout_baselines.for_style(key.bold, key.italic);
 
         let slot_rect = D2D_RECT_F {
             left: rect.min.x as f32,
@@ -612,14 +700,33 @@ impl GlyphCache {
                 // clips or visually narrows the fallback font, then the
                 // second spacer cell makes the text look like it has
                 // inserted spaces.
+                //
+                // DrawText lays this one codepoint as an isolated line.
+                // Fallback CJK fonts do not necessarily share the primary
+                // terminal face's baseline, so top-aligning the layout rect
+                // lets glyphs drift vertically between characters and
+                // fallback faces. Anchor the isolated layout's baseline back
+                // to the terminal cell baseline before clipping to the slot.
+                let layout = self.baseline_aligned_layout_rect(
+                    slot_rect,
+                    format,
+                    utf16_slice,
+                    target_baseline,
+                );
+                if is_cjk_text && let Some(params) = self.cjk_text_rendering_params.as_ref() {
+                    self.d2d_rt.SetTextRenderingParams(params);
+                }
                 self.d2d_rt.DrawText(
                     utf16_slice,
                     format,
-                    &slot_rect,
+                    &layout,
                     &self.white_brush,
                     D2D1_DRAW_TEXT_OPTIONS_NONE,
                     DWRITE_MEASURING_MODE_NATURAL,
                 );
+                if is_cjk_text && let Some(params) = self.text_rendering_params.as_ref() {
+                    self.d2d_rt.SetTextRenderingParams(params);
+                }
             } else {
                 self.d2d_rt.DrawText(
                     utf16_slice,
@@ -644,6 +751,25 @@ impl GlyphCache {
         };
         self.entries.insert(key, (alloc.id, glyph_rect));
         Some(glyph_rect)
+    }
+
+    fn baseline_aligned_layout_rect(
+        &self,
+        slot_rect: D2D_RECT_F,
+        format: &IDWriteTextFormat,
+        utf16: &[u16],
+        target_baseline: f32,
+    ) -> D2D_RECT_F {
+        let Some(layout_baseline) = text_layout_baseline(&self.dwrite, format, utf16) else {
+            return slot_rect;
+        };
+        let shift = target_baseline - layout_baseline;
+        D2D_RECT_F {
+            left: slot_rect.left,
+            top: slot_rect.top + shift,
+            right: slot_rect.right,
+            bottom: slot_rect.bottom + shift,
+        }
     }
 
     /// Glyph metrics in physical pixels for `codepoint` in the primary
@@ -747,12 +873,38 @@ impl GlyphCache {
             true,
             true,
         )?;
+        self.text_format_cjk_regular = make_text_format_with_weight(
+            &self.dwrite,
+            self.font_collection.as_ref(),
+            self.font_fallback.as_ref(),
+            &self.font_family,
+            font_size_px,
+            DWRITE_FONT_WEIGHT_MEDIUM,
+            false,
+        )?;
+        self.text_format_cjk_italic = make_text_format_with_weight(
+            &self.dwrite,
+            self.font_collection.as_ref(),
+            self.font_fallback.as_ref(),
+            &self.font_family,
+            font_size_px,
+            DWRITE_FONT_WEIGHT_MEDIUM,
+            true,
+        )?;
         self.metrics = measure_cell(
             &self.dwrite,
             self.font_collection.as_ref(),
             &self.font_family,
             font_size_px,
         )?;
+        self.layout_baselines = TextFormatBaselines::measure(
+            &self.dwrite,
+            self.metrics.baseline_px as f32,
+            &self.text_format_regular,
+            &self.text_format_bold,
+            &self.text_format_italic,
+            &self.text_format_bold_italic,
+        );
         // Refresh the primary face + upm so per-glyph scale-to-fit
         // works after a font-size change (the face itself doesn't
         // depend on size, but re-resolving keeps the field in lockstep
@@ -814,14 +966,28 @@ fn make_text_format(
     bold: bool,
     italic: bool,
 ) -> Result<IDWriteTextFormat> {
-    let family_w: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
-    let locale_w: Vec<u16> = "en-us".encode_utf16().chain(std::iter::once(0)).collect();
-
     let weight = if bold {
         DWRITE_FONT_WEIGHT_BOLD
     } else {
         DWRITE_FONT_WEIGHT_NORMAL
     };
+    make_text_format_with_weight(
+        dwrite, collection, fallback, family, size_px, weight, italic,
+    )
+}
+
+fn make_text_format_with_weight(
+    dwrite: &IDWriteFactory,
+    collection: Option<&IDWriteFontCollection>,
+    fallback: Option<&IDWriteFontFallback>,
+    family: &str,
+    size_px: f32,
+    weight: DWRITE_FONT_WEIGHT,
+    italic: bool,
+) -> Result<IDWriteTextFormat> {
+    let family_w: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+    let locale_w: Vec<u16> = "en-us".encode_utf16().chain(std::iter::once(0)).collect();
+
     let style = if italic {
         DWRITE_FONT_STYLE_ITALIC
     } else {
@@ -863,6 +1029,55 @@ fn make_text_format(
     }
 
     Ok(format)
+}
+
+fn custom_text_rendering_params(
+    dwrite: &IDWriteFactory,
+    enhanced_contrast: f32,
+) -> Option<IDWriteRenderingParams> {
+    // SAFETY: constants are valid for IDWriteFactory. ClearType level
+    // stays zero because this atlas is sampled and composited by our
+    // own shader; RGB subpixel coverage would survive screenshots and
+    // remote displays as colored fringe.
+    unsafe {
+        dwrite
+            .CreateCustomRenderingParams(
+                1.8,
+                enhanced_contrast,
+                0.0,
+                DWRITE_PIXEL_GEOMETRY_FLAT,
+                DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
+            )
+            .ok()
+    }
+}
+
+fn text_layout_baseline(
+    dwrite: &IDWriteFactory,
+    format: &IDWriteTextFormat,
+    utf16: &[u16],
+) -> Option<f32> {
+    if utf16.is_empty() {
+        return None;
+    }
+    // SAFETY: `utf16` lives for the call; DirectWrite copies the text into
+    // the layout object. Infinite bounds mirror GPUI/Zed's Windows text
+    // layout path and avoid wrapping a single glyph.
+    let layout = unsafe {
+        dwrite
+            .CreateTextLayout(utf16, format, f32::INFINITY, f32::INFINITY)
+            .ok()?
+    };
+    let mut line_metrics = [DWRITE_LINE_METRICS::default(); 1];
+    let mut line_count = 0u32;
+    // SAFETY: output buffer contains one slot; a one-glyph layout has at
+    // most one line. If DirectWrite reports no line, caller falls back.
+    unsafe {
+        layout
+            .GetLineMetrics(Some(&mut line_metrics), &mut line_count)
+            .ok()?;
+    }
+    (line_count > 0).then_some(line_metrics[0].baseline)
 }
 
 fn measure_cell(
@@ -1148,9 +1363,35 @@ fn is_wide_codepoint(codepoint: u32) -> bool {
         .is_some_and(|width| width >= 2)
 }
 
+fn is_cjk_codepoint(codepoint: u32) -> bool {
+    matches!(
+        codepoint,
+        // Hangul Jamo.
+        0x1100..=0x11FF
+            // CJK radicals, Kangxi radicals, ideographic description chars.
+            | 0x2E80..=0x2FFF
+            // CJK punctuation, Hiragana, Katakana, Bopomofo, Hangul compatibility.
+            | 0x3000..=0x318F
+            // CJK strokes, Katakana extensions, enclosed CJK.
+            | 0x31C0..=0x32FF
+            // CJK Unified Ideographs Extension A + Unified Ideographs.
+            | 0x3400..=0x9FFF
+            // Hangul syllables.
+            | 0xAC00..=0xD7AF
+            // CJK compatibility ideographs.
+            | 0xF900..=0xFAFF
+            // Kana Supplement / Extended, Small Kana, Nushu.
+            | 0x1AFF0..=0x1B16F
+            // Ideographic symbols and Tangut/Nushu-era East Asian wide scripts.
+            | 0x16FE0..=0x18D8F
+            // CJK Extension B and later assigned extension planes.
+            | 0x20000..=0x323AF
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::is_wide_codepoint;
+    use super::{is_cjk_codepoint, is_wide_codepoint};
 
     #[test]
     fn wide_codepoint_uses_unicode_width_instead_of_local_ranges() {
@@ -1173,5 +1414,23 @@ mod tests {
         // Ambiguous-width punctuation should stay one cell unless the
         // terminal layer explicitly gains a CJK-ambiguous-width mode.
         assert!(!is_wide_codepoint(0x00B7));
+    }
+
+    #[test]
+    fn cjk_codepoint_detection_is_limited_to_east_asian_text() {
+        for codepoint in [
+            0x4E00,  // CJK Unified Ideograph
+            0x3002,  // Ideographic full stop
+            0x3042,  // Hiragana
+            0x30A2,  // Katakana
+            0x3105,  // Bopomofo
+            0xAC00,  // Hangul syllable
+            0x20000, // CJK Unified Ideographs Extension B
+        ] {
+            assert!(is_cjk_codepoint(codepoint), "U+{codepoint:04X}");
+        }
+
+        assert!(!is_cjk_codepoint('A' as u32));
+        assert!(!is_cjk_codepoint(0xE0B0)); // Powerline glyph; keep prompt icons untouched.
     }
 }

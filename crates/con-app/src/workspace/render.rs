@@ -306,6 +306,14 @@ impl Render for ConWorkspace {
         #[cfg(target_os = "macos")]
         let (sidebar_snap_guard_active, sidebar_snap_guard_expired) =
             Self::snap_guard_state(&mut self.sidebar_snap_guard_until, window);
+        #[cfg(not(target_os = "macos"))]
+        let agent_panel_snap_guard_active = false;
+        #[cfg(not(target_os = "macos"))]
+        let input_bar_snap_guard_active = false;
+        #[cfg(not(target_os = "macos"))]
+        let top_chrome_snap_guard_active = false;
+        #[cfg(not(target_os = "macos"))]
+        let sidebar_snap_guard_active = false;
         #[cfg(target_os = "macos")]
         {
             let release_cover = Duration::from_millis(CHROME_RELEASE_COVER_MS);
@@ -337,6 +345,12 @@ impl Render for ConWorkspace {
         #[cfg(target_os = "macos")]
         let sidebar_release_cover_active =
             Self::snap_guard_active(&mut self.sidebar_release_cover_until, window);
+        #[cfg(not(target_os = "macos"))]
+        let agent_panel_release_cover_active = false;
+        #[cfg(not(target_os = "macos"))]
+        let input_bar_release_cover_active = false;
+        #[cfg(not(target_os = "macos"))]
+        let top_chrome_release_cover_active = false;
         #[cfg(target_os = "macos")]
         if !sidebar_snap_guard_active && !sidebar_release_cover_active {
             self.sidebar_snap_guard_width = 0.0;
@@ -382,7 +396,6 @@ impl Render for ConWorkspace {
             .min(max_agent_panel_width(window_width));
         #[cfg(not(target_os = "macos"))]
         let animated_panel_width = effective_agent_panel_width * agent_panel_progress;
-        #[cfg(target_os = "macos")]
         let agent_panel_reserved_for_layout =
             self.agent_panel_open || agent_panel_progress > 0.01 || agent_panel_snap_guard_active;
         #[cfg(target_os = "macos")]
@@ -394,6 +407,8 @@ impl Render for ConWorkspace {
         #[cfg(not(target_os = "macos"))]
         let agent_panel_outer_width = if agent_panel_progress > 0.01 {
             animated_panel_width + 1.0
+        } else if agent_panel_reserved_for_layout {
+            effective_agent_panel_width + 1.0
         } else {
             0.0
         };
@@ -415,9 +430,7 @@ impl Render for ConWorkspace {
             .clamp(0.0, 1.0)
             .powf(0.92);
         let compact_titlebar_progress = 1.0 - tab_strip_progress;
-        #[cfg(target_os = "macos")]
         let terminal_background = self.terminal_theme.background;
-        #[cfg(target_os = "macos")]
         let terminal_surface_color: Hsla = Rgba {
             r: f32::from(terminal_background.r) / 255.0,
             g: f32::from(terminal_background.g) / 255.0,
@@ -429,18 +442,12 @@ impl Render for ConWorkspace {
             a: 1.0,
         }
         .into();
-        #[cfg(target_os = "macos")]
+        let portable_terminal_backdrop_color =
+            terminal_surface_color.opacity(self.terminal_opacity);
         let chrome_transition_seam_color = terminal_surface_color;
-        #[cfg(not(target_os = "macos"))]
-        let chrome_transition_seam_color = theme.background.opacity(elevated_ui_surface_opacity);
-        #[cfg(target_os = "macos")]
-        let chrome_static_seam_color = terminal_surface_color;
-        #[cfg(not(target_os = "macos"))]
-        let chrome_static_seam_color = theme.title_bar_border;
-        #[cfg(target_os = "macos")]
+        let chrome_static_seam_color =
+            terminal_separator_over_backdrop(terminal_surface_color, theme);
         let pane_divider_color = terminal_separator_over_backdrop(terminal_surface_color, theme);
-        #[cfg(not(target_os = "macos"))]
-        let pane_divider_color = theme.title_bar_border;
         #[cfg(target_os = "macos")]
         let top_bar_surface_color = theme.title_bar.opacity(ui_surface_opacity);
         #[cfg(not(target_os = "macos"))]
@@ -547,6 +554,9 @@ impl Render for ConWorkspace {
             .min_h_0()
             .w_full()
             .overflow_hidden()
+            .when(cfg!(not(target_os = "macos")), |pane_content| {
+                pane_content.bg(portable_terminal_backdrop_color)
+            })
             .child(pane_tree_rendered)
             .on_children_prepainted(move |bounds_list, _, _| {
                 let Some(bounds) = bounds_list.first().copied() else {
@@ -696,11 +706,8 @@ impl Render for ConWorkspace {
             );
         }
 
-        #[cfg(target_os = "macos")]
         let input_bar_reserved_for_layout =
             input_bar_progress > 0.01 || input_bar_snap_guard_active;
-        #[cfg(not(target_os = "macos"))]
-        let input_bar_reserved_for_layout = input_bar_progress > 0.01;
 
         if input_bar_reserved_for_layout {
             let input_bar_height = if input_bar_progress > 0.01 {
@@ -729,14 +736,19 @@ impl Render for ConWorkspace {
             );
         }
 
-        let mut main_area = div().relative().flex().flex_1().min_h_0();
+        let mut main_area = div()
+            .relative()
+            .flex()
+            .flex_1()
+            .min_h_0()
+            .when(cfg!(not(target_os = "macos")), |main_area| {
+                main_area.bg(portable_terminal_backdrop_color)
+            });
 
         // ── Left sidebar: feature rail is always visible; content can collapse.
         let show_left_panel = self.left_panel_open;
         let sidebar_content: AnyElement = match self.activity_slot {
-            ActivitySlot::Files | ActivitySlot::Tabs => {
-                self.file_tree_view.clone().into_any_element()
-            }
+            ActivitySlot::Files => self.file_tree_view.clone().into_any_element(),
             ActivitySlot::Search => self.search_view.clone().into_any_element(),
         };
         let mut left_sidebar = div()
@@ -822,16 +834,17 @@ impl Render for ConWorkspace {
             );
         }
 
-        #[cfg(target_os = "macos")]
         let render_agent_panel = agent_panel_reserved_for_layout;
-        #[cfg(not(target_os = "macos"))]
-        let render_agent_panel = agent_panel_progress > 0.01;
 
         if render_agent_panel {
             #[cfg(target_os = "macos")]
             let panel_width = effective_agent_panel_width + 1.0;
             #[cfg(not(target_os = "macos"))]
-            let panel_width = animated_panel_width + 1.0;
+            let panel_width = if agent_panel_progress > 0.01 {
+                animated_panel_width + 1.0
+            } else {
+                effective_agent_panel_width + 1.0
+            };
             #[cfg(target_os = "macos")]
             let agent_panel_content_opacity =
                 if self.agent_panel_open || agent_panel_progress > 0.01 {
@@ -926,14 +939,11 @@ impl Render for ConWorkspace {
         }
 
         // Top bar — compact titlebar for one tab, full strip for many
-        #[cfg(target_os = "macos")]
         let top_bar_height = if top_chrome_snap_guard_active {
             TOP_BAR_TABS_HEIGHT
         } else {
             self.current_top_bar_height()
         };
-        #[cfg(not(target_os = "macos"))]
-        let top_bar_height = self.current_top_bar_height();
         let top_bar_controls_offset = 1.0 + (3.0 * tab_strip_progress);
 
         let top_bar = self.render_top_bar(
@@ -1160,12 +1170,14 @@ impl Render for ConWorkspace {
                 }),
             )
             .on_action(cx.listener(Self::quit))
+            .on_action(cx.listener(Self::minimize))
             .on_action(cx.listener(Self::toggle_agent_panel))
             .on_action(cx.listener(Self::toggle_input_bar))
             .on_action(cx.listener(Self::toggle_vertical_tabs))
             .on_action(cx.listener(Self::collapse_sidebar))
             .on_action(cx.listener(Self::toggle_settings))
             .on_action(cx.listener(Self::toggle_command_palette))
+            .on_action(cx.listener(Self::new_window))
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(Self::next_tab))
             .on_action(cx.listener(Self::previous_tab))
@@ -1405,7 +1417,6 @@ impl Render for ConWorkspace {
             );
         }
 
-        #[cfg(target_os = "macos")]
         if top_chrome_release_cover_active {
             root = root.child(
                 div()
@@ -1418,7 +1429,6 @@ impl Render for ConWorkspace {
             );
         }
 
-        #[cfg(target_os = "macos")]
         if sidebar_snap_guard_active {
             if self.vertical_tabs_active() {
                 root = root.child(
@@ -1436,19 +1446,34 @@ impl Render for ConWorkspace {
         }
 
         #[cfg(target_os = "macos")]
-        if sidebar_release_cover_active && self.sidebar_release_cover_width > 0.0 {
+        {
+            if sidebar_release_cover_active && self.sidebar_release_cover_width > 0.0 {
+                root = root.child(
+                    div()
+                        .absolute()
+                        .top(px(top_bar_height))
+                        .bottom_0()
+                        .left_0()
+                        .w(px(self.sidebar_release_cover_width))
+                        .bg(chrome_transition_seam_color),
+                );
+            }
+        }
+
+        if self.sidebar_drag.is_some() && vertical_tabs_width > 0.0 {
             root = root.child(
                 div()
                     .absolute()
                     .top(px(top_bar_height))
                     .bottom_0()
-                    .left_0()
-                    .w(px(self.sidebar_release_cover_width))
+                    .left(px(
+                        (vertical_tabs_width - CHROME_MOTION_SEAM_OVERDRAW).max(0.0)
+                    ))
+                    .w(px(CHROME_MOTION_SEAM_OVERDRAW))
                     .bg(chrome_transition_seam_color),
             );
         }
 
-        #[cfg(target_os = "macos")]
         if input_bar_snap_guard_active {
             if self.input_bar_visible {
                 root = root.child(
@@ -1463,7 +1488,6 @@ impl Render for ConWorkspace {
             }
         }
 
-        #[cfg(target_os = "macos")]
         if input_bar_release_cover_active {
             root = root.child(
                 div()
@@ -1476,7 +1500,6 @@ impl Render for ConWorkspace {
             );
         }
 
-        #[cfg(target_os = "macos")]
         if agent_panel_snap_guard_active {
             if self.agent_panel_open {
                 let agent_panel_seam_right = (effective_agent_panel_width
@@ -1494,7 +1517,6 @@ impl Render for ConWorkspace {
             }
         }
 
-        #[cfg(target_os = "macos")]
         if agent_panel_release_cover_active {
             root = root.child(
                 div()
@@ -1503,6 +1525,21 @@ impl Render for ConWorkspace {
                     .bottom_0()
                     .right_0()
                     .w(px(effective_agent_panel_width + 1.0))
+                    .bg(chrome_transition_seam_color),
+            );
+        }
+
+        if self.agent_panel_drag.is_some() && self.agent_panel_open {
+            let agent_panel_seam_right = (effective_agent_panel_width
+                - (CHROME_MOTION_SEAM_OVERDRAW - CHROME_TRANSITION_SEAM_COVER))
+                .max(0.0);
+            root = root.child(
+                div()
+                    .absolute()
+                    .top(px(top_bar_height))
+                    .bottom_0()
+                    .right(px(agent_panel_seam_right))
+                    .w(px(CHROME_MOTION_SEAM_OVERDRAW))
                     .bg(chrome_transition_seam_color),
             );
         }

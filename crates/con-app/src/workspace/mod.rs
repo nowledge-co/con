@@ -8,10 +8,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 use gpui::{prelude::FluentBuilder as _, *};
-#[cfg(target_os = "macos")]
-use gpui_component::Theme;
 use gpui_component::{
-    ActiveTheme, ElementExt, Sizable,
+    ActiveTheme, ElementExt, Sizable, Theme,
     input::{Escape as InputEscape, Input, InputEvent, InputState},
     tooltip::Tooltip,
 };
@@ -24,7 +22,6 @@ const TERMINAL_MIN_CONTENT_WIDTH: f32 = 360.0;
 const TOP_BAR_COMPACT_HEIGHT: f32 = 28.0;
 const TOP_BAR_TABS_HEIGHT: f32 = 36.0;
 const CHROME_TRANSITION_SEAM_COVER: f32 = 4.0;
-#[cfg(target_os = "macos")]
 const CHROME_MOTION_SEAM_OVERDRAW: f32 = 6.0;
 #[cfg(target_os = "macos")]
 const CHROME_SNAP_GUARD_MS: u64 = 160;
@@ -81,7 +78,7 @@ use crate::{
     EditorDeleteForward, EditorInsertNewline, EditorMoveDown, EditorMoveEnd, EditorMoveHome,
     EditorMoveLeft, EditorMoveLineEnd, EditorMoveLineStart, EditorMoveRight, EditorMoveUp,
     EditorSave, EditorSelectDown, EditorSelectEnd, EditorSelectHome, EditorSelectLeft,
-    EditorSelectRight, EditorSelectUp, ExportWorkspaceLayout, FocusInput, NewSurface,
+    EditorSelectRight, EditorSelectUp, ExportWorkspaceLayout, FocusInput, Minimize, NewSurface,
     NewSurfaceSplitDown, NewSurfaceSplitRight, NewTab, NextSurface, NextTab,
     OpenWorkspaceLayoutWindow, Paste, PreviousSurface, PreviousTab, Quit, RenameSurface, SelectAll,
     SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8,

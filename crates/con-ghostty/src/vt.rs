@@ -140,6 +140,8 @@ pub enum GhosttyTerminalOption {
     Size = 6,
     ColorScheme = 7,
     DeviceAttributes = 8,
+    Title = 9,
+    Pwd = 10,
     ColorForeground = 11,
     ColorBackground = 12,
     ColorCursor = 13,
@@ -289,6 +291,13 @@ pub struct GhosttyColorRgb {
 pub struct GhosttyString {
     pub ptr: *const u8,
     pub len: usize,
+}
+
+fn ghostty_string_from_bytes(bytes: &[u8]) -> GhosttyString {
+    GhosttyString {
+        ptr: bytes.as_ptr(),
+        len: bytes.len(),
+    }
 }
 
 #[repr(C)]
@@ -635,6 +644,8 @@ pub struct ScreenSnapshot {
     pub cells: Vec<Cell>,
     pub dirty_rows: Vec<u16>,
     pub cursor: Cursor,
+    pub alternate_screen: bool,
+    pub scrollbar: Option<GhosttyScrollbar>,
     pub title: Option<String>,
     pub generation: u64,
 }
@@ -672,9 +683,23 @@ struct VtInner {
     scratch_rows: u16,
     scratch: Vec<Cell>,
     last_cursor: Cursor,
+    osc_state: OscParseState,
+    osc_command: Vec<u8>,
+    osc7_buffer: Vec<u8>,
 }
 
 unsafe impl Send for VtInner {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OscParseState {
+    Ground,
+    Esc,
+    Command,
+    Ignore,
+    IgnoreEsc,
+    Osc7,
+    Osc7Esc,
+}
 
 fn default_device_attributes() -> GhosttyDeviceAttributes {
     let mut features = [0_u16; 64];
@@ -695,6 +720,181 @@ fn default_device_attributes() -> GhosttyDeviceAttributes {
             rom_cartridge: 0,
         },
         tertiary: GhosttyDeviceAttributesTertiary { unit_id: 0 },
+    }
+}
+
+fn ingest_osc7_cwd(inner: &mut VtInner, bytes: &[u8]) {
+    for &byte in bytes {
+        match inner.osc_state {
+            OscParseState::Ground => {
+                if byte == 0x1b {
+                    inner.osc_state = OscParseState::Esc;
+                }
+            }
+            OscParseState::Esc => {
+                if byte == b']' {
+                    inner.osc_command.clear();
+                    inner.osc_state = OscParseState::Command;
+                } else if byte != 0x1b {
+                    inner.osc_state = OscParseState::Ground;
+                }
+            }
+            OscParseState::Command => match byte {
+                b';' => {
+                    if inner.osc_command.as_slice() == b"7" {
+                        inner.osc7_buffer.clear();
+                        inner.osc_state = OscParseState::Osc7;
+                    } else {
+                        inner.osc_state = OscParseState::Ignore;
+                    }
+                }
+                0x07 => inner.osc_state = OscParseState::Ground,
+                0x1b => inner.osc_state = OscParseState::IgnoreEsc,
+                _ if inner.osc_command.len() < 16 => inner.osc_command.push(byte),
+                _ => inner.osc_state = OscParseState::Ignore,
+            },
+            OscParseState::Ignore => match byte {
+                0x07 => inner.osc_state = OscParseState::Ground,
+                0x1b => inner.osc_state = OscParseState::IgnoreEsc,
+                _ => {}
+            },
+            OscParseState::IgnoreEsc => {
+                inner.osc_state = OscParseState::Ground;
+                if byte == 0x1b {
+                    inner.osc_state = OscParseState::Esc;
+                } else if byte != b'\\' {
+                    // The ESC did not terminate the OSC. Resume ignoring
+                    // until the real BEL/ST terminator.
+                    inner.osc_state = OscParseState::Ignore;
+                }
+            }
+            OscParseState::Osc7 => match byte {
+                0x07 => finish_osc7_cwd(inner),
+                0x1b => inner.osc_state = OscParseState::Osc7Esc,
+                _ if inner.osc7_buffer.len() < 4096 => inner.osc7_buffer.push(byte),
+                _ => {
+                    inner.osc7_buffer.clear();
+                    inner.osc_state = OscParseState::Ignore;
+                }
+            },
+            OscParseState::Osc7Esc => {
+                if byte == b'\\' {
+                    finish_osc7_cwd(inner);
+                } else {
+                    if inner.osc7_buffer.len() + 2 <= 4096 {
+                        inner.osc7_buffer.push(0x1b);
+                        inner.osc7_buffer.push(byte);
+                        inner.osc_state = OscParseState::Osc7;
+                    } else {
+                        inner.osc7_buffer.clear();
+                        inner.osc_state = OscParseState::Ignore;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn finish_osc7_cwd(inner: &mut VtInner) {
+    if let Ok(url) = std::str::from_utf8(&inner.osc7_buffer)
+        && let Some(cwd) = parse_osc7_cwd(url)
+    {
+        let pwd = ghostty_string_from_bytes(cwd.as_bytes());
+        // SAFETY: `ghostty_terminal_set(PWD)` copies the string during
+        // the call; `cwd` stays alive until the call returns.
+        let rc = unsafe {
+            ghostty_terminal_set(
+                inner.terminal,
+                GhosttyTerminalOption::Pwd,
+                &pwd as *const _ as *const c_void,
+            )
+        };
+        if rc != 0 {
+            log::warn!("ghostty_terminal_set(Pwd) failed: rc={rc}");
+        }
+    }
+
+    inner.osc7_buffer.clear();
+    inner.osc_state = OscParseState::Ground;
+}
+
+fn parse_osc7_cwd(url: &str) -> Option<String> {
+    let url = url.trim();
+    let path = url.strip_prefix("file://")?;
+    if path.is_empty() {
+        return None;
+    }
+
+    let decoded = percent_decode_lossy(path);
+    if decoded.is_empty() {
+        return None;
+    }
+
+    if let Some(without_slash) = decoded.strip_prefix('/')
+        && is_windows_drive_path(without_slash)
+    {
+        return Some(without_slash.replace('/', "\\"));
+    }
+
+    if !decoded.starts_with('/') {
+        let (host, rest) = decoded.split_once('/')?;
+        if host.is_empty() {
+            return Some(local_file_path_from_rest(rest));
+        }
+        if host.eq_ignore_ascii_case("localhost") {
+            return Some(local_file_path_from_rest(rest));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            return Some(format!("/{rest}"));
+        }
+        #[cfg(target_os = "windows")]
+        return Some(format!("\\\\{}\\{}", host, rest.replace('/', "\\")));
+    }
+
+    Some(decoded)
+}
+
+fn local_file_path_from_rest(rest: &str) -> String {
+    if is_windows_drive_path(rest) {
+        rest.replace('/', "\\")
+    } else {
+        format!("/{rest}")
+    }
+}
+
+fn is_windows_drive_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
+}
+
+fn percent_decode_lossy(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) =
+                (hex_value(bytes[index + 1]), hex_value(bytes[index + 2]))
+        {
+            out.push((high << 4) | low);
+            index += 3;
+            continue;
+        }
+        out.push(bytes[index]);
+        index += 1;
+    }
+
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -855,6 +1055,9 @@ impl VtScreen {
                 scratch_rows: rows,
                 scratch: Vec::with_capacity(cols as usize * rows as usize),
                 last_cursor: Cursor::default(),
+                osc_state: OscParseState::Ground,
+                osc_command: Vec::with_capacity(8),
+                osc7_buffer: Vec::with_capacity(256),
             })),
         })
     }
@@ -887,6 +1090,7 @@ impl VtScreen {
     /// upstream: do not call from inside a registered callback.
     pub fn feed(&self, bytes: &[u8]) {
         let mut inner = self.inner.lock();
+        ingest_osc7_cwd(&mut inner, bytes);
         // SAFETY: terminal valid; bytes live for the call.
         unsafe { ghostty_terminal_vt_write(inner.terminal, bytes.as_ptr(), bytes.len()) };
         inner.generation = inner.generation.wrapping_add(1);
@@ -952,6 +1156,8 @@ impl VtScreen {
                 cells: Vec::new(),
                 dirty_rows: Vec::new(),
                 cursor: Cursor::default(),
+                alternate_screen: false,
+                scrollbar: None,
                 title: None,
                 generation: inner.generation,
             };
@@ -1008,6 +1214,17 @@ impl VtScreen {
         }
         cols = cols.max(1);
         rows = rows.max(1);
+
+        let mut active_screen = GhosttyTerminalScreen::Primary;
+        let active_screen_rc = unsafe {
+            ghostty_terminal_get(
+                inner.terminal,
+                GhosttyTerminalData::ActiveScreen,
+                &mut active_screen as *mut _ as *mut c_void,
+            )
+        };
+        let alternate_screen =
+            active_screen_rc == 0 && active_screen == GhosttyTerminalScreen::Alternate;
 
         let mut force_all_dirty = inner.force_full_snapshot;
         let mut full_redraw = force_all_dirty;
@@ -1096,7 +1313,7 @@ impl VtScreen {
                 if col_idx >= cols {
                     break;
                 }
-                let cell = read_cell(inner.row_cells, default_fg, default_bg);
+                let cell = read_cell(inner.row_cells, default_fg, default_bg, alternate_screen);
                 let idx = row_start + col_idx as usize;
                 row_changed |= inner.scratch[idx] != cell;
                 inner.scratch[idx] = cell;
@@ -1187,6 +1404,8 @@ impl VtScreen {
             cells,
             dirty_rows,
             cursor,
+            alternate_screen,
+            scrollbar: read_scrollbar(inner.terminal),
             title: None,
             generation: inner.generation,
         };
@@ -1267,19 +1486,7 @@ impl VtScreen {
         if inner.terminal.is_null() {
             return None;
         }
-        let mut scrollbar = GhosttyTerminalScrollbar::default();
-        let rc = unsafe {
-            ghostty_terminal_get(
-                inner.terminal,
-                GhosttyTerminalData::Scrollbar,
-                &mut scrollbar as *mut _ as *mut c_void,
-            )
-        };
-        (rc == 0).then_some(GhosttyScrollbar {
-            total: scrollbar.total,
-            offset: scrollbar.offset,
-            len: scrollbar.len,
-        })
+        read_scrollbar(inner.terminal)
     }
 
     /// Current working directory reported by shell integration (OSC 7).
@@ -1337,6 +1544,24 @@ impl VtScreen {
         let behavior = GhosttyTerminalScrollViewport {
             tag: GhosttyTerminalScrollViewportTag::Delta,
             value: GhosttyTerminalScrollViewportValue { delta: delta_rows },
+        };
+        unsafe { ghostty_terminal_scroll_viewport(inner.terminal, behavior) };
+        inner.force_full_snapshot = true;
+        inner.generation = inner.generation.wrapping_add(1);
+        true
+    }
+
+    /// Snap the visible viewport to the live tail. User input should
+    /// always return a scrolled-back terminal to the prompt before it
+    /// writes to the PTY, matching native terminal behavior.
+    pub fn scroll_viewport_bottom(&self) -> bool {
+        let mut inner = self.inner.lock();
+        if inner.terminal.is_null() {
+            return false;
+        }
+        let behavior = GhosttyTerminalScrollViewport {
+            tag: GhosttyTerminalScrollViewportTag::Bottom,
+            value: GhosttyTerminalScrollViewportValue { delta: 0 },
         };
         unsafe { ghostty_terminal_scroll_viewport(inner.terminal, behavior) };
         inner.force_full_snapshot = true;
@@ -1479,9 +1704,30 @@ fn empty_snapshot(cols: u16, rows: u16, generation: u64) -> ScreenSnapshot {
         cells: Vec::new(),
         dirty_rows: Vec::new(),
         cursor: Cursor::default(),
+        alternate_screen: false,
+        scrollbar: None,
         title: None,
         generation,
     }
+}
+
+fn read_scrollbar(terminal: GhosttyTerminal) -> Option<GhosttyScrollbar> {
+    if terminal.is_null() {
+        return None;
+    }
+    let mut scrollbar = GhosttyTerminalScrollbar::default();
+    let rc = unsafe {
+        ghostty_terminal_get(
+            terminal,
+            GhosttyTerminalData::Scrollbar,
+            &mut scrollbar as *mut _ as *mut c_void,
+        )
+    };
+    (rc == 0).then_some(GhosttyScrollbar {
+        total: scrollbar.total,
+        offset: scrollbar.offset,
+        len: scrollbar.len,
+    })
 }
 
 fn push_unique_row(rows: &mut Vec<u16>, row: u16) {
@@ -1494,6 +1740,7 @@ fn read_cell(
     cells: GhosttyRowCells,
     default_fg: GhosttyColorRgb,
     default_bg: GhosttyColorRgb,
+    alternate_screen: bool,
 ) -> Cell {
     // RAW here is an **opaque `GhosttyCell` u64 snapshot**, not a packed
     // codepoint. Decode fields via `ghostty_cell_get(cell, KEY, &out)`
@@ -1555,15 +1802,29 @@ fn read_cell(
     // reports no SGR override (tag == GHOSTTY_STYLE_COLOR_NONE). The
     // row_cells FG_COLOR / BG_COLOR accessors return (0,0,0) for
     // unstyled cells, so without this substitution default-bg cells
-    // would paint pure black. Keying off the style tag (not the RGB
-    // value) is the correct test: an explicit `SGR 40` or
-    // `48;2;0;0;0` sets tag = PALETTE(0) / RGB(0,0,0) while still
-    // requesting solid black.
+    // would paint pure black. Key off the style tag, not the RGB value:
+    // explicit black may still resolve to the same RGB as the default.
     const STYLE_COLOR_TAG_NONE: u32 = 0;
+    const STYLE_COLOR_TAG_PALETTE: u32 = 1;
+    const PALETTE_BLACK: u8 = 0;
     let fg_was_default = style.fg_color.tag == STYLE_COLOR_TAG_NONE;
     let bg_was_default = style.bg_color.tag == STYLE_COLOR_TAG_NONE;
+    // Curses-style full-screen apps often paint their canvas with SGR
+    // 40 instead of default background. For themes whose ANSI black is
+    // a raised surface (Catppuccin, Nord, Everforest), that makes htop
+    // and similar TUIs look like a detached slab. Normalize only
+    // alternate-screen background palette index 0 to the terminal
+    // canvas; normal shell output, foreground black, RGB black, and
+    // xterm-cube black (palette index 16) remain untouched.
+    let bg_is_alt_canvas_black = alternate_screen
+        && style.bg_color.tag == STYLE_COLOR_TAG_PALETTE
+        && style.bg_color.value as u8 == PALETTE_BLACK;
     let fg = if fg_was_default { default_fg } else { fg };
-    let bg = if bg_was_default { default_bg } else { bg };
+    let bg = if bg_was_default || bg_is_alt_canvas_black {
+        default_bg
+    } else {
+        bg
+    };
 
     // Pack RGB into the 0xRRGGBBAA u32 our HLSL `unpackRGBA` expects
     // (high byte = R, low byte = A). Default-bg cells carry alpha=0
@@ -1572,7 +1833,11 @@ fn read_cell(
     let pack = |c: GhosttyColorRgb, a: u8| -> u32 {
         ((c.r as u32) << 24) | ((c.g as u32) << 16) | ((c.b as u32) << 8) | (a as u32)
     };
-    let bg_alpha: u8 = if bg_was_default { 0 } else { 0xFF };
+    let bg_alpha: u8 = if bg_was_default || bg_is_alt_canvas_black {
+        0
+    } else {
+        0xFF
+    };
 
     // Pack style flags into the attrs byte the renderer (and HLSL
     // pixel shader) interpret. Underline is an `int` upstream
@@ -1642,5 +1907,83 @@ mod tests {
         screen.feed(b"\x1b]7;file:///tmp/con-vt-cwd\x07");
 
         assert_eq!(screen.current_dir().as_deref(), Some("/tmp/con-vt-cwd"));
+    }
+
+    #[test]
+    fn vt_screen_reports_windows_osc7_current_dir() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        screen.feed(b"\x1b]7;file:///C:/Users/WeyGu/dev/con-terminal\x07");
+
+        assert_eq!(
+            screen.current_dir().as_deref(),
+            Some("C:\\Users\\WeyGu\\dev\\con-terminal")
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn vt_screen_reports_localhost_windows_osc7_current_dir() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        screen.feed(b"\x1b]7;file://localhost/C:/Users/WeyGu/dev/con-terminal\x07");
+
+        assert_eq!(
+            screen.current_dir().as_deref(),
+            Some("C:\\Users\\WeyGu\\dev\\con-terminal")
+        );
+    }
+
+    #[test]
+    fn vt_screen_reports_split_osc7_current_dir() {
+        let screen = VtScreen::new(80, 24, None).expect("create vt screen");
+
+        screen.feed(b"\x1b]7;file:///home/me/con");
+        screen.feed(b"%20terminal\x1b\\");
+
+        assert_eq!(
+            screen.current_dir().as_deref(),
+            Some("/home/me/con terminal")
+        );
+    }
+
+    #[test]
+    fn normal_screen_preserves_explicit_palette_black_background() {
+        let theme = catppuccin_like_theme();
+        let screen = VtScreen::new(4, 2, Some(&theme)).expect("create vt screen");
+
+        screen.feed(b"\x1b[40mX");
+        let snapshot = screen.snapshot();
+
+        assert!(!snapshot.alternate_screen);
+        let cell = snapshot.cells.first().expect("first cell");
+        assert_eq!(cell.codepoint, 'X' as u32);
+        assert_eq!(cell.bg, rgba([0x45, 0x47, 0x5A], 0xFF));
+    }
+
+    #[test]
+    fn alternate_screen_uses_default_canvas_for_palette_black_background() {
+        let theme = catppuccin_like_theme();
+        let screen = VtScreen::new(4, 2, Some(&theme)).expect("create vt screen");
+
+        screen.feed(b"\x1b[?1049h\x1b[H\x1b[40mX");
+        let snapshot = screen.snapshot();
+
+        assert!(snapshot.alternate_screen);
+        let cell = snapshot.cells.first().expect("first cell");
+        assert_eq!(cell.codepoint, 'X' as u32);
+        assert_eq!(cell.bg, rgba([0x1E, 0x1E, 0x2E], 0x00));
+    }
+
+    fn catppuccin_like_theme() -> ThemeColors {
+        let mut ansi = [[0u8; 3]; 16];
+        ansi[0] = [0x45, 0x47, 0x5A];
+        ansi[7] = [0xBA, 0xC2, 0xDE];
+        ansi[15] = [0xCD, 0xD6, 0xF4];
+        ThemeColors::from_ansi16([0xCD, 0xD6, 0xF4], [0x1E, 0x1E, 0x2E], ansi)
+    }
+
+    fn rgba(rgb: [u8; 3], alpha: u8) -> u32 {
+        ((rgb[0] as u32) << 24) | ((rgb[1] as u32) << 16) | ((rgb[2] as u32) << 8) | alpha as u32
     }
 }
