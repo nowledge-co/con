@@ -35,9 +35,7 @@ use crate::chat_markdown::{
 use crate::input_bar::SkillEntry;
 use crate::motion::{MotionValue, vertical_reveal_offset};
 use crate::settings_panel::provider_label;
-use crate::ui_scale::{
-    mono_density_scale, mono_px, mono_space_px, ui_density_scale, ui_px, ui_space_px,
-};
+use crate::ui_scale::{mono_px, mono_space_px, ui_px, ui_space_px};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AgentStatus {
@@ -2754,18 +2752,17 @@ fn render_inline_state(
     color: Hsla,
     theme: &gpui_component::Theme,
 ) -> AnyElement {
-    let scale = ui_density_scale(theme);
     div()
         .flex()
         .items_center()
-        .gap(px(5.0 * scale))
-        .px(px(7.0 * scale))
-        .py(px(3.0 * scale))
+        .gap(ui_space_px(theme, 5.0))
+        .px(ui_space_px(theme, 7.0))
+        .py(ui_space_px(theme, 3.0))
         .rounded_full()
         .bg(color.opacity(0.10))
         .child(
             div()
-                .size(px(5.0 * scale))
+                .size(ui_space_px(theme, 5.0))
                 .rounded_full()
                 .bg(color.opacity(0.85)),
         )
@@ -2786,10 +2783,12 @@ fn render_meta_chip(
     theme: &gpui_component::Theme,
     mono: bool,
 ) -> AnyElement {
-    let scale = if mono {
-        mono_density_scale(theme)
-    } else {
-        ui_density_scale(theme)
+    let chip_px = |value| {
+        if mono {
+            mono_space_px(theme, value)
+        } else {
+            ui_space_px(theme, value)
+        }
     };
     let mut label_el = div()
         .text_size(if mono {
@@ -2808,9 +2807,9 @@ fn render_meta_chip(
     div()
         .flex()
         .items_center()
-        .px(px(8.0 * scale))
-        .py(px(3.0 * scale))
-        .rounded(px(7.0 * scale))
+        .px(chip_px(8.0))
+        .py(chip_px(3.0))
+        .rounded(chip_px(7.0))
         .bg(surface)
         .child(label_el)
         .into_any_element()
@@ -2863,8 +2862,7 @@ fn render_model_chips(
     theme: &gpui_component::Theme,
 ) -> AnyElement {
     let (provider, label) = split_model_identity(model);
-    let scale = ui_density_scale(theme);
-    let mut row = div().flex().items_center().gap(px(6.0 * scale));
+    let mut row = div().flex().items_center().gap(ui_space_px(theme, 6.0));
 
     if let Some(provider) = provider {
         row = row
@@ -2877,7 +2875,7 @@ fn render_model_chips(
             )
             .child(
                 div()
-                    .size(px(3.0 * scale))
+                    .size(ui_space_px(theme, 3.0))
                     .rounded_full()
                     .bg(theme.muted_foreground.opacity(0.18)),
             );
@@ -3189,7 +3187,7 @@ fn render_assistant_message(
                 ));
             }
             if let Some(suffix) = unparsed_markdown_suffix(msg) {
-                content_el = content_el.child(div().mt(ui_px(theme, 6.0)).child(
+                content_el = content_el.child(div().mt(ui_space_px(theme, 6.0)).child(
                     render_plain_multiline_text(
                         suffix,
                         theme.mono_font_family.clone(),
@@ -3203,7 +3201,7 @@ fn render_assistant_message(
                 let remaining = markdown.block_count().saturating_sub(visible_blocks);
                 let more_view = view.clone();
                 content_el = content_el.child(
-                    div().mt(ui_px(theme, 8.0)).child(
+                    div().mt(ui_space_px(theme, 8.0)).child(
                         div()
                             .id(SharedString::from(format!("assistant-more-{msg_idx}")))
                             .flex()
@@ -3266,8 +3264,6 @@ fn render_assistant_message(
     }
 
     if !msg.steps.is_empty() {
-        let ui_scale = ui_density_scale(theme);
-        let mono_scale = mono_density_scale(theme);
         let step_count = msg.steps.len();
         let collapsed = msg.steps_collapsed;
         let chevron = if collapsed {
@@ -3295,16 +3291,16 @@ fn render_assistant_message(
 
         let run_panel = panel.clone();
         let mut run_card = div()
-            .ml(px(19.0 * ui_scale))
-            .mr(px(4.0 * ui_scale))
-            .mt(px(6.0 * ui_scale))
-            .px(px(10.0 * ui_scale))
-            .py(px(10.0 * ui_scale))
-            .rounded(px(12.0 * ui_scale))
+            .ml(ui_space_px(theme, 19.0))
+            .mr(ui_space_px(theme, 4.0))
+            .mt(ui_space_px(theme, 6.0))
+            .px(ui_space_px(theme, 10.0))
+            .py(ui_space_px(theme, 10.0))
+            .rounded(ui_space_px(theme, 12.0))
             .bg(trace_group_surface(theme))
             .flex()
             .flex_col()
-            .gap(px(10.0 * ui_scale));
+            .gap(ui_space_px(theme, 10.0));
 
         run_card = run_card.child(
             div()
@@ -3312,11 +3308,11 @@ fn render_assistant_message(
                 .flex()
                 .items_center()
                 .min_w_0()
-                .gap(px(8.0 * ui_scale))
-                .px(px(4.0 * ui_scale))
-                .py(px(3.0 * ui_scale))
+                .gap(ui_space_px(theme, 8.0))
+                .px(ui_space_px(theme, 4.0))
+                .py(ui_space_px(theme, 3.0))
                 .cursor_pointer()
-                .rounded(px(10.0 * ui_scale))
+                .rounded(ui_space_px(theme, 10.0))
                 .hover(|s| s.bg(theme.muted.opacity(0.035)))
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     let _ = run_panel.update(cx, |this, cx| {
@@ -3340,7 +3336,7 @@ fn render_assistant_message(
                         .flex_col()
                         .flex_1()
                         .min_w_0()
-                        .gap(px(2.0 * ui_scale))
+                        .gap(ui_space_px(theme, 2.0))
                         .child(render_section_kicker(run_title, theme))
                         .child(
                             div()
@@ -3361,7 +3357,7 @@ fn render_assistant_message(
                     let mut summary = div()
                         .flex()
                         .items_center()
-                        .gap(px(8.0 * ui_scale))
+                        .gap(ui_space_px(theme, 8.0))
                         .flex_shrink_0()
                         .child(
                             div()
@@ -3389,7 +3385,7 @@ fn render_assistant_message(
         );
 
         if !collapsed {
-            let mut steps_el = div().flex().flex_col().gap(px(8.0 * ui_scale));
+            let mut steps_el = div().flex().flex_col().gap(ui_space_px(theme, 8.0));
 
             for (step_idx, step) in msg.steps.iter().enumerate() {
                 let icon_color = match step.status {
@@ -3410,7 +3406,7 @@ fn render_assistant_message(
                 let mut top_line = div()
                     .flex()
                     .items_center()
-                    .gap(px(6.0 * ui_scale))
+                    .gap(ui_space_px(theme, 6.0))
                     .child(
                         svg()
                             .path(step.icon)
@@ -3447,7 +3443,7 @@ fn render_assistant_message(
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(4.0 * mono_scale))
+                            .gap(mono_space_px(theme, 4.0))
                             .child(
                                 div()
                                     .text_size(mono_px(theme, 10.0))
@@ -3472,15 +3468,15 @@ fn render_assistant_message(
                 let mut step_header = div()
                     .flex()
                     .flex_col()
-                    .gap(px(3.0 * ui_scale))
-                    .px(px(12.0 * ui_scale))
-                    .py(px(10.0 * ui_scale))
+                    .gap(ui_space_px(theme, 3.0))
+                    .px(ui_space_px(theme, 12.0))
+                    .py(ui_space_px(theme, 10.0))
                     .child(top_line);
 
                 if let Some(detail_text) = step_detail {
                     step_header = step_header.child(
                         div()
-                            .ml(px(18.0 * mono_scale))
+                            .ml(mono_space_px(theme, 18.0))
                             .text_size(mono_px(theme, 10.5))
                             .line_height(mono_px(theme, 15.0))
                             .text_color(theme.muted_foreground.opacity(0.56))
@@ -3494,14 +3490,14 @@ fn render_assistant_message(
                 let mut step_shell = div()
                     .flex()
                     .flex_col()
-                    .rounded(px(12.0 * ui_scale))
+                    .rounded(ui_space_px(theme, 12.0))
                     .overflow_hidden()
                     .bg(trace_step_surface(theme))
                     .gap(px(0.0));
 
                 let step_header_shell = step_header
                     .bg(trace_step_header_surface(theme))
-                    .min_h(px(44.0 * ui_scale));
+                    .min_h(ui_space_px(theme, 44.0));
 
                 if has_detail {
                     let step_panel = panel.clone();
@@ -3539,8 +3535,8 @@ fn render_assistant_message(
                         result_preview(detail, TOOL_RESULT_PREVIEW_LINES)
                     };
                     let detail_block = div()
-                        .px(px(12.0 * ui_scale))
-                        .pt(px(10.0 * ui_scale))
+                        .px(ui_space_px(theme, 12.0))
+                        .pt(ui_space_px(theme, 10.0))
                         .bg(trace_detail_surface(theme))
                         .child(render_result_block(
                             &visible_detail,
@@ -3561,9 +3557,9 @@ fn render_assistant_message(
                         let button_label = result_toggle_label(detail, expanded);
                         let detail_toggle_panel = panel.clone();
                         let detail_toggle = div()
-                            .px(px(12.0 * ui_scale))
-                            .pt(px(4.0 * ui_scale))
-                            .pb(px(10.0 * ui_scale))
+                            .px(ui_space_px(theme, 12.0))
+                            .pt(ui_space_px(theme, 4.0))
+                            .pb(ui_space_px(theme, 10.0))
                             .bg(trace_detail_surface(theme))
                             .child(
                                 div()
@@ -3572,7 +3568,8 @@ fn render_assistant_message(
                                     )))
                                     .cursor_pointer()
                                     .hover(|s| {
-                                        s.bg(theme.muted.opacity(0.03)).rounded(px(6.0 * ui_scale))
+                                        s.bg(theme.muted.opacity(0.03))
+                                            .rounded(ui_space_px(theme, 6.0))
                                     })
                                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                         let _ = detail_toggle_panel.update(cx, |this, cx| {
@@ -3589,8 +3586,8 @@ fn render_assistant_message(
                                     })
                                     .child(
                                         div()
-                                            .px(px(2.0 * mono_scale))
-                                            .py(px(2.0 * mono_scale))
+                                            .px(mono_space_px(theme, 2.0))
+                                            .py(mono_space_px(theme, 2.0))
                                             .child(render_result_toggle_chrome(
                                                 expanded,
                                                 button_label,
@@ -3611,8 +3608,8 @@ fn render_assistant_message(
                     } else {
                         step_shell = step_shell.child(
                             div()
-                                .px(px(10.0 * ui_scale))
-                                .pb(px(10.0 * ui_scale))
+                                .px(ui_space_px(theme, 10.0))
+                                .pb(ui_space_px(theme, 10.0))
                                 .bg(trace_detail_surface(theme)),
                         );
                     }
@@ -3953,33 +3950,31 @@ impl Render for AgentPanel {
             .collect();
 
         if !visible_tool_calls.is_empty() {
-            let ui_scale = ui_density_scale(theme);
-            let mono_scale = mono_density_scale(theme);
             let mut tc_container = div()
                 .flex()
                 .flex_col()
-                .ml(px(19.0 * ui_scale))
-                .mr(px(4.0 * ui_scale))
-                .gap(px(10.0 * ui_scale))
-                .px(px(10.0 * ui_scale))
-                .py(px(10.0 * ui_scale))
-                .rounded(px(12.0 * ui_scale))
+                .ml(ui_space_px(theme, 19.0))
+                .mr(ui_space_px(theme, 4.0))
+                .gap(ui_space_px(theme, 10.0))
+                .px(ui_space_px(theme, 10.0))
+                .py(ui_space_px(theme, 10.0))
+                .rounded(ui_space_px(theme, 12.0))
                 .bg(trace_group_surface(theme))
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .min_w_0()
-                        .gap(px(8.0 * ui_scale))
-                        .px(px(4.0 * ui_scale))
-                        .py(px(3.0 * ui_scale))
+                        .gap(ui_space_px(theme, 8.0))
+                        .px(ui_space_px(theme, 4.0))
+                        .py(ui_space_px(theme, 3.0))
                         .child(
                             div()
                                 .flex()
                                 .flex_col()
                                 .flex_1()
                                 .min_w_0()
-                                .gap(px(2.0 * ui_scale))
+                                .gap(ui_space_px(theme, 2.0))
                                 .child(render_section_kicker("Working now", theme))
                                 .child(
                                     div()
@@ -4043,7 +4038,7 @@ impl Render for AgentPanel {
                 let top_line = div()
                     .flex()
                     .items_center()
-                    .gap(px(6.0 * ui_scale))
+                    .gap(ui_space_px(theme, 6.0))
                     .child(icon_el)
                     .child(
                         div()
@@ -4070,16 +4065,16 @@ impl Render for AgentPanel {
                 let mut tc_row = div()
                     .flex()
                     .flex_col()
-                    .gap(px(3.0 * ui_scale))
-                    .px(px(12.0 * ui_scale))
-                    .py(px(10.0 * ui_scale))
+                    .gap(ui_space_px(theme, 3.0))
+                    .px(ui_space_px(theme, 12.0))
+                    .py(ui_space_px(theme, 10.0))
                     .child(top_line);
 
                 // Args on second line
                 if !args_display.is_empty() {
                     tc_row = tc_row.child(
                         div()
-                            .ml(px(18.0 * mono_scale))
+                            .ml(mono_space_px(theme, 18.0))
                             .text_size(mono_px(theme, 10.75))
                             .text_color(theme.muted_foreground.opacity(0.50))
                             .font_family(theme.mono_font_family.clone())
@@ -4092,14 +4087,14 @@ impl Render for AgentPanel {
                 let mut tc_el = div()
                     .flex()
                     .flex_col()
-                    .rounded(px(12.0 * ui_scale))
+                    .rounded(ui_space_px(theme, 12.0))
                     .overflow_hidden()
                     .bg(trace_step_surface(theme))
                     .gap(px(0.0))
                     .child(
                         tc_row
                             .bg(trace_step_header_surface(theme))
-                            .min_h(px(44.0 * ui_scale)),
+                            .min_h(ui_space_px(theme, 44.0)),
                     );
 
                 // Result preview
@@ -4534,20 +4529,19 @@ impl Render for AgentPanel {
 
         let live_activity_strip = if let Some(approval) = self.state.pending_approvals.first() {
             let args_display = format_tool_args(&approval.tool_name, &approval.args);
-            let ui_scale = ui_density_scale(theme);
             Some(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(7.0 * ui_scale))
-                    .mx(px(14.0 * ui_scale))
-                    .mb(px(8.0 * ui_scale))
+                    .gap(ui_space_px(theme, 7.0))
+                    .mx(ui_space_px(theme, 14.0))
+                    .mb(ui_space_px(theme, 8.0))
                     .child(render_section_kicker("Needs approval", theme))
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(8.0 * ui_scale))
+                            .gap(ui_space_px(theme, 8.0))
                             .child(render_inline_state(
                                 "Approval waiting".into(),
                                 theme.warning,
@@ -4571,20 +4565,19 @@ impl Render for AgentPanel {
         } else if let Some(tc) = self.running_tool_call() {
             let args_display = format_tool_args(&tc.tool_name, &tc.args);
             let human_name = humanize_tool_name(&tc.tool_name);
-            let ui_scale = ui_density_scale(theme);
             Some(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(7.0 * ui_scale))
-                    .mx(px(14.0 * ui_scale))
-                    .mb(px(8.0 * ui_scale))
+                    .gap(ui_space_px(theme, 7.0))
+                    .mx(ui_space_px(theme, 14.0))
+                    .mb(ui_space_px(theme, 8.0))
                     .child(render_section_kicker("Current run", theme))
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(8.0 * ui_scale))
+                            .gap(ui_space_px(theme, 8.0))
                             .child(Spinner::new().small().color(theme.warning))
                             .child(
                                 div()
@@ -4609,20 +4602,19 @@ impl Render for AgentPanel {
                     .into_any_element(),
             )
         } else if let Some((_icon, label)) = self.status_text() {
-            let ui_scale = ui_density_scale(theme);
             Some(
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(7.0 * ui_scale))
-                    .mx(px(14.0 * ui_scale))
-                    .mb(px(8.0 * ui_scale))
+                    .gap(ui_space_px(theme, 7.0))
+                    .mx(ui_space_px(theme, 14.0))
+                    .mb(ui_space_px(theme, 8.0))
                     .child(render_section_kicker("Live status", theme))
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(8.0 * ui_scale))
+                            .gap(ui_space_px(theme, 8.0))
                             .child(
                                 Spinner::new()
                                     .small()
@@ -4888,7 +4880,6 @@ impl Render for AgentPanel {
 
             let has_text = self.inline_input_has_text;
             let has_skills = self.inline_input_has_skills;
-            let mono_scale = mono_density_scale(theme);
             let inline_control_size = mono_space_px(theme, 24.0);
             let inline_input_text_size = mono_px(theme, 13.0);
 
@@ -4899,7 +4890,7 @@ impl Render for AgentPanel {
                 .items_center()
                 .justify_center()
                 .size(inline_control_size)
-                .rounded(px(12.0 * mono_scale))
+                .rounded(mono_space_px(theme, 12.0))
                 .cursor_pointer()
                 .flex_shrink_0()
                 .bg(if has_text && !has_skills {
@@ -4940,9 +4931,9 @@ impl Render for AgentPanel {
             panel = panel.child(
                 div()
                     .absolute()
-                    .left(px(8.0 * mono_scale))
-                    .right(px(9.0 * mono_scale))
-                    .bottom(px(8.0 * mono_scale))
+                    .left(mono_space_px(theme, 8.0))
+                    .right(mono_space_px(theme, 9.0))
+                    .bottom(mono_space_px(theme, 8.0))
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                         let key = event.keystroke.key.as_str();
                         let has_completions = !this.filtered_inline_skills(cx).is_empty();
@@ -4985,12 +4976,12 @@ impl Render for AgentPanel {
                             .flex()
                             .items_center()
                             .w_full()
-                            .min_h(px(46.0 * mono_scale))
-                            .gap(px(8.0 * mono_scale))
-                            .pl(px(7.0 * mono_scale))
-                            .pr(px(8.0 * mono_scale))
-                            .py(px(8.0 * mono_scale))
-                            .rounded(px(14.0 * mono_scale))
+                            .min_h(mono_space_px(theme, 46.0))
+                            .gap(mono_space_px(theme, 8.0))
+                            .pl(mono_space_px(theme, 7.0))
+                            .pr(mono_space_px(theme, 8.0))
+                            .py(mono_space_px(theme, 8.0))
+                            .rounded(mono_space_px(theme, 14.0))
                             .bg(theme.background)
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -5005,7 +4996,7 @@ impl Render for AgentPanel {
                                 div()
                                     .flex_1()
                                     .w_full()
-                                    .min_w(px(120.0 * mono_scale))
+                                    .min_w(mono_space_px(theme, 120.0))
                                     .font_family(theme.mono_font_family.clone())
                                     .text_size(inline_input_text_size)
                                     .child(
