@@ -1015,6 +1015,7 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::collapse_sidebar))
             .on_action(cx.listener(Self::toggle_settings))
             .on_action(cx.listener(Self::toggle_command_palette))
+            .on_action(cx.listener(Self::new_window))
             .on_action(cx.listener(Self::new_tab))
             .on_action(cx.listener(Self::next_tab))
             .on_action(cx.listener(Self::previous_tab))
