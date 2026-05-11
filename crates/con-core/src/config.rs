@@ -980,8 +980,8 @@ quick_terminal = "cmd-\\"
     #[test]
     fn keybinding_conflicts_detect_duplicate_configured_shortcuts() {
         let mut config = Config::default();
-        config.keybindings.command_palette = "cmd-shift-p".to_string();
-        config.keybindings.toggle_agent = "secondary-shift-p".to_string();
+        config.keybindings.command_palette = "ctrl-shift-p".to_string();
+        config.keybindings.toggle_agent = "control-shift-p".to_string();
 
         let conflicts = config.keybindings.shortcut_conflicts(&[]);
 
@@ -1023,7 +1023,11 @@ quick_terminal = "cmd-\\"
     #[test]
     fn keybinding_conflicts_include_reserved_shortcuts() {
         let mut config = Config::default();
-        config.keybindings.command_palette = "cmd-m".to_string();
+        config.keybindings.command_palette = if cfg!(target_os = "macos") {
+            "cmd-m".to_string()
+        } else {
+            "ctrl-m".to_string()
+        };
 
         let conflicts = config
             .keybindings
