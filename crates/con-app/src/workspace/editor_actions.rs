@@ -27,9 +27,7 @@ fn editor_line_boundary_motion_for_key(event: &KeyDownEvent) -> Option<EditorMot
 }
 
 fn editor_text_for_key(key: &str, key_char: Option<&str>) -> Option<String> {
-    if let Some(key_char) =
-        key_char.filter(|text| !text.is_empty() && text.chars().all(|ch| !ch.is_control()))
-    {
+    if let Some(key_char) = key_char.filter(|text| is_printable_key_char(Some(*text))) {
         return Some(key_char.to_string());
     }
 
@@ -45,6 +43,23 @@ fn editor_text_for_key(key: &str, key_char: Option<&str>) -> Option<String> {
             Some(key.to_string())
         }
     }
+}
+
+fn is_printable_key_char(key_char: Option<&str>) -> bool {
+    key_char.is_some_and(|text| !text.is_empty() && text.chars().all(|ch| !ch.is_control()))
+}
+
+fn editor_text_for_key_event(
+    key: &str,
+    key_char: Option<&str>,
+    platform: bool,
+    alt: bool,
+    control: bool,
+) -> Option<String> {
+    if platform || ((alt || control) && !is_printable_key_char(key_char)) {
+        return None;
+    }
+    editor_text_for_key(key, key_char)
 }
 
 impl ConWorkspace {
@@ -92,13 +107,12 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) -> bool {
         let mods = &event.keystroke.modifiers;
-        if mods.platform || mods.alt || mods.control {
-            return false;
-        }
-
-        let Some(text) = editor_text_for_key(
+        let Some(text) = editor_text_for_key_event(
             event.keystroke.key.as_str(),
             event.keystroke.key_char.as_deref(),
+            mods.platform,
+            mods.alt,
+            mods.control,
         ) else {
             return false;
         };
@@ -465,5 +479,33 @@ mod tests {
             Some("    ")
         );
         assert_eq!(super::editor_text_for_key("enter", Some("\n")), None);
+    }
+
+    #[test]
+    fn editor_text_allows_printable_altgr_or_option_key_char() {
+        assert_eq!(
+            super::editor_text_for_key_event("2", Some("@"), false, true, true).as_deref(),
+            Some("@")
+        );
+        assert_eq!(
+            super::editor_text_for_key_event("e", Some("é"), false, true, false).as_deref(),
+            Some("é")
+        );
+    }
+
+    #[test]
+    fn editor_text_with_modifiers_does_not_fallback_to_physical_key() {
+        assert_eq!(
+            super::editor_text_for_key_event("a", None, false, false, true),
+            None
+        );
+        assert_eq!(
+            super::editor_text_for_key_event("2", None, false, true, true),
+            None
+        );
+        assert_eq!(
+            super::editor_text_for_key_event("a", Some("a"), true, false, false),
+            None
+        );
     }
 }
