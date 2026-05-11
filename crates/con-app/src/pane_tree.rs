@@ -1878,6 +1878,29 @@ impl PaneTree {
         is_focused
     }
 
+    fn inactive_title_bar_opacity(tab_accent_inactive_alpha: f32) -> f32 {
+        // Map tab_accent_inactive_alpha (0.0..=MAX ~0.30) to a title-bar-friendly
+        // opacity range (0.55..=0.85) so the bar always has a solid themed
+        // background regardless of the accent slider position.
+        let max_accent = con_core::config::AppearanceConfig::MAX_TAB_ACCENT_INACTIVE_ALPHA;
+        let t = (tab_accent_inactive_alpha / max_accent.max(f32::EPSILON)).clamp(0.0, 1.0);
+        (0.55 + t * 0.30).clamp(0.55, 0.85) // 0.55 at min → 0.85 at max
+    }
+
+    fn pane_chrome_bg(
+        theme: &gpui_component::Theme,
+        is_focused: bool,
+        tab_accent_inactive_alpha: f32,
+    ) -> Hsla {
+        if is_focused {
+            theme.title_bar.opacity(1.0)
+        } else {
+            theme
+                .title_bar
+                .opacity(Self::inactive_title_bar_opacity(tab_accent_inactive_alpha))
+        }
+    }
+
     fn render_pane_title_bar(
         pane_id: PaneId,
         session_id: u64,
@@ -1998,17 +2021,7 @@ impl PaneTree {
         };
         // The whole title bar is draggable. The visible pane drag preview is
         // rendered by Workspace, centred at the live cursor position.
-        // Map tab_accent_inactive_alpha (0.0..=MAX ~0.30) to a title-bar-friendly
-        // opacity range (0.55..=0.85) so the bar always has a solid themed
-        // background regardless of the accent slider position.
-        let max_accent = con_core::config::AppearanceConfig::MAX_TAB_ACCENT_INACTIVE_ALPHA;
-        let t = (tab_accent_inactive_alpha / max_accent.max(f32::EPSILON)).clamp(0.0, 1.0);
-        let inactive_bar_opacity = (0.55 + t * 0.30).clamp(0.55, 0.85); // 0.55 at min → 0.85 at max
-        let bar_bg = if is_focused {
-            theme.title_bar.opacity(1.0)
-        } else {
-            theme.title_bar.opacity(inactive_bar_opacity)
-        };
+        let bar_bg = Self::pane_chrome_bg(theme, is_focused, tab_accent_inactive_alpha);
         let mut bar = div()
             .id(ElementId::Name(format!("pane-title-bar-{pane_id}").into()))
             .flex()
@@ -2122,14 +2135,7 @@ impl PaneTree {
                 surfaces.len(),
                 if surfaces.len() == 1 { "" } else { "s" }
             );
-            let max_accent = con_core::config::AppearanceConfig::MAX_TAB_ACCENT_INACTIVE_ALPHA;
-            let t = (tab_accent_inactive_alpha / max_accent.max(f32::EPSILON)).clamp(0.0, 1.0);
-            let inactive_bar_opacity = (0.55 + t * 0.30).clamp(0.55, 0.85);
-            let strip_bg = if is_focused {
-                theme.title_bar.opacity(1.0)
-            } else {
-                theme.title_bar.opacity(inactive_bar_opacity)
-            };
+            let strip_bg = Self::pane_chrome_bg(theme, is_focused, tab_accent_inactive_alpha);
             let rail_bg = if is_focused {
                 theme.tab_bar_segmented.opacity(0.72)
             } else {
