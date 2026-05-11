@@ -5922,8 +5922,8 @@ fn is_keybinding_conflict_error(message: &str) -> bool {
 
 fn reserved_keybinding_shortcuts() -> Vec<(&'static str, &'static str)> {
     let shortcuts = vec![
-        ("Next Tab (Alternate)", "secondary-shift-]"),
-        ("Previous Tab (Alternate)", "secondary-shift-["),
+        ("Next Tab", "secondary-shift-]"),
+        ("Previous Tab", "secondary-shift-["),
         ("Select Tab 1", "secondary-1"),
         ("Select Tab 2", "secondary-2"),
         ("Select Tab 3", "secondary-3"),

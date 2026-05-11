@@ -581,12 +581,17 @@ fn canonical_keybinding(binding: &str) -> Option<String> {
 
 fn canonical_keystroke(stroke: &str) -> Option<String> {
     let mut modifiers = Vec::<&'static str>::new();
-    let mut key = None;
-
-    for raw in stroke
+    let is_minus_key = stroke.ends_with('-');
+    let mut key = is_minus_key.then(|| "-".to_string());
+    let mut parts = stroke
         .split('-')
         .map(|part| part.trim().to_ascii_lowercase())
-    {
+        .collect::<Vec<_>>();
+    if is_minus_key {
+        parts.pop();
+    }
+
+    for raw in parts {
         if raw.is_empty() {
             continue;
         }
@@ -1001,6 +1006,21 @@ quick_terminal = "cmd-\\"
         } else {
             "ctrl-shift-p".to_string()
         };
+
+        let conflicts = config.keybindings.shortcut_conflicts(&[]);
+
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(
+            conflicts[0].actions,
+            vec!["Command Palette".to_string(), "Toggle Agent".to_string()]
+        );
+    }
+
+    #[test]
+    fn keybinding_conflicts_include_minus_key_shortcuts() {
+        let mut config = Config::default();
+        config.keybindings.command_palette = "ctrl--".to_string();
+        config.keybindings.toggle_agent = "control--".to_string();
 
         let conflicts = config.keybindings.shortcut_conflicts(&[]);
 
