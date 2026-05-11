@@ -40,8 +40,8 @@ struct SearchOptions {
 enum SearchMatcher {
     Literal {
         needle: String,
-        needle_lower: String,
         case_sensitive: bool,
+        case_insensitive_regex: Option<Regex>,
     },
     Regex(Regex),
 }
@@ -59,10 +59,18 @@ impl SearchMatcher {
                 .ok()?;
             Some(Self::Regex(regex))
         } else {
+            let case_insensitive_regex = if options.case_sensitive {
+                None
+            } else {
+                RegexBuilder::new(&regex::escape(query))
+                    .case_insensitive(true)
+                    .build()
+                    .ok()
+            };
             Some(Self::Literal {
                 needle: query.to_string(),
-                needle_lower: query.to_lowercase(),
                 case_sensitive: options.case_sensitive,
+                case_insensitive_regex,
             })
         }
     }
@@ -71,15 +79,16 @@ impl SearchMatcher {
         match self {
             Self::Literal {
                 needle,
-                needle_lower,
                 case_sensitive,
+                case_insensitive_regex,
             } => {
                 if *case_sensitive {
                     line.find(needle).map(|start| (start, needle.len()))
                 } else {
-                    line.to_lowercase()
-                        .find(needle_lower)
-                        .map(|start| (start, needle_lower.len()))
+                    case_insensitive_regex
+                        .as_ref()?
+                        .find(line)
+                        .map(|matched| (matched.start(), matched.end() - matched.start()))
                 }
             }
             Self::Regex(regex) => regex
@@ -687,6 +696,13 @@ mod tests {
         assert!(results[0].path.ends_with("lib.rs"));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn literal_case_insensitive_match_offsets_stay_in_original_line() {
+        let matcher = SearchMatcher::new("needle", SearchOptions::default()).unwrap();
+
+        assert_eq!(matcher.find("İstanbul needle"), Some((10, 6)));
     }
 
     #[test]

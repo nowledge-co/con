@@ -59,7 +59,7 @@ pub(crate) fn highlighted_line_runs(
         return base_line_runs(lines, &base_style);
     };
 
-    let line_starts = line_start_offsets(lines);
+    let line_starts = line_start_offsets(text, lines.len());
     let rope = Rope::from_str(text);
     let mut highlighter = SyntaxHighlighter::new(language);
     highlighter.update(None, &rope, None);
@@ -90,12 +90,16 @@ fn base_line_runs(lines: &[String], base_style: &TextStyle) -> Vec<Vec<TextRun>>
         .collect()
 }
 
-fn line_start_offsets(lines: &[String]) -> Vec<usize> {
-    let mut starts = Vec::with_capacity(lines.len());
-    let mut offset = 0usize;
-    for line in lines {
-        starts.push(offset);
-        offset += line.len() + 1;
+fn line_start_offsets(text: &str, line_count: usize) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(line_count);
+    starts.push(0);
+    for (index, byte) in text.bytes().enumerate() {
+        if byte == b'\n' && starts.len() < line_count {
+            starts.push(index + 1);
+        }
+    }
+    while starts.len() < line_count {
+        starts.push(text.len());
     }
     starts
 }
@@ -204,14 +208,16 @@ mod tests {
     }
 
     #[test]
-    fn line_start_offsets_account_for_joined_newlines() {
-        let lines = vec![
-            "abc".to_string(),
-            "de".to_string(),
-            "".to_string(),
-            "f".to_string(),
-        ];
+    fn line_start_offsets_account_for_lf_newlines() {
+        let text = "abc\nde\n\nf";
 
-        assert_eq!(line_start_offsets(&lines), vec![0, 4, 7, 8]);
+        assert_eq!(line_start_offsets(text, 4), vec![0, 4, 7, 8]);
+    }
+
+    #[test]
+    fn line_start_offsets_account_for_crlf_newlines() {
+        let text = "abc\r\nde\r\n\r\nf";
+
+        assert_eq!(line_start_offsets(text, 4), vec![0, 5, 9, 11]);
     }
 }
