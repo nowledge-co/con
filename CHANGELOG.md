@@ -6,6 +6,19 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.69` - unreleased
 
+### Changed
+
+**Windows**
+
+- Improved the default Windows terminal pane presentation with a small content
+  inset and native-edge caption alignment, so the prompt no longer sits flush
+  against the window edge, the inset gutter matches the terminal background,
+  and the close button reaches the right edge of the titlebar. _(Issues
+  [#131](https://github.com/nowledge-co/con-terminal/issues/131) and
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ### Fixed
 
 **Panes**
@@ -13,6 +26,89 @@ con is still pre-release, so entries may group related beta work while the produ
 - Fixed pane-local surface tab strips so they use the same themed chrome
   backing as split-pane title bars instead of leaking transparent window
   content, and tightened their spacing, typography, and active/hover states.
+  _(PR [#184](https://github.com/nowledge-co/con-terminal/pull/184) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+**Windows**
+
+- Improved Windows CJK rendering by anchoring fallback CJK glyphs to the
+  terminal cell baseline, drawing East Asian text through a medium-weight
+  DirectWrite format, and applying only a moderate CJK-specific grayscale
+  contrast boost. This reduces vertical drift and thin-looking Chinese strokes
+  without over-darkening Latin text or Nerd-Font prompt icons. _(Issues
+  [#124](https://github.com/nowledge-co/con-terminal/issues/124),
+  [#78](https://github.com/nowledge-co/con-terminal/issues/78), and
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Raised the Windows alternate-screen background opacity floor for full-screen
+  TUIs such as htop and vim to a solid app canvas, so their default-background
+  screens match Windows Terminal/Ghostty instead of compositing with shell
+  content underneath. Ordinary shell panes still keep the configured terminal
+  glass effect. _(Issue [#34](https://github.com/nowledge-co/con-terminal/issues/34),
+  PR [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Polished Windows and Linux caption-button hover states so minimize and
+  maximize/restore give visible feedback instead of only the close button
+  feeling interactive. _(Issues
+  [#18](https://github.com/nowledge-co/con-terminal/issues/18) and
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Stopped stale Windows terminal frames from stretching while panes close,
+  split, or resize, so existing terminal content no longer appears briefly
+  zoomed before the next renderer frame arrives, and covered newly exposed
+  stale-frame gaps with the terminal background instead of leaking transparent
+  window content. _(Issue
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Fixed restored Windows sessions so the saved working directory remains the
+  ConPTY launch/current-directory fallback until shell integration reports a
+  newer path. Con now also installs a lightweight PowerShell/pwsh prompt hook
+  that emits cwd updates, so restored Windows sessions follow directory
+  changes made after startup; the portable VT wrapper now captures OSC 7
+  directly because libghostty-vt's terminal-only stream intentionally ignores
+  cwd reports. _(Issue
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+**Windows and Linux**
+
+- Tightened portable terminal chrome coverage so pane dividers, vertical-tab
+  edges, input bar motion, and agent-panel drag/show/hide transitions use
+  terminal-colored seam covers and terminal-matched backing instead of
+  transparent hit areas that could leak the desktop/window backdrop during fast
+  movement. _(Issues
+  [#18](https://github.com/nowledge-co/con-terminal/issues/18) and
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Matched macOS terminal behavior on the portable backends: when a user has
+  scrolled back and then types or pastes input, the viewport now returns to the
+  live prompt instead of leaving the terminal parked in history. _(Issues
+  [#18](https://github.com/nowledge-co/con-terminal/issues/18) and
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Fixed terminal selection copy semantics on the portable backends:
+  `Ctrl+C` now copies and clears the current selection when text is selected,
+  while still sending interrupt when nothing is selected. The Linux preview
+  also now supports left-drag text selection in the terminal pane and clears
+  stale highlights when fresh terminal output replaces the grid. _(Issues
+  [#177](https://github.com/nowledge-co/con-terminal/issues/177),
+  [#18](https://github.com/nowledge-co/con-terminal/issues/18), and
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Made portable terminal selections scrollback-stable: when the viewport moves
+  while text is selected, the highlight now remains attached to the selected
+  terminal content instead of staying pinned to the same screen rows. _(Issues
+  [#18](https://github.com/nowledge-co/con-terminal/issues/18) and
+  [#34](https://github.com/nowledge-co/con-terminal/issues/34), PR
+  [#169](https://github.com/nowledge-co/con-terminal/pull/169) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.68` - 2026-05-09
 

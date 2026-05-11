@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(target_os = "windows")]
 use con_ghostty::GhosttyTerminal;
 use gpui::{ClipboardEntry, ClipboardItem, ExternalPaths};
 
@@ -43,21 +43,44 @@ pub fn payload_from_external_paths(paths: &ExternalPaths) -> Option<TerminalPast
     quoted_paths_text(paths.paths()).map(TerminalPastePayload::Text)
 }
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(target_os = "windows")]
 pub fn copy_selection_to_clipboard(terminal: &GhosttyTerminal, cx: &mut gpui::App) -> bool {
-    if !terminal.has_selection() {
-        return false;
+    let has_selection = terminal.has_selection();
+    let selection = has_selection.then(|| terminal.selection_text()).flatten();
+    match copy_selection_decision(has_selection, selection.as_deref()) {
+        CopySelectionDecision::NoSelection => false,
+        CopySelectionDecision::ClearOnly => {
+            terminal.clear_selection();
+            true
+        }
+        CopySelectionDecision::CopyAndClear(selection) => {
+            cx.write_to_clipboard(ClipboardItem::new_string(selection.to_string()));
+            terminal.clear_selection();
+            true
+        }
     }
+}
 
-    let Some(selection) = terminal
-        .selection_text()
-        .filter(|selection| !selection.is_empty())
-    else {
-        return false;
-    };
+#[derive(Debug, Eq, PartialEq)]
+#[cfg(any(target_os = "windows", test))]
+enum CopySelectionDecision<'a> {
+    NoSelection,
+    ClearOnly,
+    CopyAndClear(&'a str),
+}
 
-    cx.write_to_clipboard(ClipboardItem::new_string(selection));
-    true
+#[cfg(any(target_os = "windows", test))]
+fn copy_selection_decision(
+    has_selection: bool,
+    selection: Option<&str>,
+) -> CopySelectionDecision<'_> {
+    if !has_selection {
+        return CopySelectionDecision::NoSelection;
+    }
+    match selection {
+        Some(selection) if !selection.is_empty() => CopySelectionDecision::CopyAndClear(selection),
+        _ => CopySelectionDecision::ClearOnly,
+    }
 }
 
 fn external_paths_from_entries(entries: &[ClipboardEntry]) -> Vec<PathBuf> {
@@ -187,7 +210,30 @@ mod tests {
 
     use gpui::{ClipboardEntry, ClipboardItem, ClipboardString, ExternalPaths, Image, ImageFormat};
 
-    use super::{TerminalPastePayload, payload_from_clipboard, quoted_paths_text};
+    use super::{
+        CopySelectionDecision, TerminalPastePayload, copy_selection_decision,
+        payload_from_clipboard, quoted_paths_text,
+    };
+
+    #[test]
+    fn copy_selection_decision_distinguishes_empty_and_absent_selection() {
+        assert_eq!(
+            copy_selection_decision(false, Some("ignored")),
+            CopySelectionDecision::NoSelection
+        );
+        assert_eq!(
+            copy_selection_decision(true, None),
+            CopySelectionDecision::ClearOnly
+        );
+        assert_eq!(
+            copy_selection_decision(true, Some("")),
+            CopySelectionDecision::ClearOnly
+        );
+        assert_eq!(
+            copy_selection_decision(true, Some("selected")),
+            CopySelectionDecision::CopyAndClear("selected")
+        );
+    }
 
     #[test]
     fn quoted_paths_are_space_padded() {

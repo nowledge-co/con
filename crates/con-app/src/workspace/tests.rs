@@ -25,10 +25,7 @@ fn agent_request_opening_panel_drives_panel_motion_to_visible() {
         agent_panel_motion_target_for_agent_request(false),
         Some(1.0)
     );
-    assert_eq!(
-        agent_panel_motion_target_for_agent_request(true),
-        Some(1.0)
-    );
+    assert_eq!(agent_panel_motion_target_for_agent_request(true), Some(1.0));
 }
 
 #[test]

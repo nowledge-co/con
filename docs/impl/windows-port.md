@@ -354,13 +354,37 @@ Phase 3c details now covered by the beta baseline:
   reserved for app tab switching on Windows.
 - Wheel and touchpad input scroll libghostty-vt viewport state when mouse tracking is inactive. Alternate-screen mode-1007 wheel gestures translate into cursor keys with the same fractional row accumulator used by primary scrollback.
 - The Windows pane has a visible GPUI scrollback scrollbar backed by cached libghostty-vt scrollbar state, so render no longer polls the expensive scrollbar query on every paint.
+- The Windows terminal view insets the measured renderer surface from the pane
+  edge. Mouse hit testing, IME candidate bounds, link hover, scrollbar, and
+  render dimensions all use the inset content bounds, so the visual padding is
+  not a cosmetic overlay that desynchronizes terminal coordinates. The gutter is
+  painted with the same terminal clear color and opacity as the renderer image
+  rather than falling through to transparent window content.
+- Alternate-screen TUIs keep a higher default-background opacity floor than the
+  ordinary shell. That preserves Con's glass effect for prompts while keeping
+  htop/vim-style application canvases readable on Windows.
+- CJK fallback glyphs are baseline-aligned inside the glyph atlas instead of
+  being top-aligned as one-character `DrawText` lines. This keeps fallback
+  CJK runs anchored to the same terminal-cell baseline as the primary face.
+- Normal-weight East Asian text uses a medium-weight DirectWrite text format
+  with a CJK-only grayscale contrast profile. That keeps Chinese strokes closer
+  to browser/native text weight without reintroducing ClearType RGB fringe or
+  changing Latin / Nerd-Font prompt glyphs.
 - OSC 52 and ordinary clipboard operations are wired through the Win32 clipboard.
 - CJK IME commit/preedit input is wired through GPUI's platform
   `InputHandler`. The terminal still owns control, alt/meta, and
   special-key encoding, while printable text and IME commits enter the
   PTY as text. Composition ranges report cursor-relative bounds so
   candidate windows anchor to the terminal cursor.
-- ConPTY child launch passes the pseudo-console with `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`, avoids inheriting con's unrelated stdout/stderr handles, starts from a valid absolute cwd when provided, then falls back to the user's home directory and finally `%TEMP%`.
+- ConPTY child launch passes the pseudo-console with
+  `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`, avoids inheriting con's unrelated
+  stdout/stderr handles, starts from a valid absolute cwd when provided, then
+  falls back to the user's home directory and finally `%TEMP%`.
+  PowerShell/pwsh shells are launched with a lightweight prompt hook that emits
+  OSC 7 cwd updates, and Con's Rust VT wrapper captures OSC 7 directly because
+  libghostty-vt's terminal-only handler does not mutate pwd for that report.
+  Restored sessions and new panes can therefore follow `cd` changes instead of
+  only remembering the process launch directory.
 - Profiling uses `CON_LOG_FILE` instead of shell redirection so the child shell never sees redirected log handles.
 
 Phases 0-3e are **substantially complete** for the current Windows beta
@@ -439,9 +463,10 @@ right column, Tab / Shift+Tab reach shells and TUIs, wheel gestures
 respect the platform scroll intent, and normal-shell scrollback is
 reachable through both the mouse wheel and the visible scrollbar.
 Resize works. Window close kills the shell. The remaining Windows work
-is now direct-composition presentation, IME edge-case validation /
-resize / advanced selection polish, and distribution hardening rather than basic
-input/selection bring-up.
+is now direct-composition presentation, IME edge-case validation,
+maximize/resize feel (#125), CJK font-weight polish, advanced selection
+polish, and distribution hardening rather than basic input/selection
+bring-up.
 
 Caveats:
 - You must have **Zig 0.15.2 exactly** on `PATH` for `cargo build` to
@@ -454,7 +479,10 @@ Caveats:
 - The shell is `CON_SHELL` if set, else the configured Windows Terminal
   default profile command when `%LOCALAPPDATA%` settings are readable,
   else `pwsh.exe`/`powershell.exe` if on `PATH`, else `$env:COMSPEC`,
-  else `cmd.exe`. A first-class config field is still Phase 4 work.
+  else `cmd.exe`. PowerShell/pwsh profiles without an explicit
+  `-Command`/`-File` get Con's OSC 7 cwd hook automatically; custom
+  command/file profiles are left untouched. A first-class config field is
+  still Phase 4 work.
 - The terminal still pays a GPU→CPU readback and GPUI image upload on
   dirty frames. Recent fixes made small updates row-local and removed
   avoidable extra-frame latency plus several backlog stalls, but Windows
@@ -471,13 +499,15 @@ remaining decisions are narrower:
    that lets con present a Windows composition swap chain directly in the
    GPUI tree, then remove the D3D readback + `RenderImage` re-upload
    bridge.
-2. **Shell integration scope.** Decide whether OSC 133 / OSC 7 and
-   related shell-integration features belong in the shared VT layer or in
-   per-platform shell adapters.
+2. **Shell integration scope.** Decide whether OSC 133 and non-PowerShell
+   OSC 7 support belong in the shared VT layer or in per-platform shell
+   adapters. PowerShell/pwsh cwd tracking is currently handled as a
+   Windows launch-time adapter because those shells do not emit OSC 7 by
+   default.
 3. **Windows hardening.** Broaden IME/dead-key/international-keyboard
    validation, drag-to-scroll selection polish, column selection,
-   extreme resize behavior, ligatures, and remaining multi-monitor/GPU
-   edge cases.
+   CJK font-weight tuning, extreme resize behavior, ligatures, and
+   remaining multi-monitor/GPU edge cases.
 4. **Distribution.** Choose the installer/signing path (MSIX/MSI/cargo
    dist/winget), code-sign the binary, and harden the existing beta
    in-place update flow with artifact signature verification.

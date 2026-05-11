@@ -535,27 +535,185 @@ where
 /// important when comparing prompt latency: PowerShell profile scripts,
 /// prompt frameworks, and WSL startup can dominate the first 400-500ms.
 pub fn default_shell_command() -> String {
-    if let Some(cmd) = std::env::var("CON_SHELL")
+    let command = if let Some(cmd) = std::env::var("CON_SHELL")
         .ok()
         .filter(|s| !s.trim().is_empty())
     {
-        return cmd;
+        cmd
+    } else if let Some(cmd) = windows_terminal_default_shell_command() {
+        cmd
+    } else if let Some(candidate) = ["pwsh.exe", "powershell.exe"]
+        .into_iter()
+        .find(|candidate| path_lookup(candidate).is_some())
+    {
+        candidate.to_string()
+    } else if let Some(cmd) = std::env::var("COMSPEC")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+    {
+        cmd
+    } else {
+        "cmd.exe".to_string()
+    };
+
+    with_shell_integration(command)
+}
+
+fn with_shell_integration(command: String) -> String {
+    with_powershell_cwd_integration(&command).unwrap_or(command)
+}
+
+fn with_powershell_cwd_integration(command: &str) -> Option<String> {
+    let script_path = powershell_cwd_integration_script_path()?;
+    with_powershell_cwd_integration_script(command, &script_path)
+}
+
+fn with_powershell_cwd_integration_script(command: &str, script_path: &Path) -> Option<String> {
+    let (executable, rest) = split_command_head(command.trim())?;
+    let basename = command_basename(executable);
+    if !matches_ignore_ascii_case_any(
+        basename,
+        &["pwsh", "pwsh.exe", "powershell", "powershell.exe"],
+    ) {
+        return None;
     }
-    if let Some(cmd) = windows_terminal_default_shell_command() {
-        return cmd;
+
+    let args = split_command_args(rest);
+    if args.iter().any(|arg| {
+        matches_ignore_ascii_case_any(
+            arg,
+            &[
+                "-command",
+                "/command",
+                "-c",
+                "/c",
+                "-encodedcommand",
+                "/encodedcommand",
+                "-ec",
+                "/ec",
+                "-file",
+                "/file",
+                "-f",
+                "/f",
+            ],
+        )
+    }) {
+        return None;
     }
-    for candidate in ["pwsh.exe", "powershell.exe"] {
-        if path_lookup(candidate).is_some() {
-            return candidate.to_string();
+
+    let mut integrated = command.trim().to_string();
+    if !args
+        .iter()
+        .any(|arg| matches_ignore_ascii_case_any(arg, &["-noexit", "/noexit"]))
+    {
+        integrated.push_str(" -NoExit");
+    }
+    integrated.push_str(" -ExecutionPolicy Bypass -File ");
+    integrated.push_str(&quote_path_for_command(script_path));
+    Some(integrated)
+}
+
+fn powershell_cwd_integration_script_path() -> Option<PathBuf> {
+    let dir = std::env::temp_dir().join("con-terminal");
+    if let Err(err) = fs::create_dir_all(&dir) {
+        log::warn!(
+            "could not create PowerShell cwd integration directory {}: {err}",
+            dir.display()
+        );
+        return None;
+    }
+
+    let path = dir.join("con-powershell-cwd-integration.ps1");
+    if let Err(err) = fs::write(&path, POWERSHELL_CWD_INTEGRATION_SCRIPT) {
+        log::warn!(
+            "could not write PowerShell cwd integration script {}: {err}",
+            path.display()
+        );
+        return None;
+    }
+    Some(path)
+}
+
+const POWERSHELL_CWD_INTEGRATION_SCRIPT: &str = r#"
+function global:__ConTerminalEmitOsc7 {
+    try {
+        $providerPath = (Get-Location).ProviderPath
+        if ([string]::IsNullOrWhiteSpace($providerPath)) {
+            return
+        }
+        $uri = ([System.Uri]::new($providerPath)).AbsoluteUri
+        [Console]::Write("$([char]0x1b)]7;$uri$([char]0x07)")
+    } catch {
+    }
+}
+
+if (-not $global:__ConTerminalPromptHookInstalled) {
+    $global:__ConTerminalPromptHookInstalled = $true
+    $global:__ConTerminalOriginalPrompt = (Get-Command prompt -CommandType Function -ErrorAction SilentlyContinue).ScriptBlock
+    function global:prompt {
+        global:__ConTerminalEmitOsc7
+        if ($global:__ConTerminalOriginalPrompt) {
+            & $global:__ConTerminalOriginalPrompt
+        } else {
+            "PS $($executionContext.SessionState.Path.CurrentLocation)$('>' * ($nestedPromptLevel + 1)) "
         }
     }
-    if let Some(cmd) = std::env::var("COMSPEC")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-    {
-        return cmd;
+}
+
+global:__ConTerminalEmitOsc7
+"#;
+
+fn split_command_head(command: &str) -> Option<(&str, &str)> {
+    let command = command.trim();
+    if command.is_empty() {
+        return None;
     }
-    "cmd.exe".to_string()
+
+    if let Some(stripped) = command.strip_prefix('"') {
+        let end = stripped.find('"')?;
+        let executable = &stripped[..end];
+        let rest = stripped[end + 1..].trim_start();
+        Some((executable, rest))
+    } else {
+        let split = command.find(char::is_whitespace).unwrap_or(command.len());
+        let executable = &command[..split];
+        let rest = command[split..].trim_start();
+        Some((executable, rest))
+    }
+}
+
+fn command_basename(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
+}
+
+fn split_command_args(input: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    for ch in input.chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            ch if ch.is_whitespace() && !in_quotes => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if !current.is_empty() {
+        args.push(current);
+    }
+
+    args
+}
+
+fn matches_ignore_ascii_case_any(input: &str, candidates: &[&str]) -> bool {
+    candidates
+        .iter()
+        .any(|candidate| input.eq_ignore_ascii_case(candidate))
 }
 
 fn windows_terminal_default_shell_command() -> Option<String> {
@@ -902,5 +1060,53 @@ mod tests {
             windows_terminal_profile_command_from_settings(settings).as_deref(),
             Some("powershell.exe")
         );
+    }
+
+    #[test]
+    fn wraps_powershell_shells_with_cwd_integration() {
+        let script = Path::new(r"C:\Users\me\AppData\Local\Temp\Con Terminal\con-cwd.ps1");
+
+        let wrapped = with_powershell_cwd_integration_script("pwsh.exe -NoLogo", script)
+            .expect("pwsh should be integrated");
+
+        assert!(wrapped.starts_with("pwsh.exe -NoLogo -NoExit "));
+        assert!(wrapped.contains("-ExecutionPolicy Bypass -File "));
+        assert!(wrapped.contains(r#""C:\Users\me\AppData\Local\Temp\Con Terminal\con-cwd.ps1""#));
+    }
+
+    #[test]
+    fn preserves_existing_noexit_when_wrapping_powershell() {
+        let script = Path::new(r"C:\Temp\con-cwd.ps1");
+
+        let wrapped = with_powershell_cwd_integration_script(
+            r#""C:\Program Files\PowerShell\7\pwsh.exe" -NoLogo -NoExit"#,
+            script,
+        )
+        .expect("quoted pwsh path should be integrated");
+
+        assert_eq!(wrapped.matches("-NoExit").count(), 1);
+        assert!(wrapped.contains("-ExecutionPolicy Bypass -File "));
+    }
+
+    #[test]
+    fn leaves_command_mode_powershell_commands_unchanged() {
+        let script = Path::new(r"C:\Temp\con-cwd.ps1");
+
+        assert!(
+            with_powershell_cwd_integration_script("pwsh.exe -Command Get-Location", script)
+                .is_none()
+        );
+        assert!(
+            with_powershell_cwd_integration_script("powershell.exe -File init.ps1", script)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn does_not_wrap_non_powershell_shells() {
+        let script = Path::new(r"C:\Temp\con-cwd.ps1");
+
+        assert!(with_powershell_cwd_integration_script("cmd.exe", script).is_none());
+        assert!(with_powershell_cwd_integration_script("wsl.exe", script).is_none());
     }
 }

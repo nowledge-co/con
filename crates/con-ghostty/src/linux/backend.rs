@@ -424,6 +424,8 @@ impl LinuxGhosttyTerminal {
         None
     }
 
+    pub fn clear_selection(&self) {}
+
     pub fn read_screen_text(&self, max_lines: usize) -> Vec<String> {
         self.inner
             .lock()

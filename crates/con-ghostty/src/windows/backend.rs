@@ -282,6 +282,11 @@ impl WindowsGhosttyTerminal {
     pub fn selection_text(&self) -> Option<String> {
         self.inner.lock().as_ref().and_then(|s| s.selection_text())
     }
+    pub fn clear_selection(&self) {
+        if let Some(session) = self.inner.lock().as_ref() {
+            session.clear_selection();
+        }
+    }
     pub fn read_screen_text(&self, max_lines: usize) -> Vec<String> {
         self.inner
             .lock()
