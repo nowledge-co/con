@@ -179,7 +179,7 @@ impl ConWorkspace {
         input_bar_progress: f32,
         ui_surface_opacity: f32,
         elevated_ui_surface_opacity: f32,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         if self.pane_scope_picker_open
@@ -238,19 +238,6 @@ impl ConWorkspace {
                 };
                 let scope_frame_inset = px(3.0);
                 let scope_frame_radius = px(9.0);
-                let pane_picker_labels =
-                    crate::keycaps::first_action_keystroke(&TogglePaneScopePicker, window)
-                        .map(|stroke| crate::keycaps::keycap_labels_for_stroke(&stroke))
-                        .unwrap_or_else(|| {
-                            #[cfg(target_os = "macos")]
-                            {
-                                vec!["⌘".to_string(), "'".to_string()]
-                            }
-                            #[cfg(not(target_os = "macos"))]
-                            {
-                                vec!["Ctrl".to_string(), "'".to_string()]
-                            }
-                        });
                 let local_keycap = |label: String| {
                     let wide = label.chars().count() > 1;
                     div()
@@ -269,11 +256,6 @@ impl ConWorkspace {
                         .text_color(theme.foreground.opacity(0.66))
                         .child(label)
                 };
-                let trigger_hint = div().flex().items_center().gap(px(3.0)).children(
-                    pane_picker_labels
-                        .into_iter()
-                        .map(|label| local_keycap(label)),
-                );
 
                 let presets = div()
                     .flex()
@@ -313,15 +295,14 @@ impl ConWorkspace {
                             .py(px(4.0))
                             .rounded(px(8.0))
                             .bg(theme.foreground.opacity(0.026))
-                            .child(trigger_hint)
                             .child(
                                 div()
-                                    .text_size(px(9.0))
+                                    .text_size(px(9.5))
                                     .line_height(px(11.0))
                                     .font_family(theme.mono_font_family.clone())
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.muted_foreground.opacity(0.42))
-                                    .child("then"),
+                                    .text_color(theme.muted_foreground.opacity(0.56))
+                                    .child("Toggle"),
                             )
                             .child(
                                 div()
