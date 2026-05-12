@@ -9,8 +9,7 @@ rail/panel inside the sidebar.
 ## Layout
 
 ```text
-[optional vertical tabs] [pane tree] [agent panel]
-                       └─ Files/Search drawer overlays from the sidebar edge
+[optional tool/session rail] [active sidebar panel] [pane tree] [agent panel]
 ```
 
 When the left sidebar is hidden, none of the three sidebar columns render. This
@@ -20,10 +19,9 @@ When the left sidebar is visible:
 
 - vertical tabs can stay folded as a 44 px rail or unfold into the pinned tab
   panel when `appearance.tabs_orientation = "vertical"`,
-- the file/search icon strip stays on the vertical-tabs sidebar surface and
-  opens a lightweight drawer from the sidebar edge,
-- the drawer overlays the workspace instead of permanently consuming layout
-  width beside vertical tabs.
+- the folded rail puts Files/Search first, then session controls and sessions,
+- Files/Search and sessions are one sidebar system: opening Files/Search keeps a
+  thin session/tool rail and swaps the adjacent panel to Files or Search.
 
 ## Slots
 
@@ -39,17 +37,17 @@ When the left sidebar is visible:
   file/search drawer controls.
 - The vertical tab collapse/expand button only changes folded/unfolded tab
   mode while the sidebar is visible.
-- Clicking an inactive section icon switches slot and opens the drawer.
-- Clicking the active section icon closes or reopens the drawer.
+- Clicking Files or Search switches the active sidebar panel.
+- Clicking a session switches the active sidebar panel back to tabs/sessions.
 
 ## Width Rules
 
-The file/search drawer can resize across the available window width. In
-horizontal-tab mode it participates in layout; in vertical-tab mode it overlays
-the pane tree so opening files/search does not create a heavy double-sidebar or
-shift the terminal/editor. The workspace owns this drag state because it has the
-full layout budget. A capture overlay is rendered during drag so releasing the
-mouse outside the handle exits resize mode reliably.
+The file/search panel can resize across the available window width. In both
+horizontal-tab and vertical-tab modes it participates in layout, so the
+terminal/editor starts after the sidebar instead of being covered by it. The
+workspace owns this drag state because it has the full layout budget. A capture
+overlay is rendered during drag so releasing the mouse outside the handle exits
+resize mode reliably.
 
 ## Root Sync
 

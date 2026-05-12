@@ -17,22 +17,23 @@ The left side of the workspace has two independent concepts:
 The current layout is:
 
 ```text
-[vertical tab rail or panel] [pane tree]
-                            └─ Files/Search drawer overlays when opened
+[tool/session rail] [active sidebar panel] [pane tree]
 ```
 
 ## Folded Mode
 
-Folded mode renders the 44 px vertical tab rail. It keeps session color,
-attention, drag/drop, hover-card, close, and create-tab affordances available in
-the compact state.
+Folded mode renders the 44 px vertical tab rail. Files/Search live at the top of
+the rail, followed by session creation and session icons. Session color,
+attention, drag/drop, hover-card, close, and create-tab affordances remain
+available in the compact state.
 
 ## Unfolded Mode
 
 Unfolded mode renders the pinned vertical tab panel with tab titles, subtitles,
 rename, close, drag/drop, and create-tab controls. File/search remains available
-from a compact launcher on the tab sidebar; unfolding tabs does not replace
-editor navigation and opening the drawer does not widen the permanent sidebar.
+from the same left sidebar rail. Opening Files/Search switches the active
+sidebar panel to that tool and keeps the session rail visible; selecting a
+session switches the panel back to vertical tabs.
 
 ## Compatibility
 

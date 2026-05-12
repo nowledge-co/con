@@ -16,6 +16,13 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.vertical_tabs_enabled() && self.sidebar_tools_open {
+            self.sidebar_tools_open = false;
+            self.activity_bar.update(cx, |bar, cx| {
+                bar.left_panel_open = false;
+                cx.notify();
+            });
+        }
         self.activate_tab(event.index, window, cx);
     }
 

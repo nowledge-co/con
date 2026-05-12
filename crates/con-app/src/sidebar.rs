@@ -248,6 +248,10 @@ pub struct SessionSidebar {
     /// Lower values let the window/terminal backdrop treatment show
     /// through, matching the rest of con's chrome.
     ui_opacity: f32,
+    /// True while the workspace is showing Files/Search beside the
+    /// vertical tabs. The sidebar then becomes the single icon rail so
+    /// tools and sessions share one left-navigation surface.
+    tools_panel_open: bool,
     tab_accent_inactive_alpha: f32,
     tab_accent_inactive_hover_alpha: f32,
 }
@@ -331,6 +335,7 @@ impl SessionSidebar {
             tab_bounds: Rc::new(RefCell::new(Vec::new())),
             drag_preview: Rc::new(RefCell::new(None)),
             ui_opacity: 0.92,
+            tools_panel_open: false,
             tab_accent_inactive_alpha: crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA,
             tab_accent_inactive_hover_alpha: crate::tab_colors::TAB_ACCENT_INACTIVE_HOVER_ALPHA,
         }
@@ -387,9 +392,19 @@ impl SessionSidebar {
     }
 
     pub fn rendered_width(&self) -> f32 {
+        if self.tools_panel_open {
+            return RAIL_WIDTH;
+        }
         match self.mode {
             PanelMode::Collapsed => RAIL_WIDTH,
             PanelMode::Pinned => self.effective_panel_width(),
+        }
+    }
+
+    pub fn set_tools_panel_open(&mut self, open: bool) {
+        if self.tools_panel_open != open {
+            self.tools_panel_open = open;
+            self.hovered_rail = None;
         }
     }
 
@@ -788,13 +803,6 @@ impl SessionSidebar {
                 theme,
                 cx.listener(|this, _, _, cx| this.toggle_pinned(cx)),
             ))
-            .child(rail_icon_button(
-                "tab-sidebar-rail-new",
-                "phosphor/plus.svg",
-                theme.muted_foreground,
-                theme,
-                cx.listener(|_, _, _, cx| cx.emit(NewSession)),
-            ))
             .child(
                 div()
                     .h(px(1.0))
@@ -830,7 +838,14 @@ impl SessionSidebar {
                     .w(px(20.0))
                     .my(px(2.0))
                     .bg(theme.muted_foreground.opacity(0.18)),
-            );
+            )
+            .child(rail_icon_button(
+                "tab-sidebar-rail-new",
+                "phosphor/plus.svg",
+                theme.muted_foreground,
+                theme,
+                cx.listener(|_, _, _, cx| cx.emit(NewSession)),
+            ));
 
         for (i, session) in self.sessions.iter().enumerate() {
             let is_active = i == self.active_session;
@@ -1719,6 +1734,19 @@ impl Render for SessionSidebar {
         }
         // Drive the width-tween animation frame.
         let _progress = self.width_motion.value(window);
+
+        if self.tools_panel_open {
+            let mut rail = div()
+                .relative()
+                .h_full()
+                .w(px(RAIL_WIDTH))
+                .flex_shrink_0()
+                .child(self.render_rail(window, cx));
+            if let Some(hover_card) = self.render_hover_card_overlay(window, cx) {
+                rail = rail.child(hover_card);
+            }
+            return rail.into_any_element();
+        }
 
         match self.mode {
             PanelMode::Pinned => {
