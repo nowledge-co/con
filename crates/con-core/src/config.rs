@@ -203,6 +203,14 @@ fn default_command_palette() -> String {
     // Ctrl+Shift+P on Windows / Linux, Cmd+Shift+P on macOS.
     "secondary-shift-p".into()
 }
+fn default_focus_files() -> String {
+    // Matches the common editor convention: Cmd/Ctrl+Shift+E.
+    "secondary-shift-e".into()
+}
+fn default_search_files() -> String {
+    // Matches the common editor convention: Cmd/Ctrl+Shift+F.
+    "secondary-shift-f".into()
+}
 
 #[cfg(target_os = "macos")]
 fn default_new_tab() -> String {
@@ -431,6 +439,8 @@ pub struct KeybindingConfig {
     pub toggle_pane_scope: String,
     #[serde(alias = "toggle_vertical_tabs")]
     pub toggle_left_panel: String,
+    pub focus_files: String,
+    pub search_files: String,
     pub collapse_sidebar: String,
     pub new_surface: String,
     pub new_surface_split_right: String,
@@ -471,6 +481,8 @@ impl KeybindingConfig {
             ("Split Down", self.split_down.as_str()),
             ("Toggle Pane Scope", self.toggle_pane_scope.as_str()),
             ("Toggle Left Sidebar", self.toggle_left_panel.as_str()),
+            ("Focus Files", self.focus_files.as_str()),
+            ("Search Files", self.search_files.as_str()),
             ("Collapse/Expand Sidebar", self.collapse_sidebar.as_str()),
             ("New Surface Tab", self.new_surface.as_str()),
             (
@@ -552,6 +564,8 @@ impl Default for KeybindingConfig {
             toggle_input_bar: default_toggle_input_bar(),
             toggle_pane_scope: default_toggle_pane_scope(),
             toggle_left_panel: default_toggle_left_panel(),
+            focus_files: default_focus_files(),
+            search_files: default_search_files(),
             collapse_sidebar: default_collapse_sidebar(),
             new_surface: default_new_surface(),
             new_surface_split_right: default_new_surface_split_right(),

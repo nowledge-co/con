@@ -140,6 +140,10 @@ impl SidebarSearchView {
         self.request_search(cx);
     }
 
+    pub fn focus_query(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.query.update(cx, |query, cx| query.focus(window, cx));
+    }
+
     fn request_search(&mut self, cx: &mut Context<Self>) {
         self.search_generation = self.search_generation.wrapping_add(1);
         let generation = self.search_generation;

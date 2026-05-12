@@ -143,6 +143,8 @@ actions!(
         CycleInputMode,
         TogglePaneScopePicker,
         ToggleLeftPanel,
+        FocusFiles,
+        SearchFiles,
         CheckForUpdates,
         EditorMoveLeft,
         EditorMoveRight,
@@ -1358,6 +1360,8 @@ fn configurable_app_binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
     push_global::<ToggleInputBar>(&mut specs, &kb.toggle_input_bar);
     push_global::<TogglePaneScopePicker>(&mut specs, &kb.toggle_pane_scope);
     push_global::<ToggleLeftPanel>(&mut specs, &kb.toggle_left_panel);
+    push_global::<FocusFiles>(&mut specs, &kb.focus_files);
+    push_global::<SearchFiles>(&mut specs, &kb.search_files);
     push_global::<CollapseSidebar>(&mut specs, &kb.collapse_sidebar);
 
     specs
@@ -1581,9 +1585,9 @@ fn payload_as_str(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BindingSpec, EditorDeleteBackward, EditorInsertNewline, EditorMoveLineEnd, FocusInput,
-        NewTab, SelectTab1, ToggleAgentPanel, Undo, binding_specs, command_palette,
-        push_app_override,
+        BindingSpec, EditorDeleteBackward, EditorInsertNewline, EditorMoveLineEnd, FocusFiles,
+        FocusInput, NewTab, SearchFiles, SelectTab1, ToggleAgentPanel, Undo, binding_specs,
+        command_palette, push_app_override,
     };
     use con_core::config::KeybindingConfig;
     use std::any::TypeId;
@@ -1626,6 +1630,14 @@ mod tests {
             (
                 "FocusInput",
                 scope_names(&specs_for_action::<FocusInput>(&specs)),
+            ),
+            (
+                "FocusFiles",
+                scope_names(&specs_for_action::<FocusFiles>(&specs)),
+            ),
+            (
+                "SearchFiles",
+                scope_names(&specs_for_action::<SearchFiles>(&specs)),
             ),
         ] {
             assert_eq!(
@@ -1744,6 +1756,8 @@ mod tests {
                     || action == TypeId::of::<SelectTab1>()
                     || action == TypeId::of::<command_palette::ToggleCommandPalette>()
                     || action == TypeId::of::<FocusInput>()
+                    || action == TypeId::of::<FocusFiles>()
+                    || action == TypeId::of::<SearchFiles>()
             })
             .filter(|spec| spec.scope.name().is_some())
             .collect::<Vec<_>>();
@@ -2240,6 +2254,9 @@ fn main() {
                     MenuItem::separator(),
                     MenuItem::action("Toggle Input / Terminal", FocusInput),
                     MenuItem::action("Cycle Input Mode", CycleInputMode),
+                    MenuItem::separator(),
+                    MenuItem::action("Focus Files", FocusFiles),
+                    MenuItem::action("Search Files", SearchFiles),
                 ],
                 disabled: false,
             },

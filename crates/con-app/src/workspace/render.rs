@@ -1179,6 +1179,8 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::cycle_input_mode))
             .on_action(cx.listener(Self::toggle_pane_scope_picker))
             .on_action(cx.listener(Self::toggle_left_panel))
+            .on_action(cx.listener(Self::focus_files_panel))
+            .on_action(cx.listener(Self::search_files_panel))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.editor_has_keyboard_focus(window, cx)
                     && this.handle_editor_text_key_down(event, window, cx)

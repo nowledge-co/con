@@ -24,11 +24,20 @@ con is still pre-release, so entries may group related beta work while the produ
   [@wey-gu](https://github.com/wey-gu), PR
   [#201](https://github.com/nowledge-co/con-terminal/pull/201) by
   [@wey-gu](https://github.com/wey-gu))_
+- Added first-class Files and Search Files commands, menu items, command
+  palette entries, editable keybindings, and defaults (`Cmd/Ctrl+Shift+E` and
+  `Cmd/Ctrl+Shift+F`). Search Files focuses the search query immediately. _(PR
+  [#201](https://github.com/nowledge-co/con-terminal/pull/201) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 **Editor**
 
 - Closing the last file in an editor-only pane now returns the tab to a terminal
   instead of leaving an empty editor surface behind. _(PR
+  [#201](https://github.com/nowledge-co/con-terminal/pull/201) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Softened inactive editor and pane titles so unfocused file/editor chrome no
+  longer renders with a heavy outlined look. _(PR
   [#201](https://github.com/nowledge-co/con-terminal/pull/201) by
   [@wey-gu](https://github.com/wey-gu))_
 
