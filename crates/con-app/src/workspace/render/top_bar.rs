@@ -18,7 +18,7 @@ impl ConWorkspace {
         top_bar_controls_offset: f32,
         compact_titlebar_progress: f32,
         tab_strip_progress: f32,
-        elevated_ui_surface_opacity: f32,
+        _elevated_ui_surface_opacity: f32,
         top_bar_surface_color: Hsla,
     ) -> impl IntoElement + use<> {
         let theme = cx.theme();
@@ -139,14 +139,9 @@ impl ConWorkspace {
             .flex()
             .flex_1()
             .min_w_0()
-            .h(px(29.0))
+            .h(px(30.0))
             .items_center()
-            .gap(px(1.0))
-            .p(px(2.0))
-            .rounded(px(11.0))
-            .bg(theme
-                .foreground
-                .opacity(if theme.is_dark() { 0.034 } else { 0.026 }))
+            .gap(px(2.0))
             // Container-level drag-move: position-based slot calculation.
             // This is the authoritative handler for HorizontalTabStrip drags.
             // It uses the full tab_strip_tab_bounds array to compute the drop
@@ -443,7 +438,11 @@ impl ConWorkspace {
                             cx,
                         )
                     })
-                    .unwrap_or(theme.background.opacity(elevated_ui_surface_opacity));
+                    .unwrap_or(theme.foreground.opacity(if theme.is_dark() {
+                        0.075
+                    } else {
+                        0.048
+                    }));
 
                 let mut tab_el = div()
                     .id(ElementId::Name(format!("tab-{}", index).into()))
@@ -454,7 +453,7 @@ impl ConWorkspace {
                     .min_w_0()
                     .max_w(px(220.0))
                     .items_center()
-                    .h(px(25.0))
+                    .h(px(30.0))
                     .text_size(px(11.5))
                     .cursor_pointer()
                     // Windows: without `.occlude()` the parent top_bar's
@@ -651,12 +650,12 @@ impl ConWorkspace {
                 let mut tab_content = div()
                     .flex()
                     .items_center()
-                    .gap(px(5.0))
+                    .gap(px(4.0))
                     .w_full()
-                    .h(px(25.0))
+                    .h(px(26.0))
                     .min_w_0()
                     .rounded(px(8.0))
-                    .px(px(5.0))
+                    .px(px(4.0))
                     .hover(move |s: gpui::StyleRefinement| s.bg(tab_cell_hover))
                     .child(left_reserve);
 
@@ -676,7 +675,7 @@ impl ConWorkspace {
                                 .min_w_0()
                                 .max_w(px(168.0))
                                 .h(px(23.0))
-                                .px(px(if is_active { 10.0 } else { 4.0 }))
+                                .px(px(if is_active { 11.0 } else { 4.0 }))
                                 .rounded(px(8.0))
                                 .bg(if is_active {
                                     active_title_surface
