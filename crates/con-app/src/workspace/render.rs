@@ -1127,7 +1127,10 @@ impl Render for ConWorkspace {
                 {
                     return;
                 }
-                if this.handle_focused_editor_pane_key_down(event, window, cx) {
+                if focused_editor_pane_key_fallback_allowed(
+                    this.is_input_surface_focused(window, cx),
+                ) && this.handle_focused_editor_pane_key_down(event, window, cx)
+                {
                     return;
                 }
 

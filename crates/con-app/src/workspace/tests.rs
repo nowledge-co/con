@@ -2,7 +2,8 @@ use super::chrome::agent_panel_motion_target_for_agent_request;
 use super::{
     ActivePaneFocusTarget, EditorFileCloseOutcome, EditorLineBoundary, FileTreeFocusSource,
     WorkspaceCloseIntent, active_pane_focus_target, editor_file_close_outcome,
-    editor_line_boundary_for_key, file_tree_root_for_focus, resize_drag_should_continue,
+    editor_line_boundary_for_key, file_tree_root_for_focus,
+    focused_editor_pane_key_fallback_allowed, resize_drag_should_continue,
     should_show_activity_bar, workspace_close_intent, workspace_close_intent_for_close_tab,
 };
 use super::{
@@ -108,6 +109,12 @@ fn ctrl_a_and_ctrl_e_have_workspace_fallback_for_focused_editor_pane() {
         editor_line_boundary_for_key("a", false, false, false, false),
         None
     );
+}
+
+#[test]
+fn focused_editor_pane_key_fallback_does_not_steal_input_focus() {
+    assert!(focused_editor_pane_key_fallback_allowed(false));
+    assert!(!focused_editor_pane_key_fallback_allowed(true));
 }
 
 #[test]
