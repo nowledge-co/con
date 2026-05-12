@@ -3498,16 +3498,31 @@ impl SettingsPanel {
                         .child(row_separator(theme))
                         .child(toggle_row(
                             "Terminal Blur",
-                            "Blur the desktop behind transparent terminal surfaces.",
-                            Switch::new("terminal-blur-toggle")
-                                .checked(self.terminal_blur)
-                                .small()
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    this.terminal_blur = *checked;
-                                    this.config.appearance.terminal_blur = *checked;
-                                    cx.emit(AppearancePreview);
-                                    cx.notify();
-                                })),
+                            if cfg!(target_os = "linux") {
+                                "Disabled on Linux until rounded compositor blur regions are available."
+                            } else {
+                                "Blur the desktop behind transparent terminal surfaces."
+                            },
+                            {
+                                let terminal_blur_supported = !cfg!(target_os = "linux");
+                                let mut toggle = Switch::new("terminal-blur-toggle")
+                                    .checked(self.terminal_blur && terminal_blur_supported)
+                                    .small()
+                                    .disabled(!terminal_blur_supported);
+
+                                if terminal_blur_supported {
+                                    toggle = toggle.on_click(cx.listener(
+                                        |this, checked: &bool, _, cx| {
+                                            this.terminal_blur = *checked;
+                                            this.config.appearance.terminal_blur = *checked;
+                                            cx.emit(AppearancePreview);
+                                            cx.notify();
+                                        },
+                                    ));
+                                }
+
+                                toggle
+                            },
                             theme,
                         ))
                         .child(row_separator(theme))

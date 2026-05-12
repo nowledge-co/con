@@ -27,7 +27,7 @@ mod quick_terminal;
 // The terminal-view module is selected per platform:
 //   macOS   -> ghostty_view.rs (libghostty + child NSView)
 //   Windows -> windows_view.rs (libghostty-vt + ConPTY + D3D11 child HWND)
-//   Linux   -> linux_view.rs (Linux-specific placeholder until backend lands)
+//   Linux   -> linux_view.rs (Unix PTY + libghostty-vt + GPUI paint path)
 //   other   -> stub_view.rs
 //
 // All three expose the same public type names (`GhosttyView`,
@@ -280,24 +280,16 @@ pub fn set_windows_backdrop_blur(window: &mut Window, blur: bool) {
 /// can toggle "background blur" in settings without restarting the
 /// window.
 ///
-/// `blur=true` requests `WindowBackgroundAppearance::Blurred`. The
-/// gpui_linux Wayland backend honors that via the
-/// `org_kde_kwin_blur` protocol (real Gaussian blur of what's
-/// behind the window — works on KDE Plasma Wayland). On X11 and on
-/// Wayland compositors that don't expose the blur protocol
-/// (mutter / GNOME, sway by default), the renderer keeps the
-/// window transparent but does NOT draw a blur — there's no
-/// equivalent of DWM's Acrylic API there. We still flip to
-/// `Transparent` in that case so per-pane opacity has a desktop
-/// to composite over.
+/// Linux keeps the native surface transparent even when the user
+/// has background blur enabled. GPUI's current KWin blur integration
+/// commits blur for the whole Wayland surface instead of a rounded
+/// region, which makes the transparent corners read as a rectangular
+/// blur block. Until the platform layer can expose a rounded blur
+/// region, alpha shape correctness wins over blur.
 #[cfg(target_os = "linux")]
-pub fn set_linux_window_blur(window: &mut Window, blur: bool) {
+pub fn set_linux_window_blur(window: &mut Window, _blur: bool) {
     use gpui::WindowBackgroundAppearance;
-    window.set_background_appearance(if blur {
-        WindowBackgroundAppearance::Blurred
-    } else {
-        WindowBackgroundAppearance::Transparent
-    });
+    window.set_background_appearance(WindowBackgroundAppearance::Transparent);
 }
 
 #[cfg(target_os = "macos")]
@@ -444,7 +436,7 @@ fn default_window_background(
     config: &con_core::Config,
     transparent: bool,
 ) -> WindowBackgroundAppearance {
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let _ = config;
 
     if !transparent {
@@ -463,7 +455,16 @@ fn default_window_background(
         }
     }
 
-    WindowBackgroundAppearance::Transparent
+    #[cfg(target_os = "linux")]
+    {
+        let _ = config;
+        WindowBackgroundAppearance::Transparent
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        WindowBackgroundAppearance::Transparent
+    }
 }
 
 fn default_workspace_window_bounds(cx: &mut App) -> WindowBounds {
@@ -595,6 +596,13 @@ pub(crate) fn open_con_window(
                     // Ghostty NSView below GPUI stays visible, even on
                     // Monterey where the top-level window falls back to
                     // opaque.
+                    cx.theme().transparent
+                } else if cfg!(target_os = "linux") {
+                    // Linux relies on a transparent top-level Root so
+                    // the workspace's rounded `overflow_hidden` clip
+                    // exposes the compositor at the outer corners.
+                    // Painting the Root with the theme background here
+                    // makes the clipped workspace look square again.
                     cx.theme().transparent
                 } else {
                     cx.theme().background
