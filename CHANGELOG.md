@@ -8,6 +8,14 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Sidebar**
+
+- Restored vertical tabs inside the left sidebar and brought back full sidebar
+  hide/unhide behavior, so Files/Search tools coexist with folded or unfolded
+  vertical tabs without taking away the clean terminal view. _(PR
+  [#194](https://github.com/nowledge-co/con-terminal/pull/194) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 **Tabs**
 
 - Fixed vertical tab titles so changing directories clears stale AI-generated
