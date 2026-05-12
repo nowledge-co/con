@@ -345,7 +345,7 @@ impl ConWorkspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .size(px(18.0))
+                    .size(px(17.0))
                     .flex_shrink_0()
                     .rounded(px(5.0))
                     .cursor_pointer()
@@ -353,7 +353,7 @@ impl ConWorkspace {
                     // `WindowControlArea::Drag` hit-test swallows the
                     // click (returns HTCAPTION → window drag starts).
                     .occlude()
-                    .hover(|s| s.bg(theme.muted.opacity(0.15)));
+                    .hover(|s| s.bg(theme.muted.opacity(0.12)));
                 if !is_active {
                     close_el = close_el.invisible().group_hover("tab", |s| s.visible());
                 }
@@ -368,7 +368,7 @@ impl ConWorkspace {
                         svg()
                             .path("phosphor/x.svg")
                             .size(px(10.0))
-                            .text_color(theme.muted_foreground.opacity(0.48)),
+                            .text_color(theme.muted_foreground.opacity(0.42)),
                     );
 
                 // Drop indicator: 2px vertical line on the left edge of
@@ -635,7 +635,7 @@ impl ConWorkspace {
                 let mut tab_content = div()
                     .flex()
                     .items_center()
-                    .gap(px(7.0))
+                    .gap(px(6.0))
                     .size_full()
                     .min_w_0();
 
@@ -653,7 +653,7 @@ impl ConWorkspace {
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(7.0))
+                        .gap(px(6.0))
                         .flex_1()
                         .min_w(px(0.0))
                         .overflow_x_hidden()
@@ -661,16 +661,16 @@ impl ConWorkspace {
                         .child(
                             svg()
                                 .path(tab_icon)
-                                .size(px(13.0))
+                                .size(px(12.5))
                                 .flex_shrink_0()
                                 .text_color(if is_active {
                                     tab_color
                                         .map(|color| {
                                             crate::tab_colors::tab_accent_color_hsla(color, cx)
                                         })
-                                        .unwrap_or_else(|| theme.foreground.opacity(0.72))
+                                        .unwrap_or_else(|| theme.foreground.opacity(0.68))
                                 } else {
-                                    theme.muted_foreground.opacity(0.42)
+                                    theme.muted_foreground.opacity(0.38)
                                 }),
                         )
                         .child(
@@ -680,15 +680,16 @@ impl ConWorkspace {
                                 .whitespace_nowrap()
                                 .text_ellipsis()
                                 .font_family(theme.mono_font_family.clone())
+                                .line_height(px(14.0))
                                 .font_weight(if is_active {
                                     FontWeight::SEMIBOLD
                                 } else {
                                     FontWeight::MEDIUM
                                 })
                                 .text_color(if is_active {
-                                    theme.foreground.opacity(0.90)
+                                    theme.foreground.opacity(0.88)
                                 } else {
-                                    theme.muted_foreground.opacity(0.66)
+                                    theme.muted_foreground.opacity(0.62)
                                 })
                                 .child(display_title),
                         ),
