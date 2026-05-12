@@ -24,6 +24,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
 const EDITOR_FONT_SIZE: f32 = 14.0;
@@ -37,6 +38,7 @@ const ROW_TEXT_LEFT: f32 = GUTTER_WIDTH + TEXT_IN_CONTENT_LEFT;
 const CHAR_WIDTH: f32 = editor_char_width(EDITOR_FONT_SIZE);
 const SCROLLBAR_HITBOX_SIZE: f32 = 16.0;
 const CURSOR_SCROLL_PADDING: f32 = 32.0;
+const LSP_DID_CHANGE_DEBOUNCE_MS: u64 = 150;
 
 const fn editor_char_width(font_size: f32) -> f32 {
     // GPUI's text rendering does the actual shaping, but this lightweight editor
@@ -214,6 +216,8 @@ pub struct EditorView {
     lsp_event_tx: Sender<LspClientEvent>,
     lsp_event_rx: Receiver<LspClientEvent>,
     lsp_event_pump: Option<Task<()>>,
+    lsp_change_generations: HashMap<PathBuf, u64>,
+    lsp_change_debounce_tasks: HashMap<PathBuf, Task<()>>,
     dirty_close_blocked_tab: Option<usize>,
 }
 
@@ -236,6 +240,8 @@ impl EditorView {
             lsp_event_tx,
             lsp_event_rx,
             lsp_event_pump: None,
+            lsp_change_generations: HashMap::new(),
+            lsp_change_debounce_tasks: HashMap::new(),
             dirty_close_blocked_tab: None,
         }
     }
@@ -421,6 +427,8 @@ impl EditorView {
         self.tabs.remove(self.active_tab);
         self.lsp_clients.remove(&closed_path);
         self.lsp_diagnostics.remove(&closed_path);
+        self.lsp_change_generations.remove(&closed_path);
+        self.lsp_change_debounce_tasks.remove(&closed_path);
         if self.tabs.is_empty() {
             self.active_tab = 0;
             self.scroll_handle = UniformListScrollHandle::new();
@@ -592,6 +600,18 @@ impl EditorView {
     }
 
     fn visual_columns_for_line(line: &str) -> usize {
+        line.chars().count()
+    }
+
+    fn utf16_column_to_visual_column(line: &str, utf16_column: usize) -> usize {
+        let mut consumed_utf16 = 0;
+        for (visual_column, ch) in line.chars().enumerate() {
+            let next_utf16 = consumed_utf16 + ch.len_utf16();
+            if utf16_column < next_utf16 {
+                return visual_column;
+            }
+            consumed_utf16 = next_utf16;
+        }
         line.chars().count()
     }
 
@@ -787,13 +807,44 @@ impl EditorView {
         }
     }
 
-    fn notify_lsp_active_did_change(&self) {
-        let Some(tab) = self.active_tab_ref() else {
+    fn notify_lsp_active_did_change(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.active_tab_ref().map(|tab| tab.path.clone()) else {
             return;
         };
-        if let Some(client) = self.lsp_clients.get(&tab.path) {
-            client.did_change(tab.buffer.text());
+        if !self.lsp_clients.contains_key(&path) {
+            return;
         }
+
+        let generation = self
+            .lsp_change_generations
+            .entry(path.clone())
+            .and_modify(|generation| *generation = generation.wrapping_add(1))
+            .or_insert(1);
+        let generation = *generation;
+
+        self.lsp_change_debounce_tasks.insert(
+            path.clone(),
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(LSP_DID_CHANGE_DEBOUNCE_MS))
+                    .await;
+                let _ = this.update(cx, |this, _cx| {
+                    if this.lsp_change_generations.get(&path).copied() != Some(generation) {
+                        return;
+                    }
+                    if let Some(text) = this
+                        .tabs
+                        .iter()
+                        .find(|tab| tab.path == path)
+                        .map(|tab| tab.buffer.text())
+                    {
+                        if let Some(client) = this.lsp_clients.get(&path) {
+                            client.did_change(text);
+                        }
+                    }
+                });
+            }),
+        );
     }
 
     fn drain_lsp_events(&mut self) -> bool {
@@ -812,42 +863,42 @@ impl EditorView {
         changed
     }
 
-    pub fn insert_text(&mut self, text: &str) {
+    pub fn insert_text(&mut self, text: &str, cx: &mut Context<Self>) {
         if let Some(tab) = self.active_tab_mut() {
             tab.buffer.insert_text(text);
         }
-        self.notify_lsp_active_did_change();
+        self.notify_lsp_active_did_change(cx);
         self.scroll_cursor_into_view();
     }
 
-    pub fn insert_newline(&mut self) {
+    pub fn insert_newline(&mut self, cx: &mut Context<Self>) {
         if let Some(tab) = self.active_tab_mut() {
             tab.buffer.insert_newline();
         }
-        self.notify_lsp_active_did_change();
+        self.notify_lsp_active_did_change(cx);
         self.scroll_cursor_into_view();
     }
 
-    pub fn delete_backward(&mut self) {
+    pub fn delete_backward(&mut self, cx: &mut Context<Self>) {
         if let Some(tab) = self.active_tab_mut() {
             tab.buffer.delete_backward();
         }
-        self.notify_lsp_active_did_change();
+        self.notify_lsp_active_did_change(cx);
         self.scroll_cursor_into_view();
     }
 
-    pub fn delete_forward(&mut self) {
+    pub fn delete_forward(&mut self, cx: &mut Context<Self>) {
         if let Some(tab) = self.active_tab_mut() {
             tab.buffer.delete_forward();
         }
-        self.notify_lsp_active_did_change();
+        self.notify_lsp_active_did_change(cx);
         self.scroll_cursor_into_view();
     }
 
-    pub fn undo(&mut self) -> bool {
+    pub fn undo(&mut self, cx: &mut Context<Self>) -> bool {
         let undid = self.active_tab_mut().is_some_and(|tab| tab.buffer.undo());
         if undid {
-            self.notify_lsp_active_did_change();
+            self.notify_lsp_active_did_change(cx);
             self.scroll_cursor_into_view();
         }
         undid
@@ -976,12 +1027,12 @@ impl EditorView {
         Ok(Some(saved_path))
     }
 
-    pub fn cut_selection(&mut self) -> Option<String> {
+    pub fn cut_selection(&mut self, cx: &mut Context<Self>) -> Option<String> {
         let text = self
             .active_tab_mut()
             .and_then(|tab| tab.buffer.cut_selection());
         if text.is_some() {
-            self.notify_lsp_active_did_change();
+            self.notify_lsp_active_did_change(cx);
             self.scroll_cursor_into_view();
         }
         text
@@ -1050,7 +1101,7 @@ impl Render for EditorView {
             self.cursor_blink = Some(cx.spawn(async move |this, cx| {
                 loop {
                     cx.background_executor()
-                        .timer(std::time::Duration::from_millis(550))
+                        .timer(Duration::from_millis(550))
                         .await;
                     let _ = this.update(cx, |this, cx| {
                         this.cursor_visible = !this.cursor_visible;
@@ -1063,7 +1114,7 @@ impl Render for EditorView {
             self.lsp_event_pump = Some(cx.spawn(async move |this, cx| {
                 loop {
                     cx.background_executor()
-                        .timer(std::time::Duration::from_millis(120))
+                        .timer(Duration::from_millis(120))
                         .await;
                     let _ = this.update(cx, |this, cx| {
                         if this.drain_lsp_events() {
@@ -1311,7 +1362,7 @@ impl Render for EditorView {
                         Self::visual_column_for_byte_offset(&line_text, cursor.column);
                     let cursor_left =
                         TEXT_IN_CONTENT_LEFT + cursor_visual_col as f32 * metrics.char_width;
-                    let text = SharedString::from(line_text);
+                    let text = SharedString::from(line_text.clone());
                     let highlighted_text = StyledText::new(text.clone()).with_runs(line_runs);
                     let mut content = div()
                         .flex_1()
@@ -1362,10 +1413,17 @@ impl Render for EditorView {
                     }
                     if let (Some(diagnostic), Some(color)) = (diagnostic.as_ref(), diagnostic_color)
                     {
-                        let start_col = diagnostic.start_character.min(line_visual_columns);
-                        let end_col = diagnostic
-                            .end_character
-                            .max(diagnostic.start_character.saturating_add(1))
+                        let diagnostic_start_col = Self::utf16_column_to_visual_column(
+                            &line_text,
+                            diagnostic.start_character,
+                        );
+                        let diagnostic_end_col = Self::utf16_column_to_visual_column(
+                            &line_text,
+                            diagnostic.end_character,
+                        );
+                        let start_col = diagnostic_start_col.min(line_visual_columns);
+                        let end_col = diagnostic_end_col
+                            .max(diagnostic_start_col.saturating_add(1))
                             .min(line_visual_columns.max(start_col + 1));
                         content = content.child(
                             div()
@@ -1599,6 +1657,14 @@ mod tests {
             EditorView::byte_offset_for_visual_column("éx", 1),
             "é".len()
         );
+    }
+
+    #[test]
+    fn utf16_diagnostic_columns_convert_to_visual_columns() {
+        assert_eq!(EditorView::utf16_column_to_visual_column("a😀b", 0), 0);
+        assert_eq!(EditorView::utf16_column_to_visual_column("a😀b", 1), 1);
+        assert_eq!(EditorView::utf16_column_to_visual_column("a😀b", 3), 2);
+        assert_eq!(EditorView::utf16_column_to_visual_column("a😀b", 4), 3);
     }
 
     #[test]

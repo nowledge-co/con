@@ -118,7 +118,7 @@ impl ConWorkspace {
         };
 
         if self
-            .with_focused_editor_view(window, cx, |editor, _cx| editor.insert_text(&text))
+            .with_focused_editor_view(window, cx, |editor, cx| editor.insert_text(&text, cx))
             .is_some()
         {
             window.prevent_default();
@@ -319,7 +319,7 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         if self
-            .with_focused_editor_view(window, cx, |editor, _cx| editor.delete_backward())
+            .with_focused_editor_view(window, cx, |editor, cx| editor.delete_backward(cx))
             .is_some()
         {
             Self::notify_editor_action(cx);
@@ -333,7 +333,7 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         if self
-            .with_focused_editor_view(window, cx, |editor, _cx| editor.delete_forward())
+            .with_focused_editor_view(window, cx, |editor, cx| editor.delete_forward(cx))
             .is_some()
         {
             Self::notify_editor_action(cx);
@@ -347,7 +347,7 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         if self
-            .with_focused_editor_view(window, cx, |editor, _cx| editor.insert_newline())
+            .with_focused_editor_view(window, cx, |editor, cx| editor.insert_newline(cx))
             .is_some()
         {
             Self::notify_editor_action(cx);
@@ -378,7 +378,7 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let undo_result = self.with_focused_editor_view(window, cx, |editor, _cx| editor.undo());
+        let undo_result = self.with_focused_editor_view(window, cx, |editor, cx| editor.undo(cx));
         if let Some(undid) = undo_result {
             window.prevent_default();
             cx.stop_propagation();
@@ -408,7 +408,7 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let text = self.with_focused_editor_view(window, cx, |editor, _cx| editor.cut_selection());
+        let text = self.with_focused_editor_view(window, cx, |editor, cx| editor.cut_selection(cx));
         if let Some(Some(text)) = text {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
             window.prevent_default();
@@ -426,7 +426,9 @@ impl ConWorkspace {
         if let Some(item) = cx.read_from_clipboard() {
             if let Some(text) = item.text() {
                 if self
-                    .with_focused_editor_view(window, cx, |editor, _cx| editor.insert_text(&text))
+                    .with_focused_editor_view(window, cx, |editor, cx| {
+                        editor.insert_text(&text, cx)
+                    })
                     .is_some()
                 {
                     window.prevent_default();
