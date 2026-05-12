@@ -368,6 +368,8 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_open_tool_slot)
             .detach();
+        cx.subscribe_in(&sidebar, window, Self::on_sidebar_show_sessions)
+            .detach();
         cx.observe(&sidebar, |_this, _sidebar, cx| {
             cx.notify();
         })

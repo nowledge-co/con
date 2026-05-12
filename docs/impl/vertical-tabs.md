@@ -33,7 +33,9 @@ Unfolded mode keeps the rail visible and renders the session list in the
 adjacent panel, with tab titles, subtitles, rename, close, drag/drop, and
 create-tab controls. Opening Files/Search switches only that adjacent panel to
 the selected tool; selecting a session switches the panel back to vertical
-tabs.
+tabs. The collapse control returns any active panel to the thin rail, and the
+rail plus active panel keeps the same total width across Sessions, Files, and
+Search.
 
 ## Compatibility
 

@@ -35,19 +35,23 @@ When the left sidebar is visible:
 - The top bar sidebar button dispatches the same behavior.
 - The toggle hides or unhides the whole sidebar, including vertical tabs and
   file/search panel controls.
-- The vertical tab collapse/expand button only changes folded/unfolded tab
-  mode while the sidebar is visible.
+- The vertical tab collapse/expand button folds any active sidebar panel back to
+  the 44 px rail, or unfolds the session list when already folded.
 - Clicking Files or Search switches the active sidebar panel.
 - Clicking a session switches the active sidebar panel back to tabs/sessions.
 
 ## Width Rules
 
-The file/search panel can resize across the available window width. In both
-horizontal-tab and vertical-tab modes it participates in layout, so the
-terminal/editor starts after the sidebar instead of being covered by it. The
-workspace owns this drag state because it has the full layout budget. A capture
-overlay is rendered during drag so releasing the mouse outside the handle exits
-resize mode reliably.
+The sidebar width is one shared budget. In vertical-tab mode, the 44 px rail
+plus whichever panel is active must equal the unfolded session-list width, so
+switching between Sessions, Files, and Search never changes the terminal/editor
+origin. In horizontal-tab mode the file/search panel uses that same saved width.
+
+The file/search panel can resize across the available window width. It
+participates in layout, so the terminal/editor starts after the sidebar instead
+of being covered by it. The workspace owns this drag state because it has the
+full layout budget. A capture overlay is rendered during drag so releasing the
+mouse outside the handle exits resize mode reliably.
 
 ## Root Sync
 

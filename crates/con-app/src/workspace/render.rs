@@ -70,14 +70,7 @@ impl ConWorkspace {
             } else {
                 0.0
             };
-            let max_width = if self.vertical_tabs_enabled() {
-                max_sidebar_panel_width(
-                    (win_w - self.sidebar.read(cx).rendered_width()).max(0.0),
-                    agent_w,
-                )
-            } else {
-                max_sidebar_panel_width(win_w, agent_w)
-            };
+            let max_width = max_sidebar_panel_width(win_w, agent_w);
             let delta = f32::from(event.position.x) - start_x;
             let new_width = (start_width + delta).clamp(PANEL_MIN_WIDTH, max_width);
             let current_width = self.sidebar.read(cx).panel_width();
@@ -463,18 +456,21 @@ impl Render for ConWorkspace {
                 .opacity(if theme.is_dark() { 0.055 } else { 0.045 });
         let (tab_sidebar_width, sidebar_content_width) = if show_left_panel {
             let sidebar = self.sidebar.read(cx);
-            (
+            let tab_sidebar_width = if vertical_tabs_enabled {
+                sidebar.rendered_width()
+            } else {
+                0.0
+            };
+            let sidebar_content_width = if show_sidebar_tools {
                 if vertical_tabs_enabled {
-                    sidebar.rendered_width()
+                    (sidebar.panel_width() - tab_sidebar_width).max(0.0)
                 } else {
-                    0.0
-                },
-                if show_sidebar_tools {
                     sidebar.panel_width()
-                } else {
-                    0.0
-                },
-            )
+                }
+            } else {
+                0.0
+            };
+            (tab_sidebar_width, sidebar_content_width)
         } else {
             (0.0, 0.0)
         };

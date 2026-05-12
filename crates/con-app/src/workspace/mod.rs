@@ -59,6 +59,7 @@ use crate::sidebar::{
     DraggedTab, DraggedTabOrigin, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry,
     SessionSidebar, SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate, SidebarOpenToolSlot,
     SidebarPaneToTab, SidebarRename, SidebarReorder, SidebarSelect, SidebarSetColor,
+    SidebarShowSessions,
 };
 use crate::sidebar_search_view::SidebarSearchView;
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};

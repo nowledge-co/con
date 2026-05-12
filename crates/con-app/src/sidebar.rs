@@ -301,6 +301,8 @@ pub struct SidebarOpenToolSlot {
     pub slot: ActivitySlot,
 }
 
+pub struct SidebarShowSessions;
+
 impl EventEmitter<SidebarSelect> for SessionSidebar {}
 impl EventEmitter<NewSession> for SessionSidebar {}
 impl EventEmitter<SidebarCloseTab> for SessionSidebar {}
@@ -311,6 +313,7 @@ impl EventEmitter<SidebarPaneToTab> for SessionSidebar {}
 impl EventEmitter<SidebarCloseOthers> for SessionSidebar {}
 impl EventEmitter<SidebarSetColor> for SessionSidebar {}
 impl EventEmitter<SidebarOpenToolSlot> for SessionSidebar {}
+impl EventEmitter<SidebarShowSessions> for SessionSidebar {}
 
 impl SessionSidebar {
     pub fn new(_cx: &mut Context<Self>) -> Self {
@@ -654,6 +657,16 @@ impl SessionSidebar {
         let theme = cx.theme();
         let rail_bg = sidebar_surface(theme, self.ui_opacity, 0.035);
         let session_count = self.sessions.len();
+        let mode_icon = if self.tools_panel_open || self.is_pinned() {
+            "phosphor/caret-line-left.svg"
+        } else {
+            "phosphor/caret-line-right.svg"
+        };
+        let mode_color = if self.tools_panel_open || self.is_pinned() {
+            theme.foreground.opacity(0.74)
+        } else {
+            theme.muted_foreground.opacity(0.78)
+        };
         let files_color = if self.tools_panel_open && self.active_tool_slot == ActivitySlot::Files {
             theme.primary
         } else {
@@ -812,10 +825,17 @@ impl SessionSidebar {
             }))
             .child(rail_icon_button(
                 "tab-sidebar-rail-expand",
-                "phosphor/caret-line-right.svg",
-                theme.muted_foreground.opacity(0.78),
+                mode_icon,
+                mode_color,
                 theme,
-                cx.listener(|this, _, _, cx| this.toggle_pinned(cx)),
+                cx.listener(|this, _, _, cx| {
+                    if this.tools_panel_open {
+                        this.set_pinned(false, cx);
+                        cx.emit(SidebarShowSessions);
+                    } else {
+                        this.toggle_pinned(cx);
+                    }
+                }),
             ))
             .child(
                 div()

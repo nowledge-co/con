@@ -15,11 +15,20 @@ con is still pre-release, so entries may group related beta work while the produ
   vs. vertical tabs, and Files/Search now opens as a lightweight drawer instead
   of a permanent second sidebar beside vertical tabs. Follow-up normalization
   made Files/Search and sessions one left-sidebar system, so the active panel
-  sits beside the tool/session rail instead of overlaying terminal content. _(PR
+  sits beside the tool/session rail instead of overlaying terminal content, uses
+  the same total width as the unfolded session list, and folds cleanly back to
+  the rail from any active panel. _(PR
   [#194](https://github.com/nowledge-co/con-terminal/pull/194) by
   [@wey-gu](https://github.com/wey-gu), PR
   [#200](https://github.com/nowledge-co/con-terminal/pull/200) by
   [@wey-gu](https://github.com/wey-gu), PR
+  [#201](https://github.com/nowledge-co/con-terminal/pull/201) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+**Editor**
+
+- Closing the last file in an editor-only pane now returns the tab to a terminal
+  instead of leaving an empty editor surface behind. _(PR
   [#201](https://github.com/nowledge-co/con-terminal/pull/201) by
   [@wey-gu](https://github.com/wey-gu))_
 

@@ -532,6 +532,22 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    pub(super) fn on_sidebar_show_sessions(
+        &mut self,
+        _sidebar: &Entity<SessionSidebar>,
+        _event: &SidebarShowSessions,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sidebar_tools_open = false;
+        self.activity_bar.update(cx, |bar, cx| {
+            bar.left_panel_open = false;
+            cx.notify();
+        });
+        self.save_session(cx);
+        cx.notify();
+    }
+
     pub(super) fn sync_sidebar(&self, cx: &mut Context<Self>) {
         let sessions: Vec<SessionEntry> = self
             .tabs
