@@ -419,13 +419,18 @@ impl ConWorkspace {
         // directory immediately while request_tab_summaries re-derives a
         // fresh label.
         let entity_id = entity.entity_id();
-        if let Some(tab) = self
+        let invalidated_summary_id = self
             .tabs
             .iter_mut()
             .find(|tab| tab.pane_tree.pane_id_for_entity(entity_id).is_some())
-        {
-            tab.ai_label = None;
-            tab.ai_icon = None;
+            .map(|tab| {
+                tab.ai_label = None;
+                tab.ai_icon = None;
+                tab.summary_epoch = tab.summary_epoch.wrapping_add(1);
+                tab.summary_id
+            });
+        if let Some(summary_id) = invalidated_summary_id {
+            self.tab_summary_engine.invalidate_tab(summary_id);
         }
         // Shell integration reports cwd independently from title/output.
         // Persist immediately so restart continuity survives a later crash or
@@ -555,6 +560,7 @@ impl ConWorkspace {
             ai_icon: None,
             color: self.tabs[index].color,
             summary_id,
+            summary_epoch: 0,
             needs_attention: false,
             session: AgentSession::new(),
             agent_routing: self.tabs[index].agent_routing.clone(),
