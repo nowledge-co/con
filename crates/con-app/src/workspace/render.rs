@@ -975,6 +975,8 @@ impl Render for ConWorkspace {
             elevated_ui_surface_opacity,
             top_bar_surface_color,
         );
+        let show_compact_top_bar_separator =
+            cfg!(not(target_os = "macos")) && tab_strip_progress <= 0.01;
 
         let theme = cx.theme();
         let mut root = div()
@@ -1278,6 +1280,14 @@ impl Render for ConWorkspace {
                 }
             }))
             .child(top_bar)
+            .when(show_compact_top_bar_separator, |root| {
+                root.child(
+                    div()
+                        .h(px(1.0))
+                        .flex_shrink_0()
+                        .bg(chrome_static_seam_color),
+                )
+            })
             .child(main_area);
 
         if let Some(preview) = self

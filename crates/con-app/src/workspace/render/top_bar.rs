@@ -30,9 +30,17 @@ impl ConWorkspace {
         // (GPUI's hit-test walks buttons first so child clickables
         // still work) and still lets macOS react to
         // `titlebar_double_click`.
-        let leading_pad = if cfg!(target_os = "macos") { 78.0 } else { 8.0 };
+        let leading_pad = if cfg!(target_os = "macos") {
+            78.0
+        } else if cfg!(target_os = "linux") {
+            10.0
+        } else {
+            8.0
+        };
         let trailing_pad = if cfg!(target_os = "windows") {
             0.0
+        } else if cfg!(target_os = "linux") {
+            8.0
         } else {
             6.0
         };
@@ -1051,6 +1059,10 @@ impl ConWorkspace {
             .gap(px(2.0))
             .mb(px(top_bar_controls_offset))
             .flex_shrink_0();
+        #[cfg(target_os = "linux")]
+        {
+            tab_controls = tab_controls.mr(px(4.0));
+        }
 
         tab_controls = tab_controls.child(
             div()
