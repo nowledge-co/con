@@ -23,6 +23,9 @@ pub struct Session {
     /// User-resized width for the left sidebar panel.
     #[serde(default, alias = "vertical_tabs_width")]
     pub left_panel_width: Option<f32>,
+    /// Whether vertical tabs were unfolded into the full panel.
+    #[serde(default)]
+    pub vertical_tabs_pinned: Option<bool>,
 
     // ── Code editor (Phase 1) ──────────────────────────────────────────────
     /// Active activity bar slot: "files" | "search".
@@ -209,6 +212,7 @@ impl Default for Session {
             input_history: Vec::new(),
             conversation_id: None,
             left_panel_width: None,
+            vertical_tabs_pinned: None,
             activity_slot: None,
             left_panel_open: None,
             editor_area_height: None,
@@ -258,19 +262,18 @@ mod tests {
         let session: Session = serde_json::from_value(value).unwrap();
 
         assert_eq!(session.left_panel_width, Some(277.0));
-        assert_eq!(session.left_panel_open, None);
+        assert_eq!(session.vertical_tabs_pinned, Some(true));
     }
 
     #[test]
-    fn legacy_vertical_tabs_pinned_state_is_ignored() {
+    fn legacy_vertical_tabs_pinned_state_is_preserved() {
         let mut value = serde_json::to_value(Session::default()).unwrap();
         let object = value.as_object_mut().unwrap();
-        object.remove("left_panel_open");
         object.insert("vertical_tabs_pinned".to_string(), json!(false));
 
         let session: Session = serde_json::from_value(value).unwrap();
 
-        assert_eq!(session.left_panel_open, None);
+        assert_eq!(session.vertical_tabs_pinned, Some(false));
     }
 
     #[test]

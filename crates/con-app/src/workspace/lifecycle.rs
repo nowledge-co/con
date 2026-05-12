@@ -24,6 +24,7 @@ impl ConWorkspace {
         let sidebar = cx.new(|cx| {
             let mut s = SessionSidebar::new(cx);
             s.set_panel_width(initial_sidebar_width, cx);
+            s.set_pinned(session.vertical_tabs_pinned.unwrap_or(false), cx);
             s
         });
         let terminal_font_family = sanitize_terminal_font_family(&config.terminal.font_family);
@@ -370,13 +371,14 @@ impl ConWorkspace {
         })
         .detach();
 
-        // Activity bar: sync slot + panel state back to workspace on click.
+        // Activity bar: sync file/search drawer state back to workspace on click.
         let activity_bar_entity = cx.new(|_cx| ActivityBar::new());
         // Sync initial state from session.
         {
             let initial_slot =
                 ActivitySlot::from_str(session.activity_slot.as_deref().unwrap_or("files"));
-            let initial_open = session.left_panel_open.unwrap_or(true);
+            let initial_open = !config.appearance.tabs_orientation.is_vertical()
+                && session.left_panel_open.unwrap_or(true);
             activity_bar_entity.update(cx, |bar, _cx| {
                 bar.active_slot = initial_slot;
                 bar.left_panel_open = initial_open;
@@ -388,6 +390,7 @@ impl ConWorkspace {
             |this, _bar, event: &ActivitySlotChanged, _window, cx| {
                 this.activity_slot = event.slot;
                 this.left_panel_open = true;
+                this.sidebar_tools_open = true;
                 this.save_session(cx);
                 cx.notify();
             },
@@ -397,7 +400,12 @@ impl ConWorkspace {
             &activity_bar_entity,
             window,
             |this, _bar, _event: &ActivityTogglePanel, _window, cx| {
-                this.left_panel_open = !this.left_panel_open;
+                if this.vertical_tabs_enabled() {
+                    this.sidebar_tools_open = !this.sidebar_tools_open;
+                } else {
+                    this.left_panel_open = !this.left_panel_open;
+                    this.sidebar_tools_open = this.left_panel_open;
+                }
                 this.save_session(cx);
                 cx.notify();
             },
@@ -741,6 +749,8 @@ impl ConWorkspace {
                 session.activity_slot.as_deref().unwrap_or("files"),
             ),
             left_panel_open: session.left_panel_open.unwrap_or(true),
+            sidebar_tools_open: !config.appearance.tabs_orientation.is_vertical()
+                && session.left_panel_open.unwrap_or(true),
             file_tree_view: file_tree_entity,
             search_view: search_view_entity,
             workspace_focus: cx.focus_handle(),
@@ -827,7 +837,11 @@ impl ConWorkspace {
     }
 
     pub(super) fn horizontal_tabs_visible(&self) -> bool {
-        self.tabs.len() > 1
+        !self.vertical_tabs_enabled() && self.tabs.len() > 1
+    }
+
+    pub(super) fn vertical_tabs_enabled(&self) -> bool {
+        self.config.appearance.tabs_orientation == TabsOrientation::Vertical
     }
 
     pub(super) fn sync_tab_strip_motion(&mut self) -> bool {

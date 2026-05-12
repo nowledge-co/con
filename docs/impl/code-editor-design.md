@@ -1,8 +1,8 @@
 # Code Editor and Left Sidebar
 
 Status: Implemented
-Scope: editor pane surface, left sidebar activity rail, file explorer, search,
-keybinding/focus integration.
+Scope: editor pane surface, left sidebar tools, file explorer, search,
+vertical-tab coexistence, keybinding/focus integration.
 
 ## Current Model
 
@@ -11,33 +11,35 @@ not a separate top-level editor area and there is no standalone `con-editor`
 crate. Terminal panes, editor panes, the input bar, and the agent panel all
 share the existing workspace layout and close/focus machinery.
 
-The left side of the window is split into two layers:
+The left side of the window has two tab-orientation modes:
 
-- `ActivityBar`: a fixed 40 px icon rail that is always visible.
-- Left panel content: user-resizable content shown only when the panel is open.
+- horizontal tabs: file/search is the left sidebar panel,
+- vertical tabs: `SessionSidebar` is the permanent left navigation surface, and
+  file/search opens as an overlay drawer from that sidebar edge.
 
-Horizontal tabs are the only tab UI. The removed vertical tabs config/session
-fields are accepted only for old-file compatibility; see
-`docs/impl/vertical-tabs.md`.
+Hiding the left sidebar removes all left chrome. Unhiding restores the selected
+tab orientation, the previous vertical-tab folded/unfolded mode, and the active
+file/search slot.
 
 ## Left Sidebar
 
-`crates/con-app/src/activity_bar.rs` owns the rail. `ActivitySlot::Files` shows
-the file explorer and `ActivitySlot::Search` shows workspace search. Clicking a
-different icon switches content and opens the panel. Clicking the already active
-icon toggles the panel open or closed.
+`crates/con-app/src/activity_bar.rs` owns the compact section switcher.
+`ActivitySlot::Files` shows the file explorer and `ActivitySlot::Search` shows
+workspace search. Clicking a different icon switches content and opens the
+drawer/panel. Clicking the already active icon toggles the drawer/panel.
 
 `Cmd+B` is bound to `ToggleLeftPanel` and the user-facing label is "Toggle Left
 Sidebar". The top bar sidebar button remains a first-class toggle for the same
-left panel. The rail stays visible even when the panel content is collapsed so
-Files/Search can reopen it directly.
+left panel. The toggle hides or unhides the whole sidebar so terminal-only
+workflows can keep a clean pane area.
 
 The panel width is stored as `left_panel_width` in session state; old
-`vertical_tabs_width` session files load through a serde alias. The active
-resize gesture is owned by the workspace because it needs the full window
-width, agent panel width, and pane layout constraints. While resizing,
-`render.rs` installs a capture overlay so mouse movement and mouse-up events
-end the drag even if the cursor leaves the handle.
+`vertical_tabs_width` session files load through a serde alias. The vertical tab
+folded/unfolded state persists as `vertical_tabs_pinned`. The active resize
+gesture is owned by the workspace because it needs the full window width, agent
+panel width, and pane layout constraints. While resizing, `render.rs` installs a
+capture overlay so mouse movement and mouse-up events end the drag even if the
+cursor leaves the handle.
 
 ## File Explorer
 
@@ -107,7 +109,10 @@ See `docs/impl/keybindings.md` for the binding-spec table and scope rules.
 
 ```text
 crates/con-app/src/activity_bar.rs
-  Fixed icon rail and Files/Search slot events.
+  File/search section switcher and slot events.
+
+crates/con-app/src/sidebar.rs
+  Folded/unfolded vertical tabs, tab hover cards, drag/drop, and tab actions.
 
 crates/con-app/src/file_tree_view.rs
   File explorer rows and OpenFile events.

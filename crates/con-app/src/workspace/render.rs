@@ -70,7 +70,11 @@ impl ConWorkspace {
             } else {
                 0.0
             };
-            let max_width = max_sidebar_panel_width(win_w, agent_w);
+            let max_width = if self.vertical_tabs_enabled() {
+                PANEL_MAX_WIDTH
+            } else {
+                max_sidebar_panel_width(win_w, agent_w)
+            };
             let delta = f32::from(event.position.x) - start_x;
             let new_width = (start_width + delta).clamp(PANEL_MIN_WIDTH, max_width);
             let current_width = self.sidebar.read(cx).panel_width();
@@ -107,12 +111,16 @@ impl ConWorkspace {
         } else {
             0.0
         };
-        let leading_panel_w = ACTIVITY_BAR_WIDTH
-            + if self.left_panel_open {
-                self.sidebar.read(cx).panel_width()
+        let leading_panel_w = if self.left_panel_open {
+            let sidebar = self.sidebar.read(cx);
+            if self.vertical_tabs_enabled() {
+                sidebar.rendered_width()
             } else {
-                0.0
-            };
+                sidebar.panel_width()
+            }
+        } else {
+            0.0
+        };
 
         let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
         if !pane_tree.is_dragging() {
@@ -433,16 +441,36 @@ impl Render for ConWorkspace {
         let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
         #[cfg(not(target_os = "macos"))]
         let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
-        let sidebar_content_width = if self.left_panel_open {
-            self.sidebar.read(cx).panel_width()
+        let vertical_tabs_enabled = self.vertical_tabs_enabled();
+        let show_left_panel = self.left_panel_open;
+        let show_vertical_tabs = show_left_panel && vertical_tabs_enabled;
+        let show_sidebar_tools =
+            show_left_panel && (!vertical_tabs_enabled || self.sidebar_tools_open);
+        let (tab_sidebar_width, sidebar_content_width) = if show_left_panel {
+            let sidebar = self.sidebar.read(cx);
+            (
+                if vertical_tabs_enabled {
+                    sidebar.rendered_width()
+                } else {
+                    0.0
+                },
+                if show_sidebar_tools {
+                    sidebar.panel_width()
+                } else {
+                    0.0
+                },
+            )
         } else {
-            0.0
+            (0.0, 0.0)
         };
-        let left_panel_width = ACTIVITY_BAR_WIDTH + sidebar_content_width;
+        let left_panel_width = if vertical_tabs_enabled {
+            tab_sidebar_width
+        } else {
+            sidebar_content_width
+        };
         let terminal_content_left = left_panel_width;
         let terminal_content_width =
             (window_width - terminal_content_left - agent_panel_outer_width).max(0.0);
-
         let pane_tree_rendered = {
             let pending = self.pending_drag_init.clone();
             let begin_drag_cb = move |split_id: usize, start_pos: f32| {
@@ -718,39 +746,43 @@ impl Render for ConWorkspace {
                 main_area.bg(portable_terminal_backdrop_color)
             });
 
-        // ── Left sidebar: feature rail is always visible; content can collapse.
-        let show_left_panel = self.left_panel_open;
-        let sidebar_content: AnyElement = match self.activity_slot {
-            ActivitySlot::Files => self.file_tree_view.clone().into_any_element(),
-            ActivitySlot::Search => self.search_view.clone().into_any_element(),
-        };
-        let mut left_sidebar = div()
-            .w(px(left_panel_width))
-            .h_full()
-            .flex()
-            .flex_row()
-            .flex_shrink_0()
-            .overflow_hidden()
-            .bg(elevated_panel_surface_color)
-            .child(
-                div()
-                    .w(px(ACTIVITY_BAR_WIDTH))
-                    .h_full()
-                    .flex_shrink_0()
-                    .overflow_hidden()
-                    .child(self.activity_bar.clone()),
-            );
         if show_left_panel {
-            left_sidebar = left_sidebar.child(
-                div()
-                    .w(px(sidebar_content_width))
-                    .h_full()
-                    .flex_shrink_0()
-                    .overflow_hidden()
-                    .child(sidebar_content),
-            );
+            let mut left_sidebar = div()
+                .w(px(left_panel_width))
+                .h_full()
+                .flex()
+                .flex_row()
+                .flex_shrink_0()
+                .overflow_hidden()
+                .bg(elevated_panel_surface_color);
+            if show_vertical_tabs {
+                left_sidebar = left_sidebar.child(
+                    div()
+                        .w(px(tab_sidebar_width))
+                        .h_full()
+                        .flex_shrink_0()
+                        .child(self.sidebar.clone()),
+                );
+            }
+            if !vertical_tabs_enabled && show_sidebar_tools {
+                let sidebar_content: AnyElement = match self.activity_slot {
+                    ActivitySlot::Files => self.file_tree_view.clone().into_any_element(),
+                    ActivitySlot::Search => self.search_view.clone().into_any_element(),
+                };
+                left_sidebar = left_sidebar.child(
+                    div()
+                        .w(px(sidebar_content_width))
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .flex_shrink_0()
+                        .overflow_hidden()
+                        .child(self.activity_bar.clone())
+                        .child(sidebar_content),
+                );
+            }
+            main_area = main_area.child(left_sidebar);
         }
-        main_area = main_area.child(left_sidebar);
         // ── Main column: terminal area only (editor panes live inside pane tree) ──
         let main_column = div()
             .flex()
@@ -762,23 +794,65 @@ impl Render for ConWorkspace {
 
         main_area = main_area.child(main_column);
 
-        main_area = main_area.child(
-            div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left(px((left_panel_width - 1.0).max(0.0)))
-                .w(px(1.0))
-                .bg(chrome_static_seam_color),
-        );
-        if show_left_panel {
+        if vertical_tabs_enabled && show_left_panel && !show_sidebar_tools {
+            main_area = main_area.child(
+                div()
+                    .absolute()
+                    .top(px(6.0))
+                    .left(px(tab_sidebar_width + 6.0))
+                    .w(px(72.0))
+                    .h(px(36.0))
+                    .overflow_hidden()
+                    .occlude()
+                    .bg(elevated_panel_surface_color)
+                    .child(self.activity_bar.clone()),
+            );
+        }
+
+        if vertical_tabs_enabled && show_sidebar_tools {
+            let sidebar_content: AnyElement = match self.activity_slot {
+                ActivitySlot::Files => self.file_tree_view.clone().into_any_element(),
+                ActivitySlot::Search => self.search_view.clone().into_any_element(),
+            };
+            main_area = main_area.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px(tab_sidebar_width))
+                    .w(px(sidebar_content_width))
+                    .flex()
+                    .flex_col()
+                    .overflow_hidden()
+                    .occlude()
+                    .bg(elevated_panel_surface_color)
+                    .child(self.activity_bar.clone())
+                    .child(sidebar_content),
+            );
+        }
+
+        if show_sidebar_tools {
+            let resize_edge = if vertical_tabs_enabled {
+                tab_sidebar_width + sidebar_content_width
+            } else {
+                left_panel_width
+            };
+            main_area = main_area.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px((resize_edge - 1.0).max(0.0)))
+                    .w(px(1.0))
+                    .bg(chrome_static_seam_color),
+            );
             main_area = main_area.child(
                 div()
                     .id("left-sidebar-resize-handle")
                     .absolute()
                     .top_0()
                     .bottom_0()
-                    .left(px((left_panel_width - 3.0).max(0.0)))
+                    .left(px((resize_edge - 3.0).max(0.0)))
                     .w(px(6.0))
                     .cursor_col_resize()
                     .occlude()
@@ -793,6 +867,16 @@ impl Render for ConWorkspace {
                             cx.notify();
                         }),
                     ),
+            );
+        } else if show_left_panel {
+            main_area = main_area.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(px((left_panel_width - 1.0).max(0.0)))
+                    .w(px(1.0))
+                    .bg(chrome_static_seam_color),
             );
         }
 
@@ -997,12 +1081,16 @@ impl Render for ConWorkspace {
                     } else {
                         0.0
                     };
-                    let leading_panel_w = ACTIVITY_BAR_WIDTH
-                        + if this.left_panel_open {
-                            this.sidebar.read(cx).panel_width()
+                    let leading_panel_w = if this.left_panel_open {
+                        let sidebar = this.sidebar.read(cx);
+                        if this.vertical_tabs_enabled() {
+                            sidebar.rendered_width()
                         } else {
-                            0.0
-                        };
+                            sidebar.panel_width()
+                        }
+                    } else {
+                        0.0
+                    };
 
                     let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
 

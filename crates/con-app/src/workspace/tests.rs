@@ -118,9 +118,9 @@ fn focused_editor_pane_key_fallback_does_not_steal_input_focus() {
 }
 
 #[test]
-fn activity_bar_is_always_visible_as_left_sidebar_rail() {
-    assert!(should_show_activity_bar(false, ActivitySlot::Files));
-    assert!(should_show_activity_bar(false, ActivitySlot::Search));
+fn activity_bar_visibility_tracks_left_sidebar_visibility() {
+    assert!(!should_show_activity_bar(false, ActivitySlot::Files));
+    assert!(!should_show_activity_bar(false, ActivitySlot::Search));
     assert!(should_show_activity_bar(true, ActivitySlot::Files));
     assert!(should_show_activity_bar(true, ActivitySlot::Search));
 }

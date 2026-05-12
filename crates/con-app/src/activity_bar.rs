@@ -1,12 +1,11 @@
-//! Activity bar — the narrow feature rail inside the left sidebar.
+//! Activity bar — the file/search section switcher inside the sidebar drawer.
 //!
-//! Clicking a slot icon switches the left panel content. Clicking the
-//! already-active slot toggles the left panel open/closed (same behaviour
-//! as VS Code's activity bar).
+//! Clicking a slot icon switches the sidebar section. Clicking the
+//! already-active slot toggles the drawer/panel closed.
 //!
 //! Visual rules
 //! ---
-//! - Fixed width: 40 px, always visible.
+//! - Fixed height: 36 px while the left sidebar is visible.
 //! - Active slot: accent-colored icon.
 //! - Inactive slots: muted_foreground icon.
 //! - No text labels — icons only.
@@ -20,7 +19,7 @@ use gpui_component::{
     button::{Button, ButtonVariants as _},
 };
 
-pub const ACTIVITY_BAR_WIDTH: f32 = 40.0;
+pub const ACTIVITY_BAR_HEADER_HEIGHT: f32 = 36.0;
 
 /// The content slot currently shown in the left panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,21 +88,20 @@ impl Render for ActivityBar {
         let theme = cx.theme();
         let active_slot = self.active_slot;
 
-        let bg = theme.background;
-
         div()
             .id("activity-bar")
-            .w(px(ACTIVITY_BAR_WIDTH))
-            .h_full()
+            .h(px(ACTIVITY_BAR_HEADER_HEIGHT))
+            .w_full()
             .flex()
-            .flex_col()
+            .flex_row()
             .items_center()
-            .pt(px(8.0))
+            .justify_center()
             .gap(px(4.0))
-            .bg(bg)
+            .px(px(8.0))
+            .flex_shrink_0()
             .child(activity_slot_button(
                 "activity-files",
-                "phosphor/folder-open.svg",
+                "phosphor/folders.svg",
                 active_slot == ActivitySlot::Files,
                 theme,
                 cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
@@ -112,7 +110,7 @@ impl Render for ActivityBar {
             ))
             .child(activity_slot_button(
                 "activity-search",
-                "phosphor/magnifying-glass.svg",
+                "phosphor/file-magnifying-glass.svg",
                 active_slot == ActivitySlot::Search,
                 theme,
                 cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
@@ -142,7 +140,7 @@ where
         .ghost()
         .text_color(icon_color)
         .rounded(px(6.0))
-        .with_size(px(32.0))
+        .with_size(px(28.0))
         .cursor_pointer()
         .on_click(handler)
 }

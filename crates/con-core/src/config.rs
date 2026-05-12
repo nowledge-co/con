@@ -120,6 +120,9 @@ pub struct AppearanceConfig {
     /// `false` (title bar visible). When `true` the title bar is suppressed
     /// even in split layouts; the fullscreen/close buttons are also hidden.
     pub hide_pane_title_bar: bool,
+    /// Workspace tab presentation. Horizontal is the default for compatibility;
+    /// vertical restores the sidebar tab rail/panel.
+    pub tabs_orientation: TabsOrientation,
 }
 
 impl Default for AppearanceConfig {
@@ -139,7 +142,22 @@ impl Default for AppearanceConfig {
             tab_accent_inactive_hover_alpha: default_tab_accent_inactive_hover_alpha(),
             restore_terminal_text: default_restore_terminal_text(),
             hide_pane_title_bar: false,
+            tabs_orientation: TabsOrientation::Horizontal,
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TabsOrientation {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
+impl TabsOrientation {
+    pub fn is_vertical(self) -> bool {
+        matches!(self, Self::Vertical)
     }
 }
 
@@ -863,7 +881,7 @@ fn replace_file(tmp_path: &Path, path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Config, DEFAULT_TERMINAL_FONT_FAMILY, NetworkConfig, SkillsConfig,
+        Config, DEFAULT_TERMINAL_FONT_FAMILY, NetworkConfig, SkillsConfig, TabsOrientation,
         sanitize_terminal_font_family,
     };
 
@@ -951,7 +969,7 @@ global_summon = "alt-space"
     }
 
     #[test]
-    fn legacy_vertical_tabs_config_is_accepted_but_not_serialized() {
+    fn tabs_orientation_config_is_preserved() {
         let content = r#"
 [appearance]
 tabs_orientation = "vertical"
@@ -961,10 +979,14 @@ toggle_vertical_tabs = "secondary-b"
 "#;
         let config: Config = toml::from_str(content).unwrap();
 
+        assert_eq!(
+            config.appearance.tabs_orientation,
+            TabsOrientation::Vertical
+        );
         assert_eq!(config.keybindings.toggle_left_panel, "secondary-b");
 
         let serialized = toml::to_string(&config).unwrap();
-        assert!(!serialized.contains("tabs_orientation"));
+        assert!(serialized.contains("tabs_orientation = \"vertical\""));
         assert!(!serialized.contains("toggle_vertical_tabs"));
         assert!(serialized.contains("toggle_left_panel"));
     }

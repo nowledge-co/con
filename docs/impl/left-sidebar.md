@@ -3,16 +3,26 @@
 Status: Implemented
 
 The left sidebar is the workspace's navigation and project panel area. It is not
-the old vertical-tabs feature.
+the workspace tab identity by itself; vertical tabs remain the primary tab
+rail/panel inside the sidebar.
 
 ## Layout
 
 ```text
-[ActivityBar 40 px] [optional content panel] [pane tree] [agent panel]
+[optional vertical tabs] [pane tree] [agent panel]
+                       └─ Files/Search drawer overlays from the sidebar edge
 ```
 
-The activity rail is always visible. The content panel can collapse, resize, and
-switch between sidebar features.
+When the left sidebar is hidden, none of the three sidebar columns render. This
+preserves the clean terminal view users expect from the sidebar toggle.
+
+When the left sidebar is visible:
+
+- vertical tabs can stay folded as a 44 px rail or unfold into the pinned tab
+  panel when `appearance.tabs_orientation = "vertical"`,
+- the file/search icon strip opens a lightweight drawer from the sidebar edge,
+- the drawer overlays the workspace instead of permanently consuming layout
+  width beside vertical tabs.
 
 ## Slots
 
@@ -24,16 +34,21 @@ switch between sidebar features.
 
 - `Cmd+B` dispatches `ToggleLeftPanel`.
 - The top bar sidebar button dispatches the same behavior.
-- Clicking an inactive activity icon switches slot and opens the panel.
-- Clicking the active activity icon toggles the content panel.
-- Collapsing the content panel never hides the 40 px icon rail.
+- The toggle hides or unhides the whole sidebar, including vertical tabs and
+  file/search drawer controls.
+- The vertical tab collapse/expand button only changes folded/unfolded tab
+  mode while the sidebar is visible.
+- Clicking an inactive section icon switches slot and opens the drawer.
+- Clicking the active section icon closes or reopens the drawer.
 
 ## Width Rules
 
-The panel can resize across the available window width after accounting for the
-activity rail and agent panel. The workspace owns this drag state because it has
-the full layout budget. A capture overlay is rendered during drag so releasing
-the mouse outside the handle exits resize mode reliably.
+The file/search drawer can resize across the available window width. In
+horizontal-tab mode it participates in layout; in vertical-tab mode it overlays
+the pane tree so opening files/search does not create a heavy double-sidebar or
+shift the terminal/editor. The workspace owns this drag state because it has the
+full layout budget. A capture overlay is rendered during drag so releasing the
+mouse outside the handle exits resize mode reliably.
 
 ## Root Sync
 
