@@ -342,15 +342,12 @@ impl ConWorkspace {
 
                 let mut close_el = div()
                     .id(close_id)
-                    .absolute()
-                    .right(px(7.0))
-                    .top(px(7.0))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .size(px(16.0))
+                    .size(px(18.0))
                     .flex_shrink_0()
-                    .rounded(px(4.0))
+                    .rounded(px(5.0))
                     .cursor_pointer()
                     // Windows: without `.occlude()` the parent top_bar's
                     // `WindowControlArea::Drag` hit-test swallows the
@@ -371,7 +368,7 @@ impl ConWorkspace {
                         svg()
                             .path("phosphor/x.svg")
                             .size(px(10.0))
-                            .text_color(theme.muted_foreground.opacity(0.5)),
+                            .text_color(theme.muted_foreground.opacity(0.48)),
                     );
 
                 // Drop indicator: 2px vertical line on the left edge of
@@ -635,72 +632,70 @@ impl ConWorkspace {
                     );
                 }
 
-                let mut tab_content = div().relative().size_full().min_w_0();
+                let mut left_reserve = div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(18.0))
+                    .flex_shrink_0();
 
                 if needs_attention {
-                    tab_content = tab_content.child(
-                        div()
-                            .absolute()
-                            .left(px(8.0))
-                            .top(px(12.0))
-                            .size(px(5.0))
-                            .rounded_full()
-                            .bg(theme.primary),
-                    );
+                    left_reserve =
+                        left_reserve.child(div().size(px(5.0)).rounded_full().bg(theme.primary));
                 }
 
-                let active_dot_color = if let Some(color) = tab_color {
-                    crate::tab_colors::tab_accent_color_hsla(color, cx)
-                } else {
-                    crate::tab_colors::active_tab_indicator_color()
-                };
+                let mut tab_content = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .size_full()
+                    .min_w_0()
+                    .child(left_reserve);
 
                 tab_content = tab_content.child(
                     div()
-                        .absolute()
-                        .left(px(24.0))
-                        .right(px(28.0))
-                        .top(px(4.0))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .gap(px(6.0))
+                        .flex_1()
                         .min_w(px(0.0))
-                        .h(px(22.0))
-                        .px(px(if is_active { 9.0 } else { 4.0 }))
-                        .rounded(px(8.0))
-                        .bg(if is_active {
-                            theme.foreground.opacity(0.045)
-                        } else {
-                            theme.transparent
-                        })
-                        .overflow_x_hidden()
-                        .whitespace_nowrap()
-                        .children(is_active.then(|| {
-                            div()
-                                .size(px(6.0))
-                                .rounded_full()
-                                .flex_shrink_0()
-                                .bg(active_dot_color)
-                        }))
                         .child(
                             div()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .gap(px(6.0))
                                 .min_w_0()
+                                .max_w(px(168.0))
+                                .h(px(23.0))
+                                .px(px(if is_active { 11.0 } else { 5.0 }))
+                                .rounded(px(8.5))
+                                .bg(if is_active {
+                                    theme.foreground.opacity(0.045)
+                                } else {
+                                    theme.transparent
+                                })
                                 .overflow_x_hidden()
                                 .whitespace_nowrap()
-                                .text_ellipsis()
-                                .font_family(theme.mono_font_family.clone())
-                                .font_weight(if is_active {
-                                    FontWeight::SEMIBOLD
-                                } else {
-                                    FontWeight::MEDIUM
-                                })
-                                .text_color(if is_active {
-                                    theme.foreground.opacity(0.90)
-                                } else {
-                                    theme.muted_foreground.opacity(0.66)
-                                })
-                                .child(display_title),
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .overflow_x_hidden()
+                                        .whitespace_nowrap()
+                                        .text_ellipsis()
+                                        .font_family(theme.mono_font_family.clone())
+                                        .font_weight(if is_active {
+                                            FontWeight::SEMIBOLD
+                                        } else {
+                                            FontWeight::MEDIUM
+                                        })
+                                        .text_color(if is_active {
+                                            theme.foreground.opacity(0.90)
+                                        } else {
+                                            theme.muted_foreground.opacity(0.66)
+                                        })
+                                        .child(display_title),
+                                ),
                         ),
                 );
 

@@ -238,32 +238,42 @@ impl ConWorkspace {
                 };
                 let scope_frame_inset = px(3.0);
                 let scope_frame_radius = px(9.0);
-                let pane_picker_binding =
+                let pane_picker_labels =
                     crate::keycaps::first_action_keystroke(&TogglePaneScopePicker, window)
-                        .map(|stroke| {
-                            crate::keycaps::keycaps_for_stroke(&stroke, theme).into_any_element()
-                        })
+                        .map(|stroke| crate::keycaps::keycap_labels_for_stroke(&stroke))
                         .unwrap_or_else(|| {
-                            crate::keycaps::keycaps_for_binding("secondary-'", theme)
+                            #[cfg(target_os = "macos")]
+                            {
+                                vec!["⌘".to_string(), "'".to_string()]
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            {
+                                vec!["Ctrl".to_string(), "'".to_string()]
+                            }
                         });
-                let local_keycap = |label: &'static str| {
+                let local_keycap = |label: String| {
                     let wide = label.chars().count() > 1;
                     div()
-                        .h(px(18.0))
-                        .min_w(if wide { px(30.0) } else { px(18.0) })
+                        .h(px(17.0))
+                        .min_w(if wide { px(28.0) } else { px(17.0) })
                         .px(px(if wide { 6.0 } else { 0.0 }))
-                        .rounded(px(5.0))
+                        .rounded(px(4.5))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .bg(theme.foreground.opacity(0.055))
-                        .text_size(px(10.0))
+                        .bg(theme.foreground.opacity(0.048))
+                        .text_size(px(9.5))
                         .line_height(px(11.0))
                         .font_family(theme.mono_font_family.clone())
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.foreground.opacity(0.64))
+                        .text_color(theme.foreground.opacity(0.66))
                         .child(label)
                 };
+                let trigger_hint = div().flex().items_center().gap(px(3.0)).children(
+                    pane_picker_labels
+                        .into_iter()
+                        .map(|label| local_keycap(label)),
+                );
 
                 let presets = div()
                     .flex()
@@ -298,18 +308,27 @@ impl ConWorkspace {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(5.0))
-                            .child(pane_picker_binding)
+                            .gap(px(7.0))
+                            .px(px(6.0))
+                            .py(px(4.0))
+                            .rounded(px(8.0))
+                            .bg(theme.foreground.opacity(0.026))
+                            .child(trigger_hint)
                             .child(
                                 div()
-                                    .text_size(px(10.0))
-                                    .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.36))
-                                    .child("then"),
+                                    .w(px(1.0))
+                                    .h(px(13.0))
+                                    .bg(theme.foreground.opacity(0.070)),
                             )
-                            .child(local_keycap("1-9"))
-                            .child(local_keycap("A"))
-                            .child(local_keycap("F")),
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(3.0))
+                                    .child(local_keycap("1-9".to_string()))
+                                    .child(local_keycap("A".to_string()))
+                                    .child(local_keycap("F".to_string())),
+                            ),
                     );
 
                 let preset_segment =
