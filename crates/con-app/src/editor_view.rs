@@ -192,6 +192,12 @@ impl EditorTab {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct LoadedFileApply {
+    activated: bool,
+    active_file_changed: bool,
+}
+
 pub struct EditorView {
     tabs: Vec<EditorTab>,
     active_tab: usize,
@@ -264,50 +270,111 @@ impl EditorView {
                 .spawn(async move { std::fs::read_to_string(&path_for_read) })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.open_generation != generation {
-                    return;
-                }
+                let activate = this.open_generation == generation;
                 match content {
                     Ok(content) => {
-                        this.open_file_from_content(path.clone(), content);
+                        let apply = this.open_file_from_content_with_activation(
+                            path.clone(),
+                            content,
+                            activate,
+                        );
                         this.ensure_lsp_for_path(&path);
+                        if apply.active_file_changed {
+                            cx.emit(ActiveFileChanged);
+                        }
                     }
-                    Err(error) => this.open_file_read_error(path.clone(), error),
+                    Err(error) => {
+                        let apply = this.open_file_read_error_with_activation(
+                            path.clone(),
+                            error,
+                            activate,
+                        );
+                        if apply.active_file_changed {
+                            cx.emit(ActiveFileChanged);
+                        }
+                    }
                 }
-                cx.emit(ActiveFileChanged);
                 cx.notify();
             });
         })
         .detach();
     }
 
-    /// Testable core of `open_file` that avoids filesystem/GPUI coupling.
-    pub fn open_file_from_content(&mut self, path: PathBuf, content: String) {
-        if let Some(index) = self.tabs.iter().position(|tab| tab.path == path) {
-            self.active_tab = index;
+    fn open_file_from_content_with_activation(
+        &mut self,
+        path: PathBuf,
+        content: String,
+        activate: bool,
+    ) -> LoadedFileApply {
+        let apply = Self::apply_loaded_file_tab(
+            &mut self.tabs,
+            &mut self.active_tab,
+            path,
+            activate,
+            false,
+            |path| EditorTab::new(path, EditorBuffer::from_text(content)),
+        );
+        if apply.activated {
             self.dirty_close_blocked_tab = None;
             self.scroll_handle = UniformListScrollHandle::new();
-            return;
         }
-
-        let buffer = EditorBuffer::from_text(content);
-
-        self.tabs.push(EditorTab::new(path, buffer));
-        self.active_tab = self.tabs.len().saturating_sub(1);
-        self.dirty_close_blocked_tab = None;
-        self.scroll_handle = UniformListScrollHandle::new();
+        apply
     }
 
-    fn open_file_read_error(&mut self, path: PathBuf, error: std::io::Error) {
-        if let Some(index) = self.tabs.iter().position(|tab| tab.path == path) {
-            self.tabs[index] = EditorTab::read_error(path, error);
-            self.active_tab = index;
-        } else {
-            self.tabs.push(EditorTab::read_error(path, error));
-            self.active_tab = self.tabs.len().saturating_sub(1);
+    fn open_file_read_error_with_activation(
+        &mut self,
+        path: PathBuf,
+        error: std::io::Error,
+        activate: bool,
+    ) -> LoadedFileApply {
+        let apply = Self::apply_loaded_file_tab(
+            &mut self.tabs,
+            &mut self.active_tab,
+            path,
+            activate,
+            activate,
+            |path| EditorTab::read_error(path, error),
+        );
+        if apply.activated {
+            self.dirty_close_blocked_tab = None;
+            self.scroll_handle = UniformListScrollHandle::new();
         }
-        self.dirty_close_blocked_tab = None;
-        self.scroll_handle = UniformListScrollHandle::new();
+        apply
+    }
+
+    fn apply_loaded_file_tab(
+        tabs: &mut Vec<EditorTab>,
+        active_tab: &mut usize,
+        path: PathBuf,
+        activate: bool,
+        replace_existing: bool,
+        make_tab: impl FnOnce(PathBuf) -> EditorTab,
+    ) -> LoadedFileApply {
+        let old_active_path = tabs.get(*active_tab).map(|tab| tab.path.clone());
+        let mut activated = false;
+
+        if let Some(index) = tabs.iter().position(|tab| tab.path == path) {
+            if replace_existing {
+                tabs[index] = make_tab(path);
+            }
+            if activate {
+                *active_tab = index;
+                activated = true;
+            }
+        } else {
+            let index = tabs.len();
+            tabs.push(make_tab(path));
+            if activate || old_active_path.is_none() {
+                *active_tab = index;
+                activated = true;
+            }
+        }
+
+        LoadedFileApply {
+            activated,
+            active_file_changed: old_active_path
+                != tabs.get(*active_tab).map(|tab| tab.path.clone()),
+        }
     }
 
     pub fn tab_count(&self) -> usize {
@@ -1778,6 +1845,65 @@ mod tests {
 
         assert!(!tab.save_enabled);
         assert!(tab.buffer.text().contains("Error reading file:"));
+    }
+
+    #[test]
+    fn stale_file_load_adds_background_tab_without_stealing_focus() {
+        let mut tabs = vec![EditorTab::new(
+            PathBuf::from("src/existing.rs"),
+            EditorBuffer::from_text("existing"),
+        )];
+        let mut active_tab = 0;
+
+        let apply = EditorView::apply_loaded_file_tab(
+            &mut tabs,
+            &mut active_tab,
+            PathBuf::from("src/pending.rs"),
+            false,
+            false,
+            |path| EditorTab::new(path, EditorBuffer::from_text("pending")),
+        );
+
+        assert_eq!(tabs.len(), 2);
+        assert_eq!(active_tab, 0);
+        assert_eq!(tabs[0].path, PathBuf::from("src/existing.rs"));
+        assert_eq!(tabs[1].path, PathBuf::from("src/pending.rs"));
+        assert_eq!(
+            apply,
+            LoadedFileApply {
+                activated: false,
+                active_file_changed: false,
+            }
+        );
+    }
+
+    #[test]
+    fn fresh_file_load_activates_new_tab() {
+        let mut tabs = vec![EditorTab::new(
+            PathBuf::from("src/existing.rs"),
+            EditorBuffer::from_text("existing"),
+        )];
+        let mut active_tab = 0;
+
+        let apply = EditorView::apply_loaded_file_tab(
+            &mut tabs,
+            &mut active_tab,
+            PathBuf::from("src/new.rs"),
+            true,
+            false,
+            |path| EditorTab::new(path, EditorBuffer::from_text("new")),
+        );
+
+        assert_eq!(tabs.len(), 2);
+        assert_eq!(active_tab, 1);
+        assert_eq!(tabs[active_tab].path, PathBuf::from("src/new.rs"));
+        assert_eq!(
+            apply,
+            LoadedFileApply {
+                activated: true,
+                active_file_changed: true,
+            }
+        );
     }
 
     #[test]
