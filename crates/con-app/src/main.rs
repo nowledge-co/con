@@ -1451,6 +1451,84 @@ fn bind_specs(cx: &mut App, specs: Vec<BindingSpec>) {
     );
 }
 
+#[derive(Clone)]
+struct FileSidebarShortcutBindings {
+    focus_files: String,
+    search_files: String,
+}
+
+impl Global for FileSidebarShortcutBindings {}
+
+impl FileSidebarShortcutBindings {
+    fn from_keybindings(kb: &KeybindingConfig) -> Self {
+        Self {
+            focus_files: kb.focus_files.clone(),
+            search_files: kb.search_files.clone(),
+        }
+    }
+}
+
+fn update_file_sidebar_shortcut_bindings(cx: &mut App, kb: &KeybindingConfig) {
+    let bindings = FileSidebarShortcutBindings::from_keybindings(kb);
+    if cx.has_global::<FileSidebarShortcutBindings>() {
+        cx.update_global::<FileSidebarShortcutBindings, _>(move |state, _| {
+            *state = bindings;
+        });
+    } else {
+        cx.set_global(bindings);
+    }
+}
+
+fn keystroke_matches_single_binding(keystroke: &Keystroke, binding: &str) -> bool {
+    let mut strokes = binding.split_whitespace();
+    let Some(stroke) = strokes.next() else {
+        return false;
+    };
+    if strokes.next().is_some() {
+        return false;
+    }
+
+    let Ok(target) = Keystroke::parse(stroke) else {
+        return false;
+    };
+    let target = KeybindingKeystroke::from_keystroke(target);
+    if keystroke.should_match(&target) {
+        return true;
+    }
+
+    let typed_key = keystroke.key.to_ascii_lowercase();
+    let target_key = target.key().to_ascii_lowercase();
+    let mut typed_modifiers = keystroke.modifiers;
+    if keystroke.key.chars().all(|ch| ch.is_ascii_uppercase()) {
+        typed_modifiers.shift = true;
+    }
+
+    typed_key == target_key && typed_modifiers == *target.modifiers()
+}
+
+fn install_file_sidebar_shortcut_interceptor(cx: &mut App, kb: &KeybindingConfig) {
+    update_file_sidebar_shortcut_bindings(cx, kb);
+    cx.intercept_keystrokes(|event, window, cx| {
+        if !event
+            .context_stack
+            .iter()
+            .any(|context| context.contains("ConWorkspace"))
+        {
+            return;
+        }
+
+        let bindings = cx.global::<FileSidebarShortcutBindings>().clone();
+        if keystroke_matches_single_binding(&event.keystroke, &bindings.focus_files) {
+            window.dispatch_action(Box::new(FocusFiles), cx);
+            cx.stop_propagation();
+        } else if keystroke_matches_single_binding(&event.keystroke, &bindings.search_files) {
+            window.dispatch_action(Box::new(SearchFiles), cx);
+            cx.stop_propagation();
+        }
+    })
+    .detach();
+}
+
 pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
     bind_specs(cx, binding_specs(kb));
 }
@@ -1522,6 +1600,7 @@ pub(crate) fn rebind_app_keybindings(cx: &mut App, old: &KeybindingConfig, new: 
         .collect::<Vec<_>>();
     cx.bind_keys(unbinds);
     bind_configurable_app_keybindings(cx, new);
+    update_file_sidebar_shortcut_bindings(cx, new);
 }
 
 /// Install a panic hook that writes every panic (including from
@@ -1590,9 +1669,10 @@ mod tests {
     use super::{
         BindingSpec, EditorDeleteBackward, EditorInsertNewline, EditorMoveLineEnd, FocusFiles,
         FocusInput, NewTab, SearchFiles, SelectTab1, ToggleAgentPanel, Undo, binding_specs,
-        command_palette, push_app_override,
+        command_palette, keystroke_matches_single_binding, push_app_override,
     };
     use con_core::config::KeybindingConfig;
+    use gpui::Keystroke;
     use std::any::TypeId;
 
     fn default_specs() -> Vec<BindingSpec> {
@@ -1663,6 +1743,35 @@ mod tests {
                 "{name} must work from terminals, inputs, and editor panes"
             );
         }
+    }
+
+    #[test]
+    fn file_sidebar_shortcut_matcher_accepts_configured_chords() {
+        let focus = Keystroke::parse("secondary-shift-e").unwrap();
+        let search = Keystroke::parse("secondary-shift-f").unwrap();
+
+        assert!(keystroke_matches_single_binding(
+            &focus,
+            "secondary-shift-e"
+        ));
+        assert!(keystroke_matches_single_binding(
+            &search,
+            "secondary-shift-f"
+        ));
+        assert!(!keystroke_matches_single_binding(
+            &focus,
+            "secondary-shift-f"
+        ));
+    }
+
+    #[test]
+    fn file_sidebar_shortcut_matcher_ignores_multi_stroke_bindings() {
+        let focus = Keystroke::parse("secondary-shift-e").unwrap();
+
+        assert!(!keystroke_matches_single_binding(
+            &focus,
+            "secondary-k secondary-shift-e"
+        ));
     }
 
     #[test]
@@ -2128,6 +2237,7 @@ fn main() {
 
         // Register global keybindings from user config
         bind_app_keybindings(cx, &config.keybindings);
+        install_file_sidebar_shortcut_interceptor(cx, &config.keybindings);
         #[cfg(target_os = "macos")]
         global_hotkey::init(cx, &config.keybindings);
         #[cfg(target_os = "macos")]
