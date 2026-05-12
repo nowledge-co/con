@@ -87,24 +87,18 @@ impl Render for ActivityBar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let active_slot = self.active_slot;
-        let compact_launcher = !self.left_panel_open;
 
         div()
             .id("activity-bar")
+            .h(px(ACTIVITY_BAR_HEADER_HEIGHT))
+            .w_full()
             .flex()
+            .flex_row()
             .items_center()
             .justify_center()
             .gap(px(4.0))
+            .px(px(8.0))
             .flex_shrink_0()
-            .when(compact_launcher, |bar| {
-                bar.w(px(36.0)).h(px(70.0)).flex_col()
-            })
-            .when(!compact_launcher, |bar| {
-                bar.h(px(ACTIVITY_BAR_HEADER_HEIGHT))
-                    .w_full()
-                    .flex_row()
-                    .px(px(8.0))
-            })
             .child(activity_slot_button(
                 "activity-files",
                 "phosphor/folders.svg",

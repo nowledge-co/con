@@ -506,6 +506,25 @@ impl ConWorkspace {
         self.set_tab_color(index, event.color, cx);
     }
 
+    pub(super) fn on_sidebar_open_tool_slot(
+        &mut self,
+        _sidebar: &Entity<SessionSidebar>,
+        event: &SidebarOpenToolSlot,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activity_slot = event.slot;
+        self.left_panel_open = true;
+        self.sidebar_tools_open = true;
+        self.activity_bar.update(cx, |bar, cx| {
+            bar.active_slot = event.slot;
+            bar.left_panel_open = true;
+            cx.notify();
+        });
+        self.save_session(cx);
+        cx.notify();
+    }
+
     pub(super) fn sync_sidebar(&self, cx: &mut Context<Self>) {
         let sessions: Vec<SessionEntry> = self
             .tabs

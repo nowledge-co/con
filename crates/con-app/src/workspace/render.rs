@@ -4,45 +4,6 @@ mod top_bar;
 use super::*;
 
 impl ConWorkspace {
-    fn render_vertical_sidebar_tools_launcher(
-        &self,
-        tab_sidebar_width: f32,
-        theme: &Theme,
-    ) -> AnyElement {
-        let launcher_width = 36.0;
-        let launcher_height = 70.0;
-        let collapsed_rail = tab_sidebar_width <= 68.0;
-        let launcher_left = if collapsed_rail {
-            ((tab_sidebar_width - launcher_width) / 2.0).max(4.0)
-        } else {
-            (tab_sidebar_width - launcher_width - 12.0).max(6.0)
-        };
-        let launcher_top = if collapsed_rail { 82.0 } else { 46.0 };
-        let surface = if theme.is_dark() {
-            theme.background.blend(theme.foreground.opacity(0.08))
-        } else {
-            theme.background.blend(theme.foreground.opacity(0.055))
-        };
-
-        div()
-            .id("vertical-sidebar-tools-launcher")
-            .absolute()
-            .left(px(launcher_left))
-            .top(px(launcher_top))
-            .w(px(launcher_width))
-            .h(px(launcher_height))
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(4.0))
-            .rounded(px(7.0))
-            .occlude()
-            .bg(surface)
-            .child(self.activity_bar.clone())
-            .into_any_element()
-    }
-
     fn has_active_resize_drag(&self) -> bool {
         self.sidebar_drag.is_some()
             || self.agent_panel_drag.is_some()
@@ -790,7 +751,6 @@ impl Render for ConWorkspace {
 
         if show_left_panel {
             let mut left_sidebar = div()
-                .relative()
                 .w(px(left_panel_width))
                 .h_full()
                 .flex()
@@ -806,11 +766,6 @@ impl Render for ConWorkspace {
                         .flex_shrink_0()
                         .child(self.sidebar.clone()),
                 );
-                if !show_sidebar_tools {
-                    left_sidebar = left_sidebar.child(
-                        self.render_vertical_sidebar_tools_launcher(tab_sidebar_width, theme),
-                    );
-                }
             }
             if !vertical_tabs_enabled && show_sidebar_tools {
                 let sidebar_content: AnyElement = match self.activity_slot {
