@@ -312,6 +312,7 @@ impl ConWorkspace {
             ai_icon: None,
             color: None,
             summary_id,
+            summary_epoch: 0,
             needs_attention: false,
             session: AgentSession::new(),
             agent_routing: Self::default_agent_routing(self.harness.config()),

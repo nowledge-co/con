@@ -210,6 +210,9 @@ pub(super) struct Tab {
     /// reorders, closes, and re-opens don't collide. Allocated from
     /// `next_tab_summary_id` at tab construction time.
     pub(super) summary_id: u64,
+    /// Bumped when the tab's terminal context changes in a way that
+    /// invalidates in-flight AI summaries for the previous context.
+    pub(super) summary_epoch: u64,
     pub(super) needs_attention: bool,
     pub(super) session: AgentSession,
     pub(super) agent_routing: AgentRoutingState,

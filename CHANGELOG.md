@@ -4,6 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.71` - unreleased
+
+### Fixed
+
+**Tabs**
+
+- Fixed vertical tab titles so changing directories clears stale AI-generated
+  labels immediately and ignores late summary responses for the previous
+  directory. _(PR
+  [#192](https://github.com/nowledge-co/con-terminal/pull/192) by
+  [@iknowu10](https://github.com/iknowu10))_
+
 ## `v0.1.0-beta.70` - 2026-05-12
 
 ### Added

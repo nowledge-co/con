@@ -228,8 +228,8 @@ pub struct ConWorkspace {
     /// Shares the harness's tokio runtime and the user's
     /// `agent.suggestion_model` settings.
     tab_summary_engine: TabSummaryEngine,
-    tab_summary_rx: crossbeam_channel::Receiver<(u64, TabSummary)>,
-    tab_summary_tx: crossbeam_channel::Sender<(u64, TabSummary)>,
+    tab_summary_rx: crossbeam_channel::Receiver<(u64, u64, TabSummary)>,
+    tab_summary_tx: crossbeam_channel::Sender<(u64, u64, TabSummary)>,
     /// Bumped whenever summary-model settings change so late async
     /// responses from the old configuration are ignored.
     tab_summary_generation: u64,

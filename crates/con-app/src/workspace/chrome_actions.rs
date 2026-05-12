@@ -357,6 +357,7 @@ impl ConWorkspace {
             ai_icon: None,
             color: tab_state.color,
             summary_id,
+            summary_epoch: 0,
             needs_attention: false,
             session: AgentSession::new(),
             agent_routing: if tab_state.agent_routing.is_empty() {
