@@ -17,6 +17,15 @@ con is still pre-release, so entries may group related beta work while the produ
   [#194](https://github.com/nowledge-co/con-terminal/pull/194) by
   [@wey-gu](https://github.com/wey-gu))_
 
+**macOS**
+
+- Bundled Ghostty's compiled `xterm-ghostty` terminfo database inside the macOS
+  app, so release builds can use the same terminal capabilities as local
+  `cargo run` builds. The macOS verifier now fails the release if the terminfo
+  entry is missing. _(PR
+  [#195](https://github.com/nowledge-co/con-terminal/pull/195) by
+  [@sundy-li](https://github.com/sundy-li))_
+
 **Tabs**
 
 - Fixed vertical tab titles so changing directories clears stale AI-generated

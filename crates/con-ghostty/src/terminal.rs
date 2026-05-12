@@ -396,6 +396,17 @@ fn installed_app_ghostty_resources_dir_for_exe(exe: &Path) -> Option<PathBuf> {
 }
 
 fn has_xterm_ghostty_terminfo(terminfo_dir: &Path) -> bool {
+    // Compiled terminfo databases normally bucket `xterm-ghostty` by either
+    // its first byte in hex (`78`) or first character (`x`). Check those
+    // directly so startup does not walk the whole bundled database.
+    for bucket in ["78", "x"] {
+        if terminfo_dir.join(bucket).join("xterm-ghostty").is_file() {
+            return true;
+        }
+    }
+
+    // Keep a compatibility fallback for alternate tic layouts, but only after
+    // the known O(1) bundle layouts fail.
     contains_file_named(terminfo_dir, std::ffi::OsStr::new("xterm-ghostty"))
 }
 
