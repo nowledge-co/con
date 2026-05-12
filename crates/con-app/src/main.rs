@@ -1453,8 +1453,8 @@ fn bind_specs(cx: &mut App, specs: Vec<BindingSpec>) {
 
 #[derive(Clone)]
 struct FileSidebarShortcutBindings {
-    focus_files: String,
-    search_files: String,
+    focus_files: Option<String>,
+    search_files: Option<String>,
 }
 
 impl Global for FileSidebarShortcutBindings {}
@@ -1462,10 +1462,28 @@ impl Global for FileSidebarShortcutBindings {}
 impl FileSidebarShortcutBindings {
     fn from_keybindings(kb: &KeybindingConfig) -> Self {
         Self {
-            focus_files: kb.focus_files.clone(),
-            search_files: kb.search_files.clone(),
+            focus_files: validated_file_sidebar_shortcut("Focus Files", &kb.focus_files),
+            search_files: validated_file_sidebar_shortcut("Search Files", &kb.search_files),
         }
     }
+}
+
+fn validated_file_sidebar_shortcut(label: &str, binding: &str) -> Option<String> {
+    let trimmed = binding.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut strokes = trimmed.split_whitespace();
+    let Some(stroke) = strokes.next() else {
+        return None;
+    };
+    if strokes.next().is_some() || Keystroke::parse(stroke).is_err() {
+        log::warn!("{label}: expected a single parseable shortcut, ignoring {binding:?}");
+        return None;
+    }
+
+    Some(stroke.to_string())
 }
 
 fn update_file_sidebar_shortcut_bindings(cx: &mut App, kb: &KeybindingConfig) {
@@ -1518,10 +1536,18 @@ fn install_file_sidebar_shortcut_interceptor(cx: &mut App, kb: &KeybindingConfig
         }
 
         let bindings = cx.global::<FileSidebarShortcutBindings>().clone();
-        if keystroke_matches_single_binding(&event.keystroke, &bindings.focus_files) {
+        if bindings
+            .focus_files
+            .as_deref()
+            .is_some_and(|binding| keystroke_matches_single_binding(&event.keystroke, binding))
+        {
             window.dispatch_action(Box::new(FocusFiles), cx);
             cx.stop_propagation();
-        } else if keystroke_matches_single_binding(&event.keystroke, &bindings.search_files) {
+        } else if bindings
+            .search_files
+            .as_deref()
+            .is_some_and(|binding| keystroke_matches_single_binding(&event.keystroke, binding))
+        {
             window.dispatch_action(Box::new(SearchFiles), cx);
             cx.stop_propagation();
         }
@@ -1667,9 +1693,10 @@ fn payload_as_str(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BindingSpec, EditorDeleteBackward, EditorInsertNewline, EditorMoveLineEnd, FocusFiles,
-        FocusInput, NewTab, SearchFiles, SelectTab1, ToggleAgentPanel, Undo, binding_specs,
-        command_palette, keystroke_matches_single_binding, push_app_override,
+        BindingSpec, EditorDeleteBackward, EditorInsertNewline, EditorMoveLineEnd,
+        FileSidebarShortcutBindings, FocusFiles, FocusInput, NewTab, SearchFiles, SelectTab1,
+        ToggleAgentPanel, Undo, binding_specs, command_palette, keystroke_matches_single_binding,
+        push_app_override,
     };
     use con_core::config::KeybindingConfig;
     use gpui::Keystroke;
@@ -1777,6 +1804,18 @@ mod tests {
         let chord = format!("secondary-k {focus_binding}");
 
         assert!(!keystroke_matches_single_binding(&focus, &chord));
+    }
+
+    #[test]
+    fn file_sidebar_shortcut_bindings_ignore_invalid_config_values() {
+        let mut kb = KeybindingConfig::default();
+        kb.focus_files = "secondary-k secondary-e".to_string();
+        kb.search_files = "not-a-valid binding".to_string();
+
+        let bindings = FileSidebarShortcutBindings::from_keybindings(&kb);
+
+        assert!(bindings.focus_files.is_none());
+        assert!(bindings.search_files.is_none());
     }
 
     #[test]

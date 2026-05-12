@@ -316,7 +316,6 @@ impl Render for FileTreeView {
                     div()
                         .id(("file-row", idx))
                         .h(px(ROW_HEIGHT))
-                        .w_full()
                         .flex()
                         .items_center()
                         .mx(px(6.0))

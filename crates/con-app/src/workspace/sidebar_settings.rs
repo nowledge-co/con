@@ -16,6 +16,7 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let closed_tools_panel = self.vertical_tabs_enabled() && self.sidebar_tools_open;
         if self.vertical_tabs_enabled() && self.sidebar_tools_open {
             self.sidebar_tools_open = false;
             self.activity_bar.update(cx, |bar, cx| {
@@ -24,6 +25,10 @@ impl ConWorkspace {
             });
         }
         self.activate_tab(event.index, window, cx);
+        if closed_tools_panel {
+            self.save_session(cx);
+            cx.notify();
+        }
     }
 
     pub(super) fn on_sidebar_new_session(
