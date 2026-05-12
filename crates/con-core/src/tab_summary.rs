@@ -167,6 +167,11 @@ struct PerTabState {
     last_was_success: bool,
     /// `true` while a request is in flight; prevents duplicate work.
     in_flight: bool,
+    /// Set when a tab context changes while a request is already in
+    /// flight. We keep `in_flight` true to cap model work at one
+    /// request per tab, then make the next poll eligible to dispatch
+    /// immediately once the stale worker exits.
+    refresh_after_in_flight: bool,
 }
 
 /// Background engine. Cheap to construct; safe to call `request` from
@@ -225,17 +230,23 @@ impl TabSummaryEngine {
     }
 
     /// Invalidate cached and in-flight work for one tab without
-    /// affecting other tabs. The next request for this tab can
-    /// dispatch immediately, and any older worker completion will see
-    /// the generation mismatch and drop itself.
+    /// affecting other tabs. If no request is running, the next
+    /// request for this tab can dispatch immediately. If one is
+    /// already running, keep the in-flight guard so rapid OSC-7
+    /// churn cannot fan out into multiple concurrent LLM calls; the
+    /// stale worker will drop itself on generation mismatch and make
+    /// the next poll eligible for a fresh request.
     pub fn invalidate_tab(&self, tab_id: u64) {
         let mut guard = self.state.lock();
         let entry = guard.entry(tab_id).or_default();
         entry.generation = entry.generation.wrapping_add(1);
         entry.last_success_key = None;
-        entry.last_dispatch = None;
         entry.last_was_success = false;
-        entry.in_flight = false;
+        if entry.in_flight {
+            entry.refresh_after_in_flight = true;
+        } else {
+            entry.last_dispatch = None;
+        }
     }
 
     /// Ask the engine to produce a [`TabSummary`] for `req`. Returns
@@ -350,6 +361,7 @@ impl TabSummaryEngine {
                 return;
             }
             entry.in_flight = true;
+            entry.refresh_after_in_flight = false;
             entry.last_dispatch = Some(Instant::now());
             let request_tab_generation = entry.generation;
             drop(guard);
@@ -362,16 +374,23 @@ impl TabSummaryEngine {
                 let result = request_summary(&config, &req).await;
 
                 let mut should_callback = false;
-                if let Some(entry) = state.lock().get_mut(&tab_id)
-                    && entry.generation == request_tab_generation
-                {
+                if let Some(entry) = state.lock().get_mut(&tab_id) {
                     entry.in_flight = false;
-                    let cache_is_current =
-                        cache_generation.load(Ordering::Relaxed) == request_generation;
-                    entry.last_was_success = cache_is_current && result.is_some();
-                    if cache_is_current && result.is_some() {
-                        entry.last_success_key = Some(key);
-                        should_callback = true;
+                    if entry.generation == request_tab_generation {
+                        let cache_is_current =
+                            cache_generation.load(Ordering::Relaxed) == request_generation;
+                        entry.last_was_success = cache_is_current && result.is_some();
+                        if cache_is_current && result.is_some() {
+                            entry.last_success_key = Some(key);
+                            should_callback = true;
+                        }
+                    } else {
+                        entry.last_was_success = false;
+                        entry.last_success_key = None;
+                        if entry.refresh_after_in_flight {
+                            entry.refresh_after_in_flight = false;
+                            entry.last_dispatch = None;
+                        }
                     }
                 }
 
@@ -854,7 +873,7 @@ mod tests {
     }
 
     #[test]
-    fn invalidate_tab_clears_only_that_tab_and_unblocks_new_context() {
+    fn invalidate_tab_preserves_in_flight_guard_for_that_tab_only() {
         let engine = TabSummaryEngine::new(
             AgentConfig::default(),
             Arc::new(Runtime::new().expect("test runtime")),
@@ -867,6 +886,7 @@ mod tests {
                 last_success_key: Some(42),
                 last_was_success: true,
                 last_dispatch: Some(Instant::now()),
+                ..Default::default()
             },
         );
         engine.state.lock().insert(
@@ -877,6 +897,45 @@ mod tests {
                 last_success_key: Some(99),
                 last_was_success: true,
                 last_dispatch: Some(Instant::now()),
+                ..Default::default()
+            },
+        );
+
+        engine.invalidate_tab(7);
+
+        let state = engine.state.lock();
+        let invalidated = state.get(&7).expect("invalidated tab");
+        assert_eq!(invalidated.generation, 3);
+        assert!(invalidated.in_flight);
+        assert!(invalidated.refresh_after_in_flight);
+        assert_eq!(invalidated.last_success_key, None);
+        assert!(invalidated.last_dispatch.is_some());
+        assert!(!invalidated.last_was_success);
+
+        let untouched = state.get(&8).expect("other tab");
+        assert_eq!(untouched.generation, 4);
+        assert!(untouched.in_flight);
+        assert_eq!(untouched.last_success_key, Some(99));
+        assert!(untouched.last_was_success);
+        assert!(untouched.last_dispatch.is_some());
+        assert!(!untouched.refresh_after_in_flight);
+    }
+
+    #[test]
+    fn invalidate_tab_without_in_flight_unblocks_new_context_immediately() {
+        let engine = TabSummaryEngine::new(
+            AgentConfig::default(),
+            Arc::new(Runtime::new().expect("test runtime")),
+        );
+        engine.state.lock().insert(
+            7,
+            PerTabState {
+                generation: 2,
+                in_flight: false,
+                last_success_key: Some(42),
+                last_was_success: true,
+                last_dispatch: Some(Instant::now()),
+                ..Default::default()
             },
         );
 
@@ -886,16 +945,10 @@ mod tests {
         let invalidated = state.get(&7).expect("invalidated tab");
         assert_eq!(invalidated.generation, 3);
         assert!(!invalidated.in_flight);
+        assert!(!invalidated.refresh_after_in_flight);
         assert_eq!(invalidated.last_success_key, None);
         assert_eq!(invalidated.last_dispatch, None);
         assert!(!invalidated.last_was_success);
-
-        let untouched = state.get(&8).expect("other tab");
-        assert_eq!(untouched.generation, 4);
-        assert!(untouched.in_flight);
-        assert_eq!(untouched.last_success_key, Some(99));
-        assert!(untouched.last_was_success);
-        assert!(untouched.last_dispatch.is_some());
     }
 
     /// Tab reorder math (mirrors `on_sidebar_reorder` in workspace.rs).
