@@ -408,12 +408,33 @@ impl ConWorkspace {
 
     pub(crate) fn on_terminal_cwd_changed(
         &mut self,
-        _entity: &Entity<GhosttyView>,
+        entity: &Entity<GhosttyView>,
         event: &GhosttyCwdChanged,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let _reported_cwd = event.0.as_deref();
+        // Stale AI label would take priority over the new CWD basename in
+        // smart_tab_presentation. Clear it so the tab reflects the new
+        // directory immediately while request_tab_summaries re-derives a
+        // fresh label.
+        let entity_id = entity.entity_id();
+        let invalidated_summary_id = self
+            .tabs
+            .iter_mut()
+            // Tab summaries and smart_tab_presentation are derived from each
+            // tab's focused terminal. A background split or inactive surface can
+            // report OSC-7 too, but that should not clear the visible tab label.
+            .find(|tab| tab.pane_tree.focused_terminal().entity_id() == entity_id)
+            .map(|tab| {
+                tab.ai_label = None;
+                tab.ai_icon = None;
+                tab.summary_epoch = tab.summary_epoch.wrapping_add(1);
+                tab.summary_id
+            });
+        if let Some(summary_id) = invalidated_summary_id {
+            self.tab_summary_engine.invalidate_tab(summary_id);
+        }
         // Shell integration reports cwd independently from title/output.
         // Persist immediately so restart continuity survives a later crash or
         // force-quit instead of depending on an unrelated tab/layout save.
@@ -542,6 +563,7 @@ impl ConWorkspace {
             ai_icon: None,
             color: self.tabs[index].color,
             summary_id,
+            summary_epoch: 0,
             needs_attention: false,
             session: AgentSession::new(),
             agent_routing: self.tabs[index].agent_routing.clone(),

@@ -190,6 +190,7 @@ impl ConWorkspace {
                     ai_icon: None,
                     color: tab_state.color,
                     summary_id: i as u64,
+                    summary_epoch: 0,
                     needs_attention: false,
                     session: agent_session,
                     agent_routing: if tab_state.agent_routing.is_empty() {
@@ -214,6 +215,7 @@ impl ConWorkspace {
                 ai_icon: None,
                 color: None,
                 summary_id: 0,
+                summary_epoch: 0,
                 needs_attention: false,
                 session: AgentSession::new(),
                 agent_routing: Self::default_agent_routing(&config.agent),
@@ -521,9 +523,11 @@ impl ConWorkspace {
                         workspace.apply_shell_suggestion(result, cx);
                     }
 
-                    while let Ok((generation, summary)) = workspace.tab_summary_rx.try_recv() {
+                    while let Ok((generation, summary_epoch, summary)) =
+                        workspace.tab_summary_rx.try_recv()
+                    {
                         got_event = true;
-                        workspace.apply_tab_summary(generation, summary, cx);
+                        workspace.apply_tab_summary(generation, summary_epoch, summary, cx);
                     }
 
                     if workspace.pump_ghostty_views(cx) {
@@ -640,8 +644,9 @@ impl ConWorkspace {
                     recent_output: vec![],
                 };
                 let tx = tx.clone();
+                let summary_epoch = tab.summary_epoch;
                 tab_summary_engine.request(req, move |summary| {
-                    let _ = tx.send((0, summary));
+                    let _ = tx.send((0, summary_epoch, summary));
                 });
             }
         }

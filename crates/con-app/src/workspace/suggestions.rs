@@ -539,6 +539,7 @@ impl ConWorkspace {
     pub(super) fn apply_tab_summary(
         &mut self,
         generation: u64,
+        summary_epoch: u64,
         summary: TabSummary,
         cx: &mut Context<Self>,
     ) {
@@ -556,6 +557,16 @@ impl ConWorkspace {
             // Tab was closed while the request was in flight.
             return;
         };
+        if !tab_summary_epoch_matches(summary_epoch, tab.summary_epoch) {
+            log::debug!(
+                target: "con::tab_summary",
+                "tab_summary drop stale tab_id={} request_epoch={} current_epoch={}",
+                summary.tab_id,
+                summary_epoch,
+                tab.summary_epoch,
+            );
+            return;
+        }
         let label = summary.label.trim().to_string();
         let icon = summary.icon;
         let label_changed = tab.ai_label.as_deref() != Some(label.as_str());
@@ -603,6 +614,7 @@ impl ConWorkspace {
         let tx = self.tab_summary_tx.clone();
         let generation = self.tab_summary_generation;
         for (i, tab) in self.tabs.iter().enumerate() {
+            let summary_epoch = tab.summary_epoch;
             let terminal = tab.pane_tree.focused_terminal();
             // The terminal's recent scrollback is the only signal we
             // get for commands the user typed *directly* into the
@@ -629,8 +641,23 @@ impl ConWorkspace {
             };
             let tx = tx.clone();
             self.tab_summary_engine.request(req, move |summary| {
-                let _ = tx.send((generation, summary));
+                let _ = tx.send((generation, summary_epoch, summary));
             });
         }
+    }
+}
+
+fn tab_summary_epoch_matches(request_epoch: u64, current_epoch: u64) -> bool {
+    request_epoch == current_epoch
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tab_summary_epoch_matches;
+
+    #[test]
+    fn tab_summary_epoch_rejects_late_response_after_context_change() {
+        assert!(tab_summary_epoch_matches(7, 7));
+        assert!(!tab_summary_epoch_matches(7, 8));
     }
 }
