@@ -310,48 +310,55 @@ impl ConWorkspace {
                             .child(local_keycap("F")),
                     );
 
-                let preset_segment = |id: &'static str, label: &'static str, active: bool| {
-                    div().flex_1().child(
-                        div()
-                            .id(SharedString::from(id))
-                            .h(px(23.0))
-                            .w_full()
-                            .rounded(px(6.0))
-                            .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(if active {
-                                theme.primary.opacity(0.11)
-                            } else {
-                                theme.transparent
-                            })
-                            .hover(|s| {
-                                s.bg(if active {
-                                    theme.primary.opacity(0.14)
+                let preset_segment =
+                    |id: &'static str, icon: &'static str, label: &'static str, active: bool| {
+                        div().flex_1().child(
+                            div()
+                                .id(SharedString::from(id))
+                                .h(px(23.0))
+                                .w_full()
+                                .rounded(px(6.0))
+                                .cursor_pointer()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .gap(px(6.0))
+                                .bg(if active {
+                                    theme.primary.opacity(0.11)
                                 } else {
-                                    theme.foreground.opacity(0.045)
+                                    theme.transparent
                                 })
-                            })
-                            .child(
-                                div()
-                                    .text_size(px(10.8))
-                                    .line_height(px(13.0))
-                                    .font_family(theme.mono_font_family.clone())
-                                    .font_weight(if active {
-                                        FontWeight::MEDIUM
+                                .hover(|s| {
+                                    s.bg(if active {
+                                        theme.primary.opacity(0.14)
                                     } else {
-                                        FontWeight::NORMAL
+                                        theme.foreground.opacity(0.045)
                                     })
-                                    .text_color(if active {
-                                        theme.primary.opacity(0.94)
-                                    } else {
-                                        theme.muted_foreground.opacity(0.68)
-                                    })
-                                    .child(label),
-                            ),
-                    )
-                };
+                                })
+                                .child(svg().path(icon).size(px(12.0)).text_color(if active {
+                                    theme.primary.opacity(0.88)
+                                } else {
+                                    theme.muted_foreground.opacity(0.56)
+                                }))
+                                .child(
+                                    div()
+                                        .text_size(px(10.8))
+                                        .line_height(px(13.0))
+                                        .font_family(theme.mono_font_family.clone())
+                                        .font_weight(if active {
+                                            FontWeight::MEDIUM
+                                        } else {
+                                            FontWeight::NORMAL
+                                        })
+                                        .text_color(if active {
+                                            theme.primary.opacity(0.94)
+                                        } else {
+                                            theme.muted_foreground.opacity(0.68)
+                                        })
+                                        .child(label),
+                                ),
+                        )
+                    };
 
                 let presets_row = div()
                     .flex()
@@ -368,32 +375,42 @@ impl ConWorkspace {
                             .items_center()
                             .gap(px(2.0))
                             .child(
-                                preset_segment("scope-all", "All panes", is_broadcast)
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(
-                                            |this: &mut ConWorkspace,
-                                             _: &MouseDownEvent,
-                                             window,
-                                             cx| {
-                                                this.set_scope_broadcast(window, cx);
-                                            },
-                                        ),
+                                preset_segment(
+                                    "scope-all",
+                                    "phosphor/selection-all.svg",
+                                    "All panes",
+                                    is_broadcast,
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(
+                                        |this: &mut ConWorkspace,
+                                         _: &MouseDownEvent,
+                                         window,
+                                         cx| {
+                                            this.set_scope_broadcast(window, cx);
+                                        },
                                     ),
+                                ),
                             )
                             .child(
-                                preset_segment("scope-focused", "Focused", is_focused)
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(
-                                            |this: &mut ConWorkspace,
-                                             _: &MouseDownEvent,
-                                             window,
-                                             cx| {
-                                                this.set_scope_focused(window, cx);
-                                            },
-                                        ),
+                                preset_segment(
+                                    "scope-focused",
+                                    "phosphor/target.svg",
+                                    "Focused",
+                                    is_focused,
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(
+                                        |this: &mut ConWorkspace,
+                                         _: &MouseDownEvent,
+                                         window,
+                                         cx| {
+                                            this.set_scope_focused(window, cx);
+                                        },
                                     ),
+                                ),
                             ),
                     )
                     .child(div().flex_1());

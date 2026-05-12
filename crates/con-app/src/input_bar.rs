@@ -230,14 +230,14 @@ impl InputBar {
 
     fn pane_scope_summary(&self) -> (String, &'static str) {
         match self.pane_scope_mode {
-            PaneScopeMode::Broadcast => ("All panes".to_string(), "phosphor/broadcast.svg"),
-            PaneScopeMode::Focused => ("Focused".to_string(), "phosphor/cursor-click.svg"),
+            PaneScopeMode::Broadcast => ("All panes".to_string(), "phosphor/selection-all.svg"),
+            PaneScopeMode::Focused => ("Focused".to_string(), "phosphor/target.svg"),
             PaneScopeMode::Custom => {
                 let targets = self.effective_target_ids();
                 if targets.len() > 1 {
                     (
                         format!("{} panes", targets.len()),
-                        "phosphor/squares-four.svg",
+                        "phosphor/selection-plus.svg",
                     )
                 } else {
                     let title = self
@@ -246,7 +246,7 @@ impl InputBar {
                         .find(|pane| pane.id == targets[0])
                         .map(Self::pane_scope_title)
                         .unwrap_or_else(|| "Focused".to_string());
-                    (title, "phosphor/squares-four.svg")
+                    (title, "phosphor/target.svg")
                 }
             }
         }
@@ -1215,12 +1215,13 @@ impl Render for InputBar {
         let all_selected = self.all_panes_selected();
         let pane_row = if has_multiple_panes && self.mode != InputMode::Agent {
             let (scope_label, scope_icon) = self.pane_scope_summary();
-            let scope_tint =
-                if all_selected || matches!(self.pane_scope_mode, PaneScopeMode::Custom) {
-                    theme.primary
-                } else {
-                    theme.muted_foreground.opacity(0.8)
-                };
+            let scope_is_expanded =
+                all_selected || matches!(self.pane_scope_mode, PaneScopeMode::Custom);
+            let scope_tint = if scope_is_expanded {
+                theme.primary.opacity(0.86)
+            } else {
+                theme.muted_foreground.opacity(0.78)
+            };
             Some(
                 div()
                     .flex()
@@ -1235,25 +1236,17 @@ impl Render for InputBar {
                             .flex()
                             .items_center()
                             .gap(px(7.0 * mono_scale))
-                            .bg(
-                                if all_selected
-                                    || matches!(self.pane_scope_mode, PaneScopeMode::Custom)
-                                {
-                                    theme.primary.opacity(0.07)
-                                } else {
-                                    theme.foreground.opacity(0.045)
-                                },
-                            )
+                            .bg(if scope_is_expanded {
+                                theme.primary.opacity(0.055)
+                            } else {
+                                theme.foreground.opacity(0.045)
+                            })
                             .hover(|s| {
-                                s.bg(
-                                    if all_selected
-                                        || matches!(self.pane_scope_mode, PaneScopeMode::Custom)
-                                    {
-                                        theme.primary.opacity(0.10)
-                                    } else {
-                                        theme.foreground.opacity(0.065)
-                                    },
-                                )
+                                s.bg(if scope_is_expanded {
+                                    theme.primary.opacity(0.082)
+                                } else {
+                                    theme.foreground.opacity(0.065)
+                                })
                             })
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -1264,10 +1257,23 @@ impl Render for InputBar {
                                 }),
                             )
                             .child(
-                                svg()
-                                    .path(scope_icon)
-                                    .size(compact_icon_size)
-                                    .text_color(scope_tint),
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .size(px(20.0 * mono_scale))
+                                    .rounded(px(6.0 * mono_scale))
+                                    .bg(if scope_is_expanded {
+                                        theme.primary.opacity(0.075)
+                                    } else {
+                                        theme.foreground.opacity(0.045)
+                                    })
+                                    .child(
+                                        svg()
+                                            .path(scope_icon)
+                                            .size(compact_icon_size)
+                                            .text_color(scope_tint),
+                                    ),
                             )
                             .child(
                                 div()
@@ -1275,15 +1281,11 @@ impl Render for InputBar {
                                     .line_height(mono_px(theme, 14.0))
                                     .font_family(theme.mono_font_family.clone())
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(
-                                        if all_selected
-                                            || matches!(self.pane_scope_mode, PaneScopeMode::Custom)
-                                        {
-                                            theme.primary
-                                        } else {
-                                            theme.muted_foreground.opacity(0.76)
-                                        },
-                                    )
+                                    .text_color(if scope_is_expanded {
+                                        theme.primary.opacity(0.92)
+                                    } else {
+                                        theme.muted_foreground.opacity(0.76)
+                                    })
                                     .max_w(px(128.0 * mono_scale))
                                     .overflow_hidden()
                                     .whitespace_nowrap()
