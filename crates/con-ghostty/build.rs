@@ -66,6 +66,7 @@ fn build_macos() {
     let _initial_output_restore_enabled = apply_embedded_initial_output_patch(&ghostty_dir);
     let optimize = ghostty_optimize();
     let zig_bin = env::var_os("CON_ZIG_BIN").unwrap_or_else(|| std::ffi::OsString::from("zig"));
+    let zig_global_cache_dir = zig_global_cache_dir("macos");
 
     let build_args = vec![
         "build".to_string(),
@@ -75,6 +76,7 @@ fn build_macos() {
         format!("-Doptimize={optimize}"),
     ];
     let mut cmd = Command::new(&zig_bin);
+    configure_zig_command(&mut cmd, zig_global_cache_dir.as_deref());
     cmd.args(&build_args).current_dir(&ghostty_dir);
 
     let status = cmd.status().unwrap_or_else(|err| {
@@ -88,9 +90,10 @@ fn build_macos() {
         println!(
             "cargo:warning=zig build failed for libghostty; prefetching Zig package cache and retrying"
         );
-        prefetch_zig_dependencies(&zig_bin, &ghostty_dir, None);
+        prefetch_zig_dependencies(&zig_bin, &ghostty_dir, zig_global_cache_dir.as_deref());
 
         let mut retry = Command::new(&zig_bin);
+        configure_zig_command(&mut retry, zig_global_cache_dir.as_deref());
         retry.args(&build_args).current_dir(&ghostty_dir);
         let retry_status = retry.status().unwrap_or_else(|err| {
             panic!(
@@ -1043,10 +1046,17 @@ fn prefetch_zig_git_url(
 
     let result = (|| {
         fs::create_dir_all(&tmp_root).ok()?;
+        fs::create_dir_all(&checkout).ok()?;
         run_status(
             Command::new("git")
-                .args(["clone", "--no-checkout", "--filter=blob:none", repo_url])
+                .arg("init")
+                .arg("--quiet")
                 .arg(&checkout),
+        )?;
+        run_status(
+            Command::new("git")
+                .args(["remote", "add", "origin", repo_url])
+                .current_dir(&checkout),
         )?;
         run_status(
             Command::new("git")
@@ -1055,14 +1065,14 @@ fn prefetch_zig_git_url(
         )?;
         run_status(
             Command::new("git")
-                .args(["checkout", "--detach", revision])
+                .args(["checkout", "--detach", "FETCH_HEAD"])
                 .current_dir(&checkout),
         )?;
         run_status(
             Command::new("git")
                 .args(["archive", "--format=tar.gz", "-o"])
                 .arg(&archive)
-                .arg(revision)
+                .arg("HEAD")
                 .current_dir(&checkout),
         )?;
         zig_fetch_path(zig_bin, &archive, zig_global_cache_dir)
