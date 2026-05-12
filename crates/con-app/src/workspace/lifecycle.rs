@@ -11,7 +11,16 @@ impl ConWorkspace {
         let agent_panel_width = session
             .agent_panel_width
             .unwrap_or(AGENT_PANEL_DEFAULT_WIDTH);
-        let initial_sidebar_width = session.left_panel_width.unwrap_or(PANEL_MIN_WIDTH * 1.25);
+        let window_width = window.bounds().size.width.as_f32();
+        let agent_panel_outer_width = if agent_panel_open {
+            agent_panel_width.min(max_agent_panel_width(window_width)) + 1.0
+        } else {
+            0.0
+        };
+        let initial_sidebar_width = SessionSidebar::clamped_panel_width(
+            session.left_panel_width.unwrap_or(PANEL_MIN_WIDTH * 1.25),
+            max_sidebar_panel_width(window_width, agent_panel_outer_width),
+        );
         let sidebar = cx.new(|cx| {
             let mut s = SessionSidebar::new(cx);
             s.set_panel_width(initial_sidebar_width, cx);

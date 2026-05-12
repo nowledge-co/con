@@ -29,7 +29,7 @@ pub struct Session {
     #[serde(default)]
     pub activity_slot: Option<String>,
     /// Whether the left panel is open.
-    #[serde(default)]
+    #[serde(default, alias = "vertical_tabs_pinned")]
     pub left_panel_open: Option<bool>,
     /// Height of the editor area in pixels. None / 0.0 = collapsed.
     #[serde(default)]
@@ -258,6 +258,19 @@ mod tests {
         let session: Session = serde_json::from_value(value).unwrap();
 
         assert_eq!(session.left_panel_width, Some(277.0));
+        assert_eq!(session.left_panel_open, Some(true));
+    }
+
+    #[test]
+    fn legacy_collapsed_vertical_tabs_state_is_accepted() {
+        let mut value = serde_json::to_value(Session::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("left_panel_open");
+        object.insert("vertical_tabs_pinned".to_string(), json!(false));
+
+        let session: Session = serde_json::from_value(value).unwrap();
+
+        assert_eq!(session.left_panel_open, Some(false));
     }
 
     #[test]
