@@ -4,7 +4,7 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.72` - Unreleased
+## `v0.1.0-beta.72` - 2026-05-12
 
 ### Changed
 
@@ -14,6 +14,18 @@ con is still pre-release, so entries may group related beta work while the produ
   to vertical tabs. Explicit `tabs_orientation = "horizontal"` configs still
   keep the horizontal top tab strip. _(PR
   [#205](https://github.com/nowledge-co/con-terminal/pull/205) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**Build**
+
+- Made the macOS libghostty build retry path prefetch Zig package
+  dependencies into the same global cache used by the retry build, and use
+  shallow git fetches for git-backed Zig packages, so transient Zig package
+  fetch failures are less likely to block local or CI builds. _(PR
+  [#204](https://github.com/nowledge-co/con-terminal/pull/204) by
+  [@sundy-li](https://github.com/sundy-li), with follow-up by
   [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.71` - 2026-05-12
