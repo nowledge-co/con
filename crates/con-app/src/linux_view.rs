@@ -530,8 +530,8 @@ impl GhosttyView {
             rows,
             width_px,
             height_px,
-            cell_width_px,
-            cell_height_px,
+            cell_width_px: cell_width,
+            cell_height_px: cell_height,
         }
     }
 
