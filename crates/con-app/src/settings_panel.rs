@@ -28,15 +28,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
 
-actions!(
-    settings,
-    [
-        ToggleSettings,
-        SaveSettings,
-        DismissSettings,
-        TabsOrientationChanged
-    ]
-);
+actions!(settings, [ToggleSettings, SaveSettings, DismissSettings]);
 
 /// Emitted when the user selects a different terminal theme for live preview.
 pub struct ThemePreview(pub String);
@@ -2490,7 +2482,7 @@ impl SettingsPanel {
             "split_right" => self.config.keybindings.split_right = binding,
             "split_down" => self.config.keybindings.split_down = binding,
             "toggle_pane_scope" => self.config.keybindings.toggle_pane_scope = binding,
-            "toggle_vertical_tabs" => self.config.keybindings.toggle_vertical_tabs = binding,
+            "toggle_left_panel" => self.config.keybindings.toggle_left_panel = binding,
             "collapse_sidebar" => self.config.keybindings.collapse_sidebar = binding,
             "new_surface" => self.config.keybindings.new_surface = binding,
             "new_surface_split_right" => self.config.keybindings.new_surface_split_right = binding,
@@ -2532,7 +2524,7 @@ impl SettingsPanel {
             "split_right" => &self.config.keybindings.split_right,
             "split_down" => &self.config.keybindings.split_down,
             "toggle_pane_scope" => &self.config.keybindings.toggle_pane_scope,
-            "toggle_vertical_tabs" => &self.config.keybindings.toggle_vertical_tabs,
+            "toggle_left_panel" => &self.config.keybindings.toggle_left_panel,
             "collapse_sidebar" => &self.config.keybindings.collapse_sidebar,
             "new_surface" => &self.config.keybindings.new_surface,
             "new_surface_split_right" => &self.config.keybindings.new_surface_split_right,
@@ -2543,15 +2535,6 @@ impl SettingsPanel {
             "close_surface" => &self.config.keybindings.close_surface,
             "quit" => &self.config.keybindings.quit,
             _ => "",
-        }
-    }
-
-    pub fn set_tabs_orientation(&mut self, orientation: con_core::config::TabsOrientation) {
-        self.config.appearance.tabs_orientation = orientation;
-        if let Some(snapshot) = &mut self.preview_snapshot {
-            snapshot.appearance.tabs_orientation = orientation;
-        } else {
-            self.preview_snapshot = Some(self.config.clone());
         }
     }
 
@@ -3534,62 +3517,14 @@ impl SettingsPanel {
                 ),
         );
 
-        let vertical_tabs_enabled = matches!(
-            self.config.appearance.tabs_orientation,
-            con_core::config::TabsOrientation::Vertical,
-        );
         content = content.child(
             div()
                 .flex()
                 .flex_col()
                 .gap(px(8.0))
-                .child(group_label("Tabs", &theme))
+                .child(group_label("Pane", &theme))
                 .child(
                     card(theme, card_opacity)
-                        .child(toggle_row(
-                            "Vertical Tabs",
-                            "Show tabs as a collapsible left-side panel.",
-                            Switch::new("vertical-tabs-toggle")
-                                .checked(vertical_tabs_enabled)
-                                .small()
-                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
-                                    // Live toggle: write the new value
-                                    // into self.config, persist to disk
-                                    // immediately so closing the panel
-                                    // (or quitting + relaunching)
-                                    // doesn't lose the change, and emit
-                                    // a narrow event so the workspace
-                                    // applies only the orientation switch.
-                                    let previous_orientation =
-                                        this.config.appearance.tabs_orientation;
-                                    this.config.appearance.tabs_orientation = if *checked {
-                                        con_core::config::TabsOrientation::Vertical
-                                    } else {
-                                        con_core::config::TabsOrientation::Horizontal
-                                    };
-                                    if let Err(err) = this.config.save() {
-                                        this.config.appearance.tabs_orientation =
-                                            previous_orientation;
-                                        log::warn!(
-                                            "settings: persist tabs_orientation failed: {err}"
-                                        );
-                                        this.save_error = Some(err.to_string());
-                                        this.save_error_kind = Some(SettingsSaveErrorKind::Other);
-                                        cx.notify();
-                                        return;
-                                    }
-                                    if let Some(snapshot) = &mut this.preview_snapshot {
-                                        snapshot.appearance.tabs_orientation =
-                                            this.config.appearance.tabs_orientation;
-                                    }
-                                    this.save_error = None;
-                                    this.save_error_kind = None;
-                                    cx.emit(TabsOrientationChanged);
-                                    cx.notify();
-                                })),
-                            theme,
-                        ))
-                        .child(row_separator(theme))
                         .child(toggle_row(
                             "Hide Pane Title Bar",
                             "Hide the title bar on split panes.",
@@ -4710,8 +4645,7 @@ impl SettingsPanel {
             ("Toggle Input / Terminal", "focus_input"),
             ("Cycle Input Mode", "cycle_input_mode"),
             ("Toggle Pane Scope", "toggle_pane_scope"),
-            ("Toggle Vertical Tabs", "toggle_vertical_tabs"),
-            ("Collapse/Expand Sidebar", "collapse_sidebar"),
+            ("Toggle Left Sidebar", "toggle_left_panel"),
             ("Quit", "quit"),
         ];
 
@@ -5232,7 +5166,6 @@ impl SettingsPanel {
 }
 
 impl EventEmitter<SaveSettings> for SettingsPanel {}
-impl EventEmitter<TabsOrientationChanged> for SettingsPanel {}
 impl EventEmitter<ThemePreview> for SettingsPanel {}
 impl EventEmitter<AppearancePreview> for SettingsPanel {}
 

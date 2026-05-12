@@ -1,5 +1,12 @@
 use super::chrome::agent_panel_motion_target_for_agent_request;
 use super::{
+    ActivePaneFocusTarget, EditorFileCloseOutcome, EditorLineBoundary, FileTreeFocusSource,
+    WorkspaceCloseIntent, active_pane_focus_target, editor_file_close_outcome,
+    editor_line_boundary_for_key, file_tree_root_for_focus,
+    focused_editor_pane_key_fallback_allowed, resize_drag_should_continue,
+    should_show_activity_bar, workspace_close_intent, workspace_close_intent_for_close_tab,
+};
+use super::{
     ConWorkspace, SPLIT_PREVIEW_SEAM_THICKNESS, SplitDirection, SplitPlacement,
     TabRenameStateSnapshot, centered_drag_preview_origin, clamp_preview_origin_to_tab_bar,
     clear_pane_tab_promotion_drag_state, horizontal_tab_slot_from_drag,
@@ -12,10 +19,150 @@ use super::{
     tab_drag_preview_origin, tab_like_drag_preview_size, tab_rename_commit_label,
     tab_rename_initial_label, trailing_drop_slot_from_position,
 };
+use crate::activity_bar::ActivitySlot;
 use crate::sidebar::{
     DraggedTabPreviewConstraint, constrained_drag_preview_x_shift, constrained_drag_preview_y_shift,
 };
-use gpui::{Bounds, Point, Size, px};
+use gpui::{Bounds, MouseButton, Point, Size, px};
+use std::path::{Path, PathBuf};
+
+#[test]
+fn file_tree_root_for_terminal_focus_uses_terminal_cwd() {
+    let root = file_tree_root_for_focus(
+        FileTreeFocusSource::Terminal {
+            cwd: Some("/tmp/project"),
+        },
+        Some(Path::new("/tmp/old")),
+    );
+    assert_eq!(root, Some(PathBuf::from("/tmp/project")));
+}
+
+#[test]
+fn file_tree_root_for_editor_focus_uses_file_parent_dir_without_existing_root() {
+    let root = file_tree_root_for_focus(
+        FileTreeFocusSource::Editor {
+            file_path: Some(Path::new("/tmp/project/src/main.rs")),
+        },
+        None,
+    );
+    assert_eq!(root, Some(PathBuf::from("/tmp/project/src")));
+}
+
+#[test]
+fn file_tree_root_for_editor_focus_preserves_existing_root_that_contains_file() {
+    let root = file_tree_root_for_focus(
+        FileTreeFocusSource::Editor {
+            file_path: Some(Path::new("/a/b/c/d/e.txt")),
+        },
+        Some(Path::new("/a/b")),
+    );
+    assert_eq!(root, Some(PathBuf::from("/a/b")));
+}
+
+#[test]
+fn workspace_cmd_w_closes_editor_file_before_pane_tab_or_window() {
+    assert_eq!(
+        workspace_close_intent(2, Some(2), 4),
+        WorkspaceCloseIntent::CloseEditorFile
+    );
+    assert_eq!(
+        workspace_close_intent(1, Some(1), 1),
+        WorkspaceCloseIntent::CloseEditorFile
+    );
+    assert_eq!(
+        workspace_close_intent(2, Some(0), 4),
+        WorkspaceCloseIntent::ClosePane
+    );
+    assert_eq!(
+        workspace_close_intent(1, None, 4),
+        WorkspaceCloseIntent::CloseTab
+    );
+    assert_eq!(
+        workspace_close_intent(1, Some(0), 1),
+        WorkspaceCloseIntent::CloseWindow
+    );
+}
+
+#[test]
+fn workspace_cmd_w_uses_focused_editor_pane_when_keyboard_focus_is_elsewhere() {
+    assert_eq!(
+        workspace_close_intent_for_close_tab(1, None, Some(3), 1),
+        WorkspaceCloseIntent::CloseEditorFile
+    );
+    assert_eq!(
+        workspace_close_intent_for_close_tab(1, None, None, 3),
+        WorkspaceCloseIntent::CloseTab
+    );
+}
+
+#[test]
+fn ctrl_a_and_ctrl_e_have_workspace_fallback_for_focused_editor_pane() {
+    assert_eq!(
+        editor_line_boundary_for_key("a", true, false, false, false),
+        Some(EditorLineBoundary::Start)
+    );
+    assert_eq!(
+        editor_line_boundary_for_key("e", true, false, false, false),
+        Some(EditorLineBoundary::End)
+    );
+    assert_eq!(
+        editor_line_boundary_for_key("a", false, false, false, false),
+        None
+    );
+}
+
+#[test]
+fn focused_editor_pane_key_fallback_does_not_steal_input_focus() {
+    assert!(focused_editor_pane_key_fallback_allowed(false));
+    assert!(!focused_editor_pane_key_fallback_allowed(true));
+}
+
+#[test]
+fn activity_bar_is_always_visible_as_left_sidebar_rail() {
+    assert!(should_show_activity_bar(false, ActivitySlot::Files));
+    assert!(should_show_activity_bar(false, ActivitySlot::Search));
+    assert!(should_show_activity_bar(true, ActivitySlot::Files));
+    assert!(should_show_activity_bar(true, ActivitySlot::Search));
+}
+
+#[test]
+fn resize_drag_stops_when_left_button_is_no_longer_pressed() {
+    assert!(resize_drag_should_continue(Some(MouseButton::Left)));
+    assert!(!resize_drag_should_continue(None));
+    assert!(!resize_drag_should_continue(Some(MouseButton::Right)));
+}
+
+#[test]
+fn editor_only_tabs_focus_editor_when_no_terminal_exists() {
+    assert_eq!(
+        active_pane_focus_target(true, true),
+        ActivePaneFocusTarget::Terminal
+    );
+    assert_eq!(
+        active_pane_focus_target(false, true),
+        ActivePaneFocusTarget::Editor
+    );
+    assert_eq!(
+        active_pane_focus_target(false, false),
+        ActivePaneFocusTarget::Workspace
+    );
+}
+
+#[test]
+fn editor_file_close_outcome_closes_single_empty_editor_pane_container() {
+    assert_eq!(
+        editor_file_close_outcome(1, false),
+        EditorFileCloseOutcome::KeepEditorPane
+    );
+    assert_eq!(
+        editor_file_close_outcome(2, true),
+        EditorFileCloseOutcome::CloseEditorPane
+    );
+    assert_eq!(
+        editor_file_close_outcome(1, true),
+        EditorFileCloseOutcome::CloseWorkspaceTabOrWindow
+    );
+}
 
 #[test]
 fn agent_request_opening_panel_drives_panel_motion_to_visible() {
@@ -1011,7 +1158,7 @@ fn top_bar_clickables_explicitly_consume_left_mouse_down() {
     );
     for control_id in [
         "tab-new",
-        "toggle-vertical-tabs",
+        "toggle-left-sidebar",
         "toggle-input-bar",
         "toggle-agent-panel",
         "toggle-settings",

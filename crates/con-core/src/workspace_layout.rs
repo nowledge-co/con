@@ -367,8 +367,10 @@ impl WorkspaceLayout {
                 .unwrap_or_default(),
             input_history: profile_input_history(history),
             conversation_id: None,
-            vertical_tabs_pinned: false,
-            vertical_tabs_width: None,
+            left_panel_width: None,
+            activity_slot: None,
+            left_panel_open: None,
+            editor_area_height: None,
         };
 
         if session.global_shell_history.is_empty() && !session.input_history.is_empty() {
@@ -1163,8 +1165,10 @@ mod tests {
             }],
             input_history: vec!["ask secret".to_string()],
             conversation_id: Some("legacy-private".to_string()),
-            vertical_tabs_pinned: true,
-            vertical_tabs_width: Some(250.0),
+            left_panel_width: Some(250.0),
+            activity_slot: None,
+            left_panel_open: None,
+            editor_area_height: None,
         };
 
         let layout = WorkspaceLayout::from_session(&session, "/tmp/project");
@@ -1331,8 +1335,10 @@ panes = []
             global_shell_history: Vec::new(),
             input_history: Vec::new(),
             conversation_id: None,
-            vertical_tabs_pinned: false,
-            vertical_tabs_width: None,
+            left_panel_width: None,
+            activity_slot: None,
+            left_panel_open: None,
+            editor_area_height: None,
         };
 
         let layout = WorkspaceLayout::from_session(&session, "/tmp/project");

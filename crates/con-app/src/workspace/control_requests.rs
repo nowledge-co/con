@@ -142,8 +142,8 @@ impl ConWorkspace {
                         index: idx + 1,
                         title: tab
                             .pane_tree
-                            .focused_terminal()
-                            .title(cx)
+                            .try_focused_terminal()
+                            .and_then(|t| t.title(cx))
                             .unwrap_or_else(|| tab.title.clone()),
                         is_active: idx == self.active_tab,
                         pane_count: tab.pane_tree.pane_count(),

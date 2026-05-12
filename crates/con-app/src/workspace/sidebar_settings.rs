@@ -306,10 +306,16 @@ impl ConWorkspace {
         // Seed from the rendered tab label so focus→blur without edits
         // preserves AI/SSH/CWD-derived naming instead of materializing the
         // raw terminal title as a new explicit label.
-        let terminal = tab.pane_tree.focused_terminal();
-        let hostname = self.effective_remote_host_for_tab(index, terminal, cx);
-        let title = terminal.title(cx);
-        let current_dir = terminal.current_dir(cx);
+        let (hostname, title, current_dir) =
+            if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
+                (
+                    self.effective_remote_host_for_tab(index, terminal, cx),
+                    terminal.title(cx),
+                    terminal.current_dir(cx),
+                )
+            } else {
+                (None, None, None)
+            };
         let initial = tab_rename_initial_label(
             tab.user_label.as_deref(),
             tab.ai_label.as_deref(),
@@ -506,10 +512,16 @@ impl ConWorkspace {
             .iter()
             .enumerate()
             .map(|(i, tab)| {
-                let terminal = tab.pane_tree.focused_terminal();
-                let hostname = self.effective_remote_host_for_tab(i, terminal, cx);
-                let title = terminal.title(cx);
-                let current_dir = terminal.current_dir(cx);
+                let (hostname, title, current_dir) =
+                    if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
+                        (
+                            self.effective_remote_host_for_tab(i, terminal, cx),
+                            terminal.title(cx),
+                            terminal.current_dir(cx),
+                        )
+                    } else {
+                        (None, None, None)
+                    };
                 let presentation = smart_tab_presentation(
                     tab.user_label.as_deref(),
                     tab.ai_label.as_deref(),
@@ -642,7 +654,9 @@ impl ConWorkspace {
             }
             "clear-terminal" => {
                 if self.has_active_tab() {
-                    self.active_terminal().clear_scrollback(cx);
+                    if let Some(t) = self.try_active_terminal() {
+                        t.clear_scrollback(cx);
+                    }
                 }
             }
             "clear-restored-terminal-history" => {
@@ -650,14 +664,16 @@ impl ConWorkspace {
             }
             "focus-terminal" => {
                 if self.has_active_tab() {
-                    self.active_terminal().focus(window, cx);
+                    if let Some(t) = self.try_active_terminal() {
+                        t.focus(window, cx);
+                    }
                 }
             }
             "toggle-input-bar" => {
                 self.toggle_input_bar(&crate::ToggleInputBar, window, cx);
             }
-            "toggle-vertical-tabs" => {
-                self.toggle_vertical_tabs(&ToggleVerticalTabs, window, cx);
+            "toggle-left-sidebar" => {
+                self.toggle_left_panel(&ToggleLeftPanel, window, cx);
             }
             "collapse-sidebar" => {
                 self.collapse_sidebar(&CollapseSidebar, window, cx);
@@ -758,7 +774,7 @@ impl ConWorkspace {
         let skills_config = full_config.skills.clone();
         self.harness.update_skills_config(skills_config);
         if self.has_active_tab() {
-            if let Some(cwd) = self.active_terminal().current_dir(cx) {
+            if let Some(cwd) = self.try_active_terminal().and_then(|t| t.current_dir(cx)) {
                 self.harness.scan_skills(&cwd);
             }
         }
@@ -805,116 +821,6 @@ impl ConWorkspace {
         let appearance_config = settings.read(cx).appearance_config().clone();
         self.apply_terminal_and_ui_appearance(&term_config, &appearance_config, window, cx);
         cx.notify();
-    }
-
-    pub(super) fn on_tabs_orientation_changed(
-        &mut self,
-        settings: &Entity<SettingsPanel>,
-        _event: &TabsOrientationChanged,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.apply_tabs_orientation_from_panel(settings, cx);
-    }
-
-    pub(super) fn apply_tabs_orientation_from_panel(
-        &mut self,
-        settings: &Entity<SettingsPanel>,
-        cx: &mut Context<Self>,
-    ) {
-        let orientation = settings.read(cx).appearance_config().tabs_orientation;
-        self.apply_tabs_orientation(orientation, false, cx);
-    }
-
-    pub(super) fn apply_tabs_orientation(
-        &mut self,
-        orientation: TabsOrientation,
-        persist_config: bool,
-        cx: &mut Context<Self>,
-    ) {
-        if self.tabs_orientation == orientation {
-            return;
-        }
-        #[cfg(target_os = "macos")]
-        let previous_sidebar_width = if self.vertical_tabs_active() {
-            self.sidebar
-                .read(cx)
-                .occupied_width_with_max(PANEL_MAX_WIDTH)
-        } else {
-            0.0
-        };
-        #[cfg(target_os = "macos")]
-        if self.terminal_opacity >= 0.999 {
-            self.arm_chrome_transition_underlay(Duration::from_millis(260));
-        }
-        self.config.appearance.tabs_orientation = orientation;
-        self.tabs_orientation = orientation;
-        if persist_config {
-            self.sync_settings_panels_tabs_orientation(orientation, cx);
-        }
-        if self.sync_tab_strip_motion() {
-            #[cfg(target_os = "macos")]
-            self.arm_top_chrome_snap_guard(cx);
-        }
-        #[cfg(target_os = "macos")]
-        self.arm_sidebar_snap_guard(
-            if self.vertical_tabs_active() {
-                self.sidebar
-                    .read(cx)
-                    .occupied_width_with_max(PANEL_MAX_WIDTH)
-            } else {
-                previous_sidebar_width
-            },
-            cx,
-        );
-        if persist_config {
-            if let Err(err) = self.persist_tabs_orientation(orientation) {
-                log::warn!("workspace: persist tabs_orientation failed: {err}");
-            }
-        }
-        self.save_session(cx);
-        cx.notify();
-    }
-
-    pub(super) fn sync_settings_panels_tabs_orientation(
-        &mut self,
-        orientation: TabsOrientation,
-        cx: &mut Context<Self>,
-    ) {
-        self.settings_panel.update(cx, |panel, cx| {
-            panel.set_tabs_orientation(orientation);
-            cx.notify();
-        });
-
-        let mut settings_window_open = false;
-        if let Some(handle) = self.settings_window {
-            settings_window_open = handle.update(cx, |_, _, _| {}).is_ok();
-        }
-        if settings_window_open {
-            if let Some(panel) = self.settings_window_panel.clone() {
-                panel.update(cx, |panel, cx| {
-                    panel.set_tabs_orientation(orientation);
-                    cx.notify();
-                });
-            }
-        } else {
-            self.settings_window = None;
-            self.settings_window_panel = None;
-        }
-    }
-
-    pub(super) fn persist_tabs_orientation(
-        &self,
-        orientation: TabsOrientation,
-    ) -> anyhow::Result<()> {
-        let mut config = Config::load().unwrap_or_else(|err| {
-            log::warn!(
-                "workspace: reload config before tabs_orientation save failed: {err}; using workspace config"
-            );
-            self.config.clone()
-        });
-        config.appearance.tabs_orientation = orientation;
-        config.save()
     }
 
     pub(super) fn on_theme_preview(
@@ -982,6 +888,16 @@ impl ConWorkspace {
         self.ui_font_family = next_ui_font_family;
         self.ui_font_size = next_ui_font_size;
         self.font_size = next_font_size;
+        if font_changed {
+            let editor_views = self
+                .tabs
+                .iter()
+                .flat_map(|tab| tab.pane_tree.editor_views())
+                .collect::<Vec<_>>();
+            for editor_view in editor_views {
+                editor_view.update(cx, |editor, cx| editor.set_font_size(next_font_size, cx));
+            }
+        }
         self.terminal_cursor_style = next_terminal_cursor_style;
         self.terminal_opacity = next_terminal_opacity;
         self.terminal_blur = next_terminal_blur;
@@ -996,42 +912,6 @@ impl ConWorkspace {
         self.background_image_position = next_background_image_position;
         self.background_image_fit = next_background_image_fit;
         self.background_image_repeat = next_background_image_repeat;
-
-        if self.tabs_orientation != appearance_config.tabs_orientation {
-            #[cfg(target_os = "macos")]
-            if self.terminal_opacity >= 0.999 {
-                self.arm_chrome_transition_underlay(Duration::from_millis(260));
-            }
-            #[cfg(target_os = "macos")]
-            let previous_sidebar_width = if self.vertical_tabs_active() {
-                self.sidebar
-                    .read(cx)
-                    .occupied_width_with_max(PANEL_MAX_WIDTH)
-            } else {
-                0.0
-            };
-            self.tabs_orientation = appearance_config.tabs_orientation;
-            // Tab strip motion drives the top-bar height. In vertical
-            // mode the strip is always hidden, so collapse the motion now
-            // and avoid an unrelated transition.
-            if self.sync_tab_strip_motion() {
-                #[cfg(target_os = "macos")]
-                self.arm_top_chrome_snap_guard(cx);
-            }
-            #[cfg(target_os = "macos")]
-            self.arm_sidebar_snap_guard(
-                if self.vertical_tabs_active() {
-                    self.sidebar
-                        .read(cx)
-                        .occupied_width_with_max(PANEL_MAX_WIDTH)
-                } else {
-                    previous_sidebar_width
-                },
-                cx,
-            );
-            self.save_session(cx);
-            cx.notify();
-        }
 
         let effective_ui_opacity = Self::effective_ui_opacity(self.ui_opacity);
         self.agent_panel

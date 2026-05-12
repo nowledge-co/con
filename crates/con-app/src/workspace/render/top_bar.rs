@@ -99,8 +99,6 @@ impl ConWorkspace {
         }
 
         // Tabs container — appears only when there is real tab selection to do.
-        // In vertical-tabs mode the side panel owns the tab list so we keep
-        // this strip empty even with multiple tabs.
         // Clear stale tab reorder indicators only when neither GPUI tab drag nor
         // pane-origin GPUI drag is active.
         let pane_title_drag_to_tab_active =
@@ -128,11 +126,9 @@ impl ConWorkspace {
 
         // Also show the tab strip during pane-to-tab drag so the ghost tab
         // preview is visible even when there is currently only one tab.
-        // In vertical-tabs mode the sidebar owns the tab list, so pane drags
-        // must NOT trigger the horizontal tab strip.
         let show_horizontal_tabs = self.horizontal_tabs_visible()
-            || (!self.vertical_tabs_active()
-                && (pane_title_drag_to_tab_active || pane_origin_drag_active));
+            || pane_title_drag_to_tab_active
+            || pane_origin_drag_active;
         let tab_count = self.tabs.len();
         let tab_strip_drop_slot = self.tab_strip_drop_slot;
         // Snapshot rename state for this render frame.
@@ -308,14 +304,20 @@ impl ConWorkspace {
                 let tab = &self.tabs[index];
                 let is_active = index == self.active_tab;
                 let needs_attention = tab.needs_attention && !is_active;
-                let terminal = tab.pane_tree.focused_terminal();
                 let session_id = tab.summary_id;
                 let tab_id = session_id;
                 let tab_color = tab.color;
                 let is_dragged_source = is_dragged_tab_source(dragged_source_id, session_id);
-                let hostname_for_tab = self.effective_remote_host_for_tab(index, terminal, cx);
-                let title_for_tab = terminal.title(cx);
-                let dir_for_tab = terminal.current_dir(cx);
+                let (hostname_for_tab, title_for_tab, dir_for_tab) =
+                    if let Some(terminal) = tab.pane_tree.try_focused_terminal() {
+                        (
+                            self.effective_remote_host_for_tab(index, terminal, cx),
+                            terminal.title(cx),
+                            terminal.current_dir(cx),
+                        )
+                    } else {
+                        (None, None, None)
+                    };
                 let presentation = smart_tab_presentation(
                     tab.user_label.as_deref(),
                     tab.ai_label.as_deref(),
@@ -1078,14 +1080,14 @@ impl ConWorkspace {
                 ),
         );
 
-        let vertical_tabs_tooltip = if self.vertical_tabs_active() {
-            "Use horizontal tabs"
+        let left_sidebar_tooltip = if self.left_panel_open {
+            "Hide left sidebar"
         } else {
-            "Use vertical tabs"
+            "Show left sidebar"
         };
         tab_controls = tab_controls.child(
             div()
-                .id("toggle-vertical-tabs")
+                .id("toggle-left-sidebar")
                 .flex()
                 .items_center()
                 .justify_center()
@@ -1096,8 +1098,8 @@ impl ConWorkspace {
                 .hover(|s| s.bg(theme.muted.opacity(0.10)))
                 .tooltip(move |window, cx| {
                     chrome_tooltip(
-                        vertical_tabs_tooltip,
-                        crate::keycaps::first_action_keystroke(&ToggleVerticalTabs, window),
+                        left_sidebar_tooltip,
+                        crate::keycaps::first_action_keystroke(&ToggleLeftPanel, window),
                         window,
                         cx,
                     )
@@ -1106,13 +1108,13 @@ impl ConWorkspace {
                     cx.stop_propagation();
                 })
                 .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_vertical_tabs(&ToggleVerticalTabs, window, cx);
+                    this.toggle_left_panel(&ToggleLeftPanel, window, cx);
                 }))
                 .child(
                     svg()
                         .path("phosphor/sidebar-fill.svg")
                         .size(px(12.0))
-                        .text_color(if self.vertical_tabs_active() {
+                        .text_color(if self.left_panel_open {
                             theme.primary
                         } else {
                             theme.muted_foreground.opacity(0.4)

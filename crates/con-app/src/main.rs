@@ -52,6 +52,12 @@ mod ghostty_view;
 #[path = "stub_view.rs"]
 mod ghostty_view;
 
+mod activity_bar;
+mod editor_buffer;
+mod editor_lsp;
+mod editor_syntax;
+mod editor_view;
+mod file_tree_view;
 mod input_bar;
 mod keycaps;
 mod model_registry;
@@ -59,6 +65,7 @@ mod motion;
 mod pane_tree;
 mod settings_panel;
 mod sidebar;
+mod sidebar_search_view;
 mod tab_colors;
 mod tab_context_menu;
 mod terminal_context_menu;
@@ -74,6 +81,8 @@ mod theme;
 mod ui_scale;
 mod updater;
 mod workspace;
+
+use std::any::TypeId;
 
 use con_core::config::KeybindingConfig;
 use con_core::session::{
@@ -110,7 +119,6 @@ actions!(
         ToggleQuickTerminal,
         ToggleAgentPanel,
         ToggleInputBar,
-        ToggleVerticalTabs,
         CollapseSidebar,
         CloseTab,
         ClosePane,
@@ -134,7 +142,26 @@ actions!(
         FocusInput,
         CycleInputMode,
         TogglePaneScopePicker,
+        ToggleLeftPanel,
         CheckForUpdates,
+        EditorMoveLeft,
+        EditorMoveRight,
+        EditorMoveUp,
+        EditorMoveDown,
+        EditorMoveHome,
+        EditorMoveEnd,
+        EditorMoveLineStart,
+        EditorMoveLineEnd,
+        EditorSelectLeft,
+        EditorSelectRight,
+        EditorSelectUp,
+        EditorSelectDown,
+        EditorSelectHome,
+        EditorSelectEnd,
+        EditorDeleteBackward,
+        EditorDeleteForward,
+        EditorInsertNewline,
+        EditorSave,
         HideApp,
         HideOtherApps,
         ShowAllApps,
@@ -1184,118 +1211,275 @@ fn show_about_window(cx: &mut App) {
     }
 }
 
-macro_rules! configurable_app_keybindings {
-    ($bindings:expr, $kb:expr, $push:ident) => {{
-        let kb = $kb;
-        $push!($bindings, &kb.quit, Quit);
-        $push!($bindings, &kb.new_window, NewWindow);
-        $push!($bindings, &kb.new_tab, NewTab);
-        $push!($bindings, &kb.next_tab, NextTab);
-        $push!($bindings, &kb.previous_tab, PreviousTab);
-        $push!($bindings, &kb.toggle_agent, ToggleAgentPanel);
-        $push!($bindings, &kb.close_tab, CloseTab);
-        $push!($bindings, &kb.close_pane, ClosePane);
-        $push!($bindings, &kb.toggle_pane_zoom, TogglePaneZoom);
-        $push!($bindings, &kb.settings, settings_panel::ToggleSettings);
-        $push!(
-            $bindings,
-            &kb.command_palette,
-            command_palette::ToggleCommandPalette
-        );
-        $push!($bindings, &kb.split_right, SplitRight);
-        $push!($bindings, &kb.split_down, SplitDown);
-        $push!($bindings, &kb.new_surface, NewSurface);
-        $push!($bindings, &kb.new_surface_split_right, NewSurfaceSplitRight);
-        $push!($bindings, &kb.new_surface_split_down, NewSurfaceSplitDown);
-        $push!($bindings, &kb.next_surface, NextSurface);
-        $push!($bindings, &kb.previous_surface, PreviousSurface);
-        $push!($bindings, &kb.rename_surface, RenameSurface);
-        $push!($bindings, &kb.close_surface, CloseSurface);
-        $push!($bindings, &kb.focus_input, FocusInput);
-        $push!($bindings, &kb.cycle_input_mode, CycleInputMode);
-        $push!($bindings, &kb.toggle_input_bar, ToggleInputBar);
-        $push!($bindings, &kb.toggle_pane_scope, TogglePaneScopePicker);
-        $push!($bindings, &kb.toggle_vertical_tabs, ToggleVerticalTabs);
-        $push!($bindings, &kb.collapse_sidebar, CollapseSidebar);
-    }};
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[cfg_attr(not(test), allow(dead_code))]
+enum BindingScope {
+    Global,
+    Input,
+    EditorView,
 }
 
-macro_rules! push_app_keybinding {
-    ($bindings:expr, $key:expr, $action:path) => {{
-        let key = $key;
-        if !key.trim().is_empty() {
-            $bindings.push(KeyBinding::new(key, $action, None));
-            $bindings.push(KeyBinding::new(key, $action, Some("Input")));
+impl BindingScope {
+    fn name(self) -> Option<&'static str> {
+        match self {
+            BindingScope::Global => None,
+            BindingScope::Input => Some("Input"),
+            BindingScope::EditorView => Some("EditorView"),
         }
-    }};
+    }
 }
 
-macro_rules! push_app_keybinding_unbind {
-    ($bindings:expr, $key:expr, $action:path) => {{
-        let key = $key;
-        let action_name: SharedString = gpui::Action::name(&$action).into();
-        if !key.trim().is_empty() && !is_fixed_configurable_app_keybinding(key, &action_name) {
-            $bindings.push(KeyBinding::new(
-                key,
-                gpui::Unbind(action_name.clone()),
-                None,
-            ));
-            $bindings.push(KeyBinding::new(
-                key,
-                gpui::Unbind(action_name),
-                Some("Input"),
-            ));
+#[derive(Clone)]
+struct BindingSpec {
+    key: SharedString,
+    action: TypeId,
+    scope: BindingScope,
+    to_key_binding: fn(&str, Option<&str>) -> KeyBinding,
+    action_name: fn() -> SharedString,
+}
+
+impl std::fmt::Debug for BindingSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BindingSpec")
+            .field("key", &self.key)
+            .field("action", &self.action)
+            .field("scope", &self.scope)
+            .finish_non_exhaustive()
+    }
+}
+
+impl BindingSpec {
+    fn new<A: Action + Default + Clone + 'static>(
+        key: impl Into<SharedString>,
+        scope: BindingScope,
+    ) -> Self {
+        fn make<A: Action + Default + Clone + 'static>(
+            key: &str,
+            scope: Option<&str>,
+        ) -> KeyBinding {
+            KeyBinding::new(key, A::default(), scope)
         }
-    }};
-}
-
-macro_rules! fixed_app_keybindings {
-    ($items:expr, $push:ident) => {{
-        $push!($items, "Next Tab", "secondary-shift-]", NextTab);
-        $push!($items, "Previous Tab", "secondary-shift-[", PreviousTab);
-        $push!($items, "Select Tab 1", "secondary-1", SelectTab1);
-        $push!($items, "Select Tab 2", "secondary-2", SelectTab2);
-        $push!($items, "Select Tab 3", "secondary-3", SelectTab3);
-        $push!($items, "Select Tab 4", "secondary-4", SelectTab4);
-        $push!($items, "Select Tab 5", "secondary-5", SelectTab5);
-        $push!($items, "Select Tab 6", "secondary-6", SelectTab6);
-        $push!($items, "Select Tab 7", "secondary-7", SelectTab7);
-        $push!($items, "Select Tab 8", "secondary-8", SelectTab8);
-        $push!($items, "Select Tab 9", "secondary-9", SelectTab9);
-
-        #[cfg(target_os = "macos")]
-        {
-            $push!($items, "Hide Con", "cmd-h", HideApp);
-            $push!($items, "Hide Other Apps", "cmd-alt-h", HideOtherApps);
-            $push!($items, "Show All Apps", "cmd-alt-shift-h", ShowAllApps);
-            $push!($items, "Next Window", "cmd-`", NextWindow);
-            $push!($items, "Next Window", "cmd->", NextWindow);
-            $push!($items, "Previous Window", "cmd-shift-`", PreviousWindow);
-            $push!($items, "Previous Window", "cmd-~", PreviousWindow);
-            $push!($items, "Previous Window", "cmd-<", PreviousWindow);
-            $push!($items, "Minimize Window", "cmd-m", Minimize);
+        fn action_name<A: Action + Default + Clone + 'static>() -> SharedString {
+            gpui::Action::name(&A::default()).into()
         }
-    }};
+
+        Self {
+            key: key.into(),
+            action: TypeId::of::<A>(),
+            scope,
+            to_key_binding: make::<A>,
+            action_name: action_name::<A>,
+        }
+    }
+
+    fn to_key_binding(&self) -> KeyBinding {
+        (self.to_key_binding)(self.key.as_ref(), self.scope.name())
+    }
+
+    fn action_name(&self) -> SharedString {
+        (self.action_name)()
+    }
+
+    fn to_unbind_key_binding(&self) -> KeyBinding {
+        KeyBinding::new(
+            self.key.as_ref(),
+            gpui::Unbind(self.action_name()),
+            self.scope.name(),
+        )
+    }
 }
 
-macro_rules! push_fixed_app_keybinding {
-    ($bindings:expr, $label:expr, $key:expr, $action:path) => {{
-        let _ = $label;
-        $bindings.push(KeyBinding::new($key, $action, None));
-        $bindings.push(KeyBinding::new($key, $action, Some("Input")));
-    }};
+const GLOBAL_SCOPES: &[BindingScope] = &[BindingScope::Global];
+const EDITOR_SCOPES: &[BindingScope] = &[BindingScope::EditorView];
+#[cfg_attr(not(test), allow(dead_code))]
+const APP_OVERRIDE_SCOPES: &[BindingScope] = &[
+    BindingScope::Global,
+    BindingScope::Input,
+    BindingScope::EditorView,
+];
+
+fn push_scoped<A: Action + Default + Clone + 'static>(
+    specs: &mut Vec<BindingSpec>,
+    key: &str,
+    scopes: &[BindingScope],
+) {
+    if key.trim().is_empty() {
+        return;
+    }
+
+    for scope in scopes {
+        specs.push(BindingSpec::new::<A>(key.to_string(), *scope));
+    }
 }
 
-macro_rules! push_fixed_app_keybinding_shortcut {
-    ($shortcuts:expr, $label:expr, $key:expr, $action:path) => {{
-        let _ = &$action;
-        $shortcuts.push(($label, $key));
-    }};
+fn push_global<A: Action + Default + Clone + 'static>(specs: &mut Vec<BindingSpec>, key: &str) {
+    push_scoped::<A>(specs, key, GLOBAL_SCOPES);
+}
+
+fn push_editor<A: Action + Default + Clone + 'static>(specs: &mut Vec<BindingSpec>, key: &str) {
+    push_scoped::<A>(specs, key, EDITOR_SCOPES);
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn push_app_override<A: Action + Default + Clone + 'static>(
+    specs: &mut Vec<BindingSpec>,
+    key: &str,
+) {
+    push_scoped::<A>(specs, key, APP_OVERRIDE_SCOPES);
+}
+
+fn configurable_app_binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
+    let mut specs = Vec::new();
+
+    // App-level shortcuts are global by default. GPUI `scope = None` is the
+    // broad binding; add explicit per-context overrides only for proven cases.
+    push_global::<Quit>(&mut specs, &kb.quit);
+    push_global::<NewWindow>(&mut specs, &kb.new_window);
+    push_global::<NewTab>(&mut specs, &kb.new_tab);
+    push_global::<NextTab>(&mut specs, &kb.next_tab);
+    push_global::<PreviousTab>(&mut specs, &kb.previous_tab);
+    push_global::<ToggleAgentPanel>(&mut specs, &kb.toggle_agent);
+    push_global::<CloseTab>(&mut specs, &kb.close_tab);
+    push_global::<ClosePane>(&mut specs, &kb.close_pane);
+    push_global::<TogglePaneZoom>(&mut specs, &kb.toggle_pane_zoom);
+    push_global::<settings_panel::ToggleSettings>(&mut specs, &kb.settings);
+    push_global::<command_palette::ToggleCommandPalette>(&mut specs, &kb.command_palette);
+    push_global::<SplitRight>(&mut specs, &kb.split_right);
+    push_global::<SplitDown>(&mut specs, &kb.split_down);
+    push_global::<NewSurface>(&mut specs, &kb.new_surface);
+    push_global::<NewSurfaceSplitRight>(&mut specs, &kb.new_surface_split_right);
+    push_global::<NewSurfaceSplitDown>(&mut specs, &kb.new_surface_split_down);
+    push_global::<NextSurface>(&mut specs, &kb.next_surface);
+    push_global::<PreviousSurface>(&mut specs, &kb.previous_surface);
+    push_global::<RenameSurface>(&mut specs, &kb.rename_surface);
+    push_global::<CloseSurface>(&mut specs, &kb.close_surface);
+    push_global::<FocusInput>(&mut specs, &kb.focus_input);
+    push_global::<CycleInputMode>(&mut specs, &kb.cycle_input_mode);
+    push_global::<ToggleInputBar>(&mut specs, &kb.toggle_input_bar);
+    push_global::<TogglePaneScopePicker>(&mut specs, &kb.toggle_pane_scope);
+    push_global::<ToggleLeftPanel>(&mut specs, &kb.toggle_left_panel);
+    push_global::<CollapseSidebar>(&mut specs, &kb.collapse_sidebar);
+
+    specs
+}
+
+fn fixed_app_binding_specs() -> Vec<BindingSpec> {
+    let mut specs = Vec::new();
+
+    push_global::<NextTab>(&mut specs, "secondary-shift-]");
+    push_global::<PreviousTab>(&mut specs, "secondary-shift-[");
+    push_global::<SelectTab1>(&mut specs, "secondary-1");
+    push_global::<SelectTab2>(&mut specs, "secondary-2");
+    push_global::<SelectTab3>(&mut specs, "secondary-3");
+    push_global::<SelectTab4>(&mut specs, "secondary-4");
+    push_global::<SelectTab5>(&mut specs, "secondary-5");
+    push_global::<SelectTab6>(&mut specs, "secondary-6");
+    push_global::<SelectTab7>(&mut specs, "secondary-7");
+    push_global::<SelectTab8>(&mut specs, "secondary-8");
+    push_global::<SelectTab9>(&mut specs, "secondary-9");
+
+    #[cfg(target_os = "macos")]
+    {
+        push_global::<HideApp>(&mut specs, "cmd-h");
+        push_global::<HideOtherApps>(&mut specs, "cmd-alt-h");
+        push_global::<ShowAllApps>(&mut specs, "cmd-alt-shift-h");
+        push_global::<NextWindow>(&mut specs, "cmd-`");
+        push_global::<NextWindow>(&mut specs, "cmd->");
+        push_global::<PreviousWindow>(&mut specs, "cmd-shift-`");
+        push_global::<PreviousWindow>(&mut specs, "cmd-~");
+        push_global::<PreviousWindow>(&mut specs, "cmd-<");
+        push_global::<Minimize>(&mut specs, "cmd-m");
+    }
+
+    specs
+}
+
+fn editor_binding_specs() -> Vec<BindingSpec> {
+    let mut specs = Vec::new();
+
+    // Editor-only editing shortcuts must not bind to Global/ConWorkspace/Input,
+    // otherwise terminal input such as Enter can be intercepted.
+    push_editor::<EditorMoveLeft>(&mut specs, "left");
+    push_editor::<EditorMoveRight>(&mut specs, "right");
+    push_editor::<EditorMoveUp>(&mut specs, "up");
+    push_editor::<EditorMoveDown>(&mut specs, "down");
+    push_editor::<EditorMoveHome>(&mut specs, "home");
+    push_editor::<EditorMoveEnd>(&mut specs, "end");
+    #[cfg(target_os = "macos")]
+    push_editor::<EditorMoveLineStart>(&mut specs, "ctrl-a");
+    #[cfg(target_os = "macos")]
+    push_editor::<EditorMoveLineEnd>(&mut specs, "ctrl-e");
+    push_editor::<EditorSelectLeft>(&mut specs, "shift-left");
+    push_editor::<EditorSelectRight>(&mut specs, "shift-right");
+    push_editor::<EditorSelectUp>(&mut specs, "shift-up");
+    push_editor::<EditorSelectDown>(&mut specs, "shift-down");
+    push_editor::<EditorSelectHome>(&mut specs, "shift-home");
+    push_editor::<EditorSelectEnd>(&mut specs, "shift-end");
+    push_editor::<EditorDeleteBackward>(&mut specs, "backspace");
+    push_editor::<EditorDeleteForward>(&mut specs, "delete");
+    push_editor::<EditorInsertNewline>(&mut specs, "enter");
+    push_editor::<EditorSave>(&mut specs, "secondary-s");
+    push_editor::<SelectAll>(&mut specs, "secondary-a");
+    push_editor::<Copy>(&mut specs, "secondary-c");
+    push_editor::<Cut>(&mut specs, "secondary-x");
+    push_editor::<Paste>(&mut specs, "secondary-v");
+    push_editor::<Undo>(&mut specs, "secondary-z");
+
+    specs
+}
+
+fn binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
+    let mut specs = configurable_app_binding_specs(kb);
+    specs.extend(fixed_app_binding_specs());
+    specs.extend(editor_binding_specs());
+    specs
+}
+
+fn bind_specs(cx: &mut App, specs: Vec<BindingSpec>) {
+    cx.bind_keys(
+        specs
+            .into_iter()
+            .map(|spec| spec.to_key_binding())
+            .collect::<Vec<_>>(),
+    );
+}
+
+pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
+    bind_specs(cx, binding_specs(kb));
 }
 
 pub(crate) fn fixed_app_keybinding_shortcuts() -> Vec<(&'static str, &'static str)> {
-    let mut shortcuts = Vec::new();
-    fixed_app_keybindings!(shortcuts, push_fixed_app_keybinding_shortcut);
+    let shortcuts = vec![
+        ("Next Tab", "secondary-shift-]"),
+        ("Previous Tab", "secondary-shift-["),
+        ("Select Tab 1", "secondary-1"),
+        ("Select Tab 2", "secondary-2"),
+        ("Select Tab 3", "secondary-3"),
+        ("Select Tab 4", "secondary-4"),
+        ("Select Tab 5", "secondary-5"),
+        ("Select Tab 6", "secondary-6"),
+        ("Select Tab 7", "secondary-7"),
+        ("Select Tab 8", "secondary-8"),
+        ("Select Tab 9", "secondary-9"),
+    ];
+
+    #[cfg(target_os = "macos")]
+    let shortcuts = {
+        let mut shortcuts = shortcuts;
+        shortcuts.extend([
+            ("Hide Con", "cmd-h"),
+            ("Hide Other Apps", "cmd-alt-h"),
+            ("Show All Apps", "cmd-alt-shift-h"),
+            ("Next Window", "cmd-`"),
+            ("Next Window", "cmd->"),
+            ("Previous Window", "cmd-shift-`"),
+            ("Previous Window", "cmd-~"),
+            ("Previous Window", "cmd-<"),
+            ("Minimize Window", "cmd-m"),
+        ]);
+        shortcuts
+    };
+
     shortcuts
 }
 
@@ -1314,22 +1498,21 @@ fn is_fixed_configurable_app_keybinding(key: &str, action_name: &SharedString) -
         || (key == fixed_previous_tab && action_name == &previous_tab)
 }
 
-pub(crate) fn bind_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
-    let mut bindings = Vec::new();
-    configurable_app_keybindings!(bindings, kb, push_app_keybinding);
-    fixed_app_keybindings!(bindings, push_fixed_app_keybinding);
-    cx.bind_keys(bindings);
-}
-
 fn bind_configurable_app_keybindings(cx: &mut App, kb: &KeybindingConfig) {
-    let mut bindings = Vec::new();
-    configurable_app_keybindings!(bindings, kb, push_app_keybinding);
-    cx.bind_keys(bindings);
+    bind_specs(cx, configurable_app_binding_specs(kb));
 }
 
 pub(crate) fn rebind_app_keybindings(cx: &mut App, old: &KeybindingConfig, new: &KeybindingConfig) {
-    let mut unbinds = Vec::new();
-    configurable_app_keybindings!(unbinds, old, push_app_keybinding_unbind);
+    let unbinds = configurable_app_binding_specs(old)
+        .into_iter()
+        .filter_map(|spec| {
+            if is_fixed_configurable_app_keybinding(spec.key.as_ref(), &spec.action_name()) {
+                None
+            } else {
+                Some(spec.to_unbind_key_binding())
+            }
+        })
+        .collect::<Vec<_>>();
     cx.bind_keys(unbinds);
     bind_configurable_app_keybindings(cx, new);
 }
@@ -1392,6 +1575,183 @@ fn payload_as_str(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
         Some(s.as_str())
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        BindingSpec, EditorDeleteBackward, EditorInsertNewline, EditorMoveLineEnd, FocusInput,
+        NewTab, SelectTab1, ToggleAgentPanel, Undo, binding_specs, command_palette,
+        push_app_override,
+    };
+    use con_core::config::KeybindingConfig;
+    use std::any::TypeId;
+
+    fn default_specs() -> Vec<BindingSpec> {
+        binding_specs(&KeybindingConfig::default())
+    }
+
+    fn specs_for_action<A: 'static>(specs: &[BindingSpec]) -> Vec<&BindingSpec> {
+        let action = TypeId::of::<A>();
+        specs.iter().filter(|spec| spec.action == action).collect()
+    }
+
+    fn scope_names(specs: &[&BindingSpec]) -> Vec<Option<&'static str>> {
+        let mut scopes = specs
+            .iter()
+            .map(|spec| spec.scope.name())
+            .collect::<Vec<_>>();
+        scopes.sort();
+        scopes.dedup();
+        scopes
+    }
+
+    #[test]
+    fn app_shortcuts_are_global_by_default() {
+        let specs = default_specs();
+
+        for (name, scopes) in [
+            ("NewTab", scope_names(&specs_for_action::<NewTab>(&specs))),
+            (
+                "ToggleCommandPalette",
+                scope_names(&specs_for_action::<command_palette::ToggleCommandPalette>(
+                    &specs,
+                )),
+            ),
+            (
+                "SelectTab1",
+                scope_names(&specs_for_action::<SelectTab1>(&specs)),
+            ),
+            (
+                "FocusInput",
+                scope_names(&specs_for_action::<FocusInput>(&specs)),
+            ),
+        ] {
+            assert_eq!(
+                scopes,
+                vec![None],
+                "{name} should be a single global binding"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_shortcuts_stay_editor_only() {
+        let specs = default_specs();
+        for (name, scopes) in [
+            (
+                "EditorInsertNewline",
+                scope_names(&specs_for_action::<EditorInsertNewline>(&specs)),
+            ),
+            (
+                "EditorMoveLineEnd",
+                scope_names(&specs_for_action::<EditorMoveLineEnd>(&specs)),
+            ),
+            (
+                "EditorDeleteBackward",
+                scope_names(&specs_for_action::<EditorDeleteBackward>(&specs)),
+            ),
+            ("Undo", scope_names(&specs_for_action::<Undo>(&specs))),
+        ] {
+            assert_eq!(
+                scopes,
+                vec![Some("EditorView")],
+                "{name} leaked outside EditorView"
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_reserved_enter_is_not_bound_outside_editor_view() {
+        let specs = default_specs();
+        let enter_specs = specs
+            .iter()
+            .filter(|spec| spec.key == "enter")
+            .collect::<Vec<_>>();
+
+        assert_eq!(enter_specs.len(), 1);
+        assert_eq!(enter_specs[0].scope.name(), Some("EditorView"));
+        assert_eq!(enter_specs[0].action, TypeId::of::<EditorInsertNewline>());
+    }
+
+    #[test]
+    fn explicit_multi_context_override_can_be_represented() {
+        let mut specs = Vec::new();
+        push_app_override::<ToggleAgentPanel>(&mut specs, "secondary-test");
+
+        let refs = specs.iter().collect::<Vec<_>>();
+        assert_eq!(
+            scope_names(&refs),
+            vec![None, Some("EditorView"), Some("Input")]
+        );
+    }
+
+    #[test]
+    fn generated_specs_do_not_duplicate_same_key_action_scope() {
+        let specs = default_specs();
+        let mut seen = std::collections::HashMap::new();
+
+        for spec in &specs {
+            let canonical = con_core::config::canonical_keybinding(spec.key.as_ref())
+                .unwrap_or_else(|| spec.key.to_string());
+            let key = (canonical, spec.scope.name());
+            if let Some(existing_action) = seen.insert(key.clone(), spec.action) {
+                assert_eq!(
+                    existing_action, spec.action,
+                    "duplicate keybinding spec for canonical_key={:?} scope={:?} actions={:?}/{:?}",
+                    key.0, key.1, existing_action, spec.action
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_text_keys_are_not_bound_in_global_input_or_workspace_scopes() {
+        let specs = default_specs();
+
+        for reserved_key in [
+            "enter",
+            "backspace",
+            "delete",
+            "left",
+            "right",
+            "up",
+            "down",
+        ] {
+            let offenders = specs
+                .iter()
+                .filter(|spec| spec.key == reserved_key)
+                .filter(|spec| spec.scope.name() != Some("EditorView"))
+                .collect::<Vec<_>>();
+
+            assert!(
+                offenders.is_empty(),
+                "terminal key {reserved_key:?} leaked outside editor scope: {offenders:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_app_override_is_not_used_by_default_specs() {
+        let specs = default_specs();
+
+        let non_global_app_specs = specs
+            .iter()
+            .filter(|spec| {
+                let action = spec.action;
+                action == TypeId::of::<NewTab>()
+                    || action == TypeId::of::<SelectTab1>()
+                    || action == TypeId::of::<command_palette::ToggleCommandPalette>()
+                    || action == TypeId::of::<FocusInput>()
+            })
+            .filter(|spec| spec.scope.name().is_some())
+            .collect::<Vec<_>>();
+
+        assert!(
+            non_global_app_specs.is_empty(),
+            "default app shortcuts should be global-only unless explicitly proven otherwise: {non_global_app_specs:?}"
+        );
     }
 }
 

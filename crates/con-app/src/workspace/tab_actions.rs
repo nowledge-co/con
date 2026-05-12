@@ -43,16 +43,21 @@ impl ConWorkspace {
                 terminal.set_native_view_visible(false, cx);
             }
         });
-        let focused = self.tabs[index].pane_tree.focused_terminal();
-        focused.focus(window, cx);
-        self.sync_active_terminal_focus_states(cx);
-        Self::schedule_terminal_bootstrap_reassert(
-            focused,
-            true,
-            self.window_handle,
-            self.workspace_handle.clone(),
-            cx,
-        );
+        if let Some(focused) = self.tabs[index].pane_tree.try_focused_terminal() {
+            focused.focus(window, cx);
+            self.sync_active_terminal_focus_states(cx);
+            Self::schedule_terminal_bootstrap_reassert(
+                focused,
+                true,
+                self.window_handle,
+                self.workspace_handle.clone(),
+                cx,
+            );
+        } else {
+            self.focus_active_editor_or_workspace(window, cx);
+        }
+
+        self.sync_file_tree_from_active_focus(cx);
 
         self.sync_sidebar(cx);
         // Activating a tab is a strong signal the user cares about
@@ -194,7 +199,34 @@ impl ConWorkspace {
 
     /// Focus the active terminal (used after modal close, etc.)
     pub(super) fn focus_terminal(&self, window: &mut Window, cx: &mut App) {
-        self.active_terminal().focus(window, cx);
+        if let Some(terminal) = self.tabs[self.active_tab].pane_tree.try_focused_terminal() {
+            terminal.focus(window, cx);
+        } else {
+            self.focus_active_editor_or_workspace(window, cx);
+            return;
+        }
+        self.sync_active_terminal_focus_states(cx);
+    }
+
+    pub(super) fn focus_active_editor_or_workspace(&self, window: &mut Window, cx: &mut App) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let pane_tree = &self.tabs[self.active_tab].pane_tree;
+        let editor_view = pane_tree.editor_view_for_pane(pane_tree.focused_pane_id());
+        match active_pane_focus_target(false, editor_view.is_some()) {
+            ActivePaneFocusTarget::Editor => {
+                if let Some(editor_view) = editor_view {
+                    let focus_handle = editor_view.read(cx).focus_handle(cx).clone();
+                    focus_handle.focus(window, cx);
+                }
+            }
+            ActivePaneFocusTarget::Workspace => {
+                self.workspace_focus.clone().focus(window, cx);
+            }
+            ActivePaneFocusTarget::Terminal => {}
+        }
         self.sync_active_terminal_focus_states(cx);
     }
 
@@ -236,21 +268,107 @@ impl ConWorkspace {
         self.mark_active_tab_terminal_native_layout_pending(cx);
         #[cfg(target_os = "macos")]
         self.notify_active_tab_terminal_views(cx);
-        let terminal = self.tabs[self.active_tab]
+        if let Some(terminal) = self.tabs[self.active_tab]
             .pane_tree
-            .focused_terminal()
-            .clone();
-        terminal.ensure_surface(window, cx);
-        #[cfg(target_os = "macos")]
-        self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
-        #[cfg(not(target_os = "macos"))]
-        self.sync_active_tab_native_view_visibility(cx);
+            .try_focused_terminal()
+            .cloned()
+        {
+            terminal.ensure_surface(window, cx);
+            #[cfg(target_os = "macos")]
+            self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
+            #[cfg(not(target_os = "macos"))]
+            self.sync_active_tab_native_view_visibility(cx);
+            terminal.focus(window, cx);
+            self.sync_file_tree_from_active_focus(cx);
+        } else {
+            #[cfg(target_os = "macos")]
+            self.sync_active_tab_native_view_visibility_now_or_after_layout(was_zoomed, window, cx);
+            #[cfg(not(target_os = "macos"))]
+            self.sync_active_tab_native_view_visibility(cx);
+        }
         if changed {
             self.sync_sidebar(cx);
             self.save_session(cx);
         }
-        terminal.focus(window, cx);
         self.sync_active_terminal_focus_states(cx);
+        cx.notify();
+    }
+
+    pub(super) fn sync_file_tree_from_active_focus(&mut self, cx: &mut Context<Self>) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let pane_tree = &self.tabs[self.active_tab].pane_tree;
+        let focused_pane_id = pane_tree.focused_pane_id();
+
+        let current_root = self.file_tree_view.read(cx).root().map(Path::to_path_buf);
+        let root = if let Some(path) = pane_tree.editor_active_path_for_pane(focused_pane_id, cx) {
+            file_tree_root_for_focus(
+                FileTreeFocusSource::Editor {
+                    file_path: Some(path.as_path()),
+                },
+                current_root.as_deref(),
+            )
+            .map(|root| (root, Some(path)))
+        } else {
+            pane_tree
+                .try_focused_terminal()
+                .and_then(|terminal| terminal.current_dir(cx))
+                .and_then(|cwd| {
+                    file_tree_root_for_focus(
+                        FileTreeFocusSource::Terminal {
+                            cwd: Some(cwd.as_str()),
+                        },
+                        current_root.as_deref(),
+                    )
+                    .map(|root| (root, None))
+                })
+        };
+
+        if let Some((root, active_path)) = root {
+            let search_root = root.clone();
+            self.file_tree_view.update(cx, |tree, cx| {
+                tree.set_root(root, cx);
+                tree.set_active_path(active_path, cx);
+            });
+            self.search_view.update(cx, |search, cx| {
+                search.set_root(search_root, cx);
+            });
+        }
+    }
+
+    /// Focus an editor pane by pane_id (called from the editor pane click handler).
+    pub(super) fn focus_pane_in_active_tab(
+        &mut self,
+        pane_id: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_active_tab() {
+            return;
+        }
+        log::warn!(
+            "[editor-focus] focus_pane_in_active_tab: pane={} old_focused={}",
+            pane_id,
+            self.tabs[self.active_tab].pane_tree.focused_pane_id()
+        );
+        self.tabs[self.active_tab].pane_tree.focus_pane(pane_id);
+        self.clear_terminal_focus_states_for_active_tab(cx);
+        self.sync_active_tab_native_view_visibility(cx);
+        let editor_view = self.tabs[self.active_tab]
+            .pane_tree
+            .editor_view_for_pane(pane_id);
+        self.sync_file_tree_from_active_focus(cx);
+        // Do not call sync_active_terminal_focus_states() here: editor panes are not terminal
+        // focus targets. Re-syncing terminal focus after clicking an editor can restore focus
+        // to the previously focused terminal pane, which makes Cmd+W hit the terminal again.
+        if let Some(editor_view) = editor_view {
+            let focus_handle = editor_view.read(cx).focus_handle(cx).clone();
+            focus_handle.focus(window, cx);
+        } else {
+            self.workspace_focus.clone().focus(window, cx);
+        }
         cx.notify();
     }
 
@@ -360,9 +478,12 @@ impl ConWorkspace {
             if tab_idx == self.active_tab {
                 self.sync_active_tab_native_view_visibility(cx);
                 if should_focus_replacement {
-                    let replacement = self.tabs[tab_idx].pane_tree.focused_terminal().clone();
-                    replacement.ensure_surface(window, cx);
-                    replacement.focus(window, cx);
+                    if let Some(replacement) =
+                        self.tabs[tab_idx].pane_tree.try_focused_terminal().cloned()
+                    {
+                        replacement.ensure_surface(window, cx);
+                        replacement.focus(window, cx);
+                    }
                 }
                 self.sync_active_terminal_focus_states(cx);
             }
@@ -373,6 +494,8 @@ impl ConWorkspace {
 
         if self.tabs[tab_idx].pane_tree.pane_count() > 1 {
             let _ = self.close_pane_in_tab(tab_idx, surface.pane_id, window, cx);
+            // After closing the terminal pane, the tab may still have editor
+            // panes alive. Only close the tab/window if no panes remain.
         } else if self.tabs.len() > 1 {
             // Last pane in this tab — close the tab.
             self.close_tab_by_index(tab_idx, window, cx);
@@ -425,7 +548,7 @@ impl ConWorkspace {
             // Tab summaries and smart_tab_presentation are derived from each
             // tab's focused terminal. A background split or inactive surface can
             // report OSC-7 too, but that should not clear the visible tab label.
-            .find(|tab| tab.pane_tree.focused_terminal().entity_id() == entity_id)
+            .find(|tab| tab.pane_tree.focused_terminal_entity_id() == Some(entity_id))
             .map(|tab| {
                 tab.ai_label = None;
                 tab.ai_icon = None;
@@ -441,6 +564,8 @@ impl ConWorkspace {
         self.sync_sidebar(cx);
         self.save_session(cx);
         self.request_tab_summaries(cx);
+        // Keep file tree root in sync with the active focused pane.
+        self.sync_file_tree_from_active_focus(cx);
         cx.notify();
     }
 
@@ -540,7 +665,9 @@ impl ConWorkspace {
         }
 
         // Serialize the current pane tree layout (with cwd for every pane).
-        let layout = self.tabs[index].pane_tree.to_state(cx, false);
+        let Some(layout) = self.tabs[index].pane_tree.to_persisted_state(cx, false) else {
+            return;
+        };
         let focused_pane_id = Some(self.tabs[index].pane_tree.focused_pane_id());
 
         // Rebuild the pane tree from the serialized layout, spawning a fresh

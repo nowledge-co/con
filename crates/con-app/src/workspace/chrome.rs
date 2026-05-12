@@ -153,16 +153,6 @@ impl ConWorkspace {
     }
 
     #[cfg(target_os = "macos")]
-    pub(super) fn arm_sidebar_snap_guard(&mut self, width: f32, cx: &mut App) {
-        Self::extend_guard(
-            &mut self.sidebar_snap_guard_until,
-            Duration::from_millis(CHROME_SNAP_GUARD_MS),
-        );
-        self.sidebar_snap_guard_width = self.sidebar_snap_guard_width.max(width.max(0.0));
-        self.mark_active_tab_terminal_native_layout_pending(cx);
-    }
-
-    #[cfg(target_os = "macos")]
     pub(super) fn snap_guard_active(until: &mut Option<Instant>, window: &mut Window) -> bool {
         Self::snap_guard_state(until, window).0
     }

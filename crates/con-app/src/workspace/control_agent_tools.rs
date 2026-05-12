@@ -975,8 +975,8 @@ impl ConWorkspace {
                 // window-aware callback instead of depending on a later render.
                 let cwd = self.tabs[tab_idx]
                     .pane_tree
-                    .focused_terminal()
-                    .current_dir(cx);
+                    .try_focused_terminal()
+                    .and_then(|t| t.current_dir(cx));
                 self.pending_create_pane_requests.push(PendingCreatePane {
                     command,
                     cwd,

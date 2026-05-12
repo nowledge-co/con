@@ -20,18 +20,20 @@ pub struct Session {
     pub input_history: Vec<String>,
     #[serde(default)]
     pub conversation_id: Option<String>,
-    /// Whether the vertical-tabs side panel is pinned open (full panel)
-    /// or collapsed to its icon rail. Only consulted when the user has
-    /// `appearance.tabs_orientation = vertical` in config; in horizontal
-    /// mode this field is preserved verbatim across restarts so toggling
-    /// orientation later restores the previous expansion state.
+    /// User-resized width for the left sidebar panel.
+    #[serde(default, alias = "vertical_tabs_width")]
+    pub left_panel_width: Option<f32>,
+
+    // ── Code editor (Phase 1) ──────────────────────────────────────────────
+    /// Active activity bar slot: "files" | "search".
     #[serde(default)]
-    pub vertical_tabs_pinned: bool,
-    /// User-resized width for the pinned vertical-tabs panel. Collapsed
-    /// rail mode always uses the fixed rail width; this value is only
-    /// consulted when `vertical_tabs_pinned` is true.
+    pub activity_slot: Option<String>,
+    /// Whether the left panel is open.
     #[serde(default)]
-    pub vertical_tabs_width: Option<f32>,
+    pub left_panel_open: Option<bool>,
+    /// Height of the editor area in pixels. None / 0.0 = collapsed.
+    #[serde(default)]
+    pub editor_area_height: Option<f32>,
 }
 
 /// App-wide command history, stored separately from window layout so it survives
@@ -206,8 +208,10 @@ impl Default for Session {
             global_shell_history: Vec::new(),
             input_history: Vec::new(),
             conversation_id: None,
-            vertical_tabs_pinned: false,
-            vertical_tabs_width: None,
+            left_panel_width: None,
+            activity_slot: None,
+            left_panel_open: None,
+            editor_area_height: None,
         }
     }
 }
@@ -241,6 +245,32 @@ mod tests {
             }
             PaneLayoutState::Split { .. } => panic!("expected leaf"),
         }
+    }
+
+    #[test]
+    fn legacy_vertical_tabs_session_fields_are_accepted() {
+        let mut value = serde_json::to_value(Session::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("left_panel_width");
+        object.insert("vertical_tabs_width".to_string(), json!(277.0));
+        object.insert("vertical_tabs_pinned".to_string(), json!(true));
+
+        let session: Session = serde_json::from_value(value).unwrap();
+
+        assert_eq!(session.left_panel_width, Some(277.0));
+        assert_eq!(session.left_panel_open, None);
+    }
+
+    #[test]
+    fn legacy_vertical_tabs_pinned_state_is_ignored() {
+        let mut value = serde_json::to_value(Session::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("left_panel_open");
+        object.insert("vertical_tabs_pinned".to_string(), json!(false));
+
+        let session: Session = serde_json::from_value(value).unwrap();
+
+        assert_eq!(session.left_panel_open, None);
     }
 
     #[test]

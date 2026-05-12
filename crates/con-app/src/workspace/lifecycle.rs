@@ -7,29 +7,23 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let initial_vertical_pinned = session.vertical_tabs_pinned;
         let agent_panel_open = session.agent_panel_open;
         let agent_panel_width = session
             .agent_panel_width
             .unwrap_or(AGENT_PANEL_DEFAULT_WIDTH);
-        let initial_agent_outer_width = if agent_panel_open {
-            agent_panel_width.min(max_agent_panel_width(window.bounds().size.width.as_f32())) + 1.0
+        let window_width = window.bounds().size.width.as_f32();
+        let agent_panel_outer_width = if agent_panel_open {
+            agent_panel_width.min(max_agent_panel_width(window_width)) + 1.0
         } else {
             0.0
         };
-        let initial_sidebar_max_width = max_sidebar_panel_width(
-            window.bounds().size.width.as_f32(),
-            initial_agent_outer_width,
+        let initial_sidebar_width = SessionSidebar::clamped_panel_width(
+            session.left_panel_width.unwrap_or(PANEL_MIN_WIDTH * 1.25),
+            max_sidebar_panel_width(window_width, agent_panel_outer_width),
         );
-        let initial_vertical_width = session
-            .vertical_tabs_width
-            .map(|width| SessionSidebar::clamped_panel_width(width, initial_sidebar_max_width));
         let sidebar = cx.new(|cx| {
             let mut s = SessionSidebar::new(cx);
-            if let Some(width) = initial_vertical_width {
-                s.set_panel_width(width, cx);
-            }
-            s.set_pinned(initial_vertical_pinned, cx);
+            s.set_panel_width(initial_sidebar_width, cx);
             s
         });
         let terminal_font_family = sanitize_terminal_font_family(&config.terminal.font_family);
@@ -57,7 +51,6 @@ impl ConWorkspace {
         let background_image_position = config.appearance.background_image_position.clone();
         let background_image_fit = config.appearance.background_image_fit.clone();
         let background_image_repeat = config.appearance.background_image_repeat;
-        let tabs_orientation = config.appearance.tabs_orientation;
         let terminal_theme = TerminalTheme::by_name(&config.terminal.theme).unwrap_or_default();
         let colors = theme_to_ghostty_colors(&terminal_theme);
         let ghostty_app = con_ghostty::GhosttyApp::new(
@@ -226,12 +219,9 @@ impl ConWorkspace {
             });
         }
         let active_tab = session.active_tab.min(tabs.len() - 1);
-        // Seed the vertical-tabs side panel with the restored tab list
-        // so it has something to render before the first
-        // `sync_sidebar` call (which only fires when the live terminal
-        // title or the tab set changes). Without this seed the panel
-        // would draw an empty rail until the user opened or activated
-        // a tab.
+        // Seed the shared tab metadata before the first `sync_sidebar`
+        // call, which only fires when the live terminal title or tab set
+        // changes.
         {
             let entries: Vec<SessionEntry> = tabs
                 .iter()
@@ -323,8 +313,6 @@ impl ConWorkspace {
         .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_settings_saved)
             .detach();
-        cx.subscribe_in(&settings_panel, window, Self::on_tabs_orientation_changed)
-            .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_theme_preview)
             .detach();
         cx.subscribe_in(&settings_panel, window, Self::on_appearance_preview)
@@ -377,18 +365,67 @@ impl ConWorkspace {
             .detach();
         cx.subscribe_in(&sidebar, window, Self::on_sidebar_set_color)
             .detach();
-        cx.observe(&sidebar, |this, sidebar, cx| {
-            // The sidebar also notifies for transient hover and drag
-            // affordances. Re-render for all sidebar changes, but only
-            // persist when the actual pin state changes.
-            let pinned = sidebar.read(cx).is_pinned();
-            if this.last_sidebar_pinned != pinned {
-                this.last_sidebar_pinned = pinned;
-                this.save_session(cx);
-            }
+        cx.observe(&sidebar, |_this, _sidebar, cx| {
             cx.notify();
         })
         .detach();
+
+        // Activity bar: sync slot + panel state back to workspace on click.
+        let activity_bar_entity = cx.new(|_cx| ActivityBar::new());
+        // Sync initial state from session.
+        {
+            let initial_slot =
+                ActivitySlot::from_str(session.activity_slot.as_deref().unwrap_or("files"));
+            let initial_open = session.left_panel_open.unwrap_or(true);
+            activity_bar_entity.update(cx, |bar, _cx| {
+                bar.active_slot = initial_slot;
+                bar.left_panel_open = initial_open;
+            });
+        }
+        cx.subscribe_in(
+            &activity_bar_entity,
+            window,
+            |this, _bar, event: &ActivitySlotChanged, _window, cx| {
+                this.activity_slot = event.slot;
+                this.left_panel_open = true;
+                this.save_session(cx);
+                cx.notify();
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            &activity_bar_entity,
+            window,
+            |this, _bar, _event: &ActivityTogglePanel, _window, cx| {
+                this.left_panel_open = !this.left_panel_open;
+                this.save_session(cx);
+                cx.notify();
+            },
+        )
+        .detach();
+
+        // Sidebar content views.
+        let file_tree_entity = cx.new(|_cx| FileTreeView::new());
+        let search_view_entity = cx.new(|cx| SidebarSearchView::new(window, cx));
+
+        // File tree: open file in the tab's shared editor pane when user clicks a file row.
+        cx.subscribe_in(
+            &file_tree_entity,
+            window,
+            |this, _tree, event: &OpenFile, window, cx| {
+                this.open_path_in_active_editor(event.path.clone(), window, cx);
+            },
+        )
+        .detach();
+        cx.subscribe_in(
+            &search_view_entity,
+            window,
+            |this, _search, event: &OpenFile, window, cx| {
+                this.open_path_in_active_editor(event.path.clone(), window, cx);
+            },
+        )
+        .detach();
+
         let workspace_handle = cx.weak_entity();
         window.on_window_should_close(cx, move |window, cx| {
             // Two shutdown paths, two behaviours:
@@ -579,15 +616,16 @@ impl ConWorkspace {
         .detach();
 
         // Focus the initial terminal so the user can start typing immediately
-        let initial_terminal = tabs[active_tab].pane_tree.focused_terminal().clone();
-        initial_terminal.focus(window, cx);
-        Self::schedule_terminal_bootstrap_reassert(
-            &initial_terminal,
-            true,
-            window.window_handle(),
-            cx.weak_entity(),
-            cx,
-        );
+        if let Some(initial_terminal) = tabs[active_tab].pane_tree.try_focused_terminal().cloned() {
+            initial_terminal.focus(window, cx);
+            Self::schedule_terminal_bootstrap_reassert(
+                &initial_terminal,
+                true,
+                window.window_handle(),
+                cx.weak_entity(),
+                cx,
+            );
+        }
 
         // Hide non-active tabs' ghostty NSViews so only the active tab is visible
         for (i, tab) in tabs.iter().enumerate() {
@@ -601,55 +639,6 @@ impl ConWorkspace {
         let has_multiple_tabs = tabs.len() > 1;
         let last_ghostty_wake_generation = ghostty_app.wake_generation();
         let next_tab_summary_id_init = tabs.len() as u64;
-
-        // Ask the AI summarizer for initial labels — many tabs will
-        // be SSH (instant short-circuit) and the rest will arrive
-        // when the shell starts producing output anyway, but kicking
-        // it off here lets non-shell signals (cwd from session
-        // restore) feed the model immediately.
-        if config.agent.suggestion_model.enabled
-            && matches!(
-                config.appearance.tabs_orientation,
-                TabsOrientation::Vertical
-            )
-        {
-            let tx = tab_summary_tx.clone();
-            for (i, tab) in tabs.iter_mut().enumerate() {
-                let terminal = tab.pane_tree.focused_terminal();
-                let cwd = terminal.current_dir(cx).or_else(|| {
-                    session
-                        .tabs
-                        .get(i)
-                        .and_then(|tab_state| tab_state.cwd.clone())
-                });
-                let title = Some(tab.title.clone()).filter(|t| !t.is_empty());
-                let pane_id = tab
-                    .pane_tree
-                    .pane_id_for_terminal(terminal)
-                    .unwrap_or(usize::MAX);
-                let observation = terminal.observation_frame(12, cx);
-                let runtime = {
-                    let mut trackers = tab.runtime_trackers.borrow_mut();
-                    trackers.entry(pane_id).or_default().observe(observation)
-                };
-                tab.runtime_cache
-                    .borrow_mut()
-                    .insert(pane_id, runtime.clone());
-                let req = TabSummaryRequest {
-                    tab_id: tab.summary_id,
-                    cwd,
-                    title,
-                    ssh_host: runtime.remote_host,
-                    recent_commands: vec![],
-                    recent_output: vec![],
-                };
-                let tx = tx.clone();
-                let summary_epoch = tab.summary_epoch;
-                tab_summary_engine.request(req, move |summary| {
-                    let _ = tx.send((0, summary_epoch, summary));
-                });
-            }
-        }
 
         Self {
             config: config.clone(),
@@ -672,7 +661,6 @@ impl ConWorkspace {
             background_image_position,
             background_image_fit,
             background_image_repeat,
-            tabs_orientation,
             agent_panel,
             input_bar,
             settings_panel,
@@ -708,19 +696,11 @@ impl ConWorkspace {
             #[cfg(target_os = "macos")]
             top_chrome_snap_guard_until: None,
             #[cfg(target_os = "macos")]
-            sidebar_snap_guard_until: None,
-            #[cfg(target_os = "macos")]
-            sidebar_snap_guard_width: 0.0,
-            #[cfg(target_os = "macos")]
             agent_panel_release_cover_until: None,
             #[cfg(target_os = "macos")]
             input_bar_release_cover_until: None,
             #[cfg(target_os = "macos")]
             top_chrome_release_cover_until: None,
-            #[cfg(target_os = "macos")]
-            sidebar_release_cover_until: None,
-            #[cfg(target_os = "macos")]
-            sidebar_release_cover_width: 0.0,
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
             pending_surface_control_requests: Vec::new(),
@@ -734,7 +714,6 @@ impl ConWorkspace {
             tab_summary_rx,
             tab_summary_tx,
             tab_summary_generation: 0,
-            last_sidebar_pinned: initial_vertical_pinned,
             next_tab_summary_id: next_tab_summary_id_init,
             next_control_agent_request_id: 1,
             window_handle: window.window_handle(),
@@ -755,6 +734,16 @@ impl ConWorkspace {
             tab_strip_tab_bounds: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             pane_title_drag_tab_bounds: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             hide_pane_title_bar: config.appearance.hide_pane_title_bar,
+
+            // ── Code editor (Phase 1) ──────────────────────────────────────
+            activity_bar: activity_bar_entity,
+            activity_slot: ActivitySlot::from_str(
+                session.activity_slot.as_deref().unwrap_or("files"),
+            ),
+            left_panel_open: session.left_panel_open.unwrap_or(true),
+            file_tree_view: file_tree_entity,
+            search_view: search_view_entity,
+            workspace_focus: cx.focus_handle(),
         }
     }
 
@@ -768,12 +757,77 @@ impl ConWorkspace {
         make_ghostty_terminal(&self.ghostty_app, cwd, None, self.font_size, window, cx)
     }
 
-    pub(super) fn horizontal_tabs_visible(&self) -> bool {
-        matches!(self.tabs_orientation, TabsOrientation::Horizontal) && self.tabs.len() > 1
+    pub(super) fn open_path_in_active_editor(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.has_active_tab() {
+            return;
+        }
+
+        let active_tab = self.active_tab;
+        let (pane_id, editor_view) =
+            if let Some(pane_id) = self.tabs[active_tab].pane_tree.find_editor_pane() {
+                let Some(editor_view) = self.tabs[active_tab]
+                    .pane_tree
+                    .editor_view_for_pane(pane_id)
+                else {
+                    return;
+                };
+                (pane_id, editor_view)
+            } else {
+                let editor_font_size = self.font_size;
+                let editor_view = cx.new(|cx| EditorView::new_with_font_size(editor_font_size, cx));
+                cx.subscribe_in(
+                    &editor_view,
+                    window,
+                    |this, _editor, _event: &ActiveFileChanged, _window, cx| {
+                        this.sync_file_tree_from_active_focus(cx);
+                    },
+                )
+                .detach();
+                cx.subscribe_in(
+                    &editor_view,
+                    window,
+                    |this, editor, _event: &EditorEmptied, window, cx| {
+                        let Some((tab_index, pane_id)) =
+                            this.tabs.iter().enumerate().find_map(|(tab_index, tab)| {
+                                tab.pane_tree
+                                    .pane_id_for_editor_view(editor)
+                                    .map(|pane_id| (tab_index, pane_id))
+                            })
+                        else {
+                            return;
+                        };
+                        if !this.close_pane_in_tab(tab_index, pane_id, window, cx) {
+                            this.close_tab_by_index(tab_index, window, cx);
+                        }
+                    },
+                )
+                .detach();
+                let Some(pane_id) = self.tabs[active_tab]
+                    .pane_tree
+                    .split_with_editor(editor_view.clone())
+                else {
+                    return;
+                };
+                (pane_id, editor_view)
+            };
+
+        self.tabs[active_tab].pane_tree.focus_pane(pane_id);
+        let editor_focus = editor_view.read(cx).focus_handle(cx).clone();
+        editor_view.update(cx, |editor: &mut EditorView, cx| {
+            editor.open_file(path.clone(), cx);
+        });
+        editor_focus.focus(window, cx);
+        self.sync_file_tree_from_active_focus(cx);
+        cx.notify();
     }
 
-    pub(super) fn vertical_tabs_active(&self) -> bool {
-        matches!(self.tabs_orientation, TabsOrientation::Vertical)
+    pub(super) fn horizontal_tabs_visible(&self) -> bool {
+        self.tabs.len() > 1
     }
 
     pub(super) fn sync_tab_strip_motion(&mut self) -> bool {
@@ -798,8 +852,13 @@ impl ConWorkspace {
         }
     }
 
+    #[allow(dead_code)]
     pub(super) fn active_terminal(&self) -> &TerminalPane {
         self.tabs[self.active_tab].pane_tree.focused_terminal()
+    }
+
+    pub(super) fn try_active_terminal(&self) -> Option<&TerminalPane> {
+        self.tabs[self.active_tab].pane_tree.try_focused_terminal()
     }
 
     pub(super) fn refocus_active_terminal(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -848,6 +907,15 @@ impl ConWorkspace {
 
         for (pane_id, is_active_surface, terminal) in surface_terminals {
             terminal.set_focus_state(is_active_surface && target_ids.contains(&pane_id), cx);
+        }
+    }
+
+    pub(super) fn clear_terminal_focus_states_for_active_tab(&self, cx: &mut App) {
+        if !self.has_active_tab() {
+            return;
+        }
+        for (_, _, terminal) in self.tabs[self.active_tab].pane_tree.surface_terminals() {
+            terminal.set_focus_state(false, cx);
         }
     }
 
@@ -1145,19 +1213,21 @@ impl ConWorkspace {
                         if !workspace.has_active_tab() {
                             return;
                         }
-                        let terminal = workspace.tabs[workspace.active_tab]
+                        if let Some(terminal) = workspace.tabs[workspace.active_tab]
                             .pane_tree
-                            .focused_terminal()
-                            .clone();
-                        terminal.ensure_surface(window, cx);
-                        #[cfg(target_os = "macos")]
-                        workspace.sync_active_tab_native_view_visibility_now_or_after_layout(
-                            was_zoomed, window, cx,
-                        );
-                        #[cfg(not(target_os = "macos"))]
-                        workspace.sync_active_tab_native_view_visibility(cx);
-                        terminal.focus(window, cx);
-                        workspace.sync_active_terminal_focus_states(cx);
+                            .try_focused_terminal()
+                            .cloned()
+                        {
+                            terminal.ensure_surface(window, cx);
+                            #[cfg(target_os = "macos")]
+                            workspace.sync_active_tab_native_view_visibility_now_or_after_layout(
+                                was_zoomed, window, cx,
+                            );
+                            #[cfg(not(target_os = "macos"))]
+                            workspace.sync_active_tab_native_view_visibility(cx);
+                            terminal.focus(window, cx);
+                            workspace.sync_active_terminal_focus_states(cx);
+                        }
                         cx.notify();
                     });
                 }

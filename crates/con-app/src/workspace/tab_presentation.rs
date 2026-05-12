@@ -46,7 +46,7 @@ pub(super) fn pane_display_name(
     format!("Pane {}", pane_id + 1)
 }
 
-/// One row's worth of presentation data for the vertical-tabs panel.
+/// One row's worth of presentation data for tab metadata.
 /// Computed by the workspace from the live tab state and pushed to
 /// the panel via `sync_sessions`.
 pub(super) struct VerticalTabPresentation {
@@ -56,7 +56,7 @@ pub(super) struct VerticalTabPresentation {
     pub(super) is_ssh: bool,
 }
 
-/// Smart-name + smart-icon for a vertical-tabs row.
+/// Smart-name + smart-icon for tab metadata.
 ///
 /// Priority:
 /// 1. **User-supplied label** (set via inline rename or context menu)

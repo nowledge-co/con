@@ -10,12 +10,13 @@ use crate::control::{
 use crate::shell_probe::{ShellProbeResult, ShellProbeTmuxContext};
 use crate::tmux::TmuxSnapshot;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PaneMode {
     Shell,
     Multiplexer,
     Tui,
+    #[default]
     Unknown,
 }
 
@@ -30,11 +31,12 @@ impl PaneMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PaneFrontState {
     ShellPrompt,
     InteractiveSurface,
+    #[default]
     Unknown,
 }
 
@@ -250,7 +252,7 @@ impl Default for PaneObservationSupport {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PaneObservationFrame {
     pub title: Option<String>,
     pub cwd: Option<String>,
@@ -267,7 +269,7 @@ pub struct PaneObservationFrame {
     pub last_command_finished_input_generation: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PaneRuntimeState {
     pub front_state: PaneFrontState,
     pub mode: PaneMode,

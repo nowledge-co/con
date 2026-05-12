@@ -171,7 +171,8 @@ impl ConWorkspace {
         if event.content.trim().starts_with('/') {
             match self.harness.classify_input(
                 &event.content,
-                self.effective_remote_host_for_tab(self.active_tab, self.active_terminal(), cx)
+                self.try_active_terminal()
+                    .and_then(|t| self.effective_remote_host_for_tab(self.active_tab, t, cx))
                     .is_some(),
             ) {
                 InputKind::SkillInvoke(name, args) => {

@@ -7,6 +7,25 @@ pub(super) fn terminal_separator_over_backdrop(backdrop: Hsla, theme: &Theme) ->
         .alpha(1.0)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[::core::prelude::v1::test]
+    fn sidebar_max_width_reserves_main_content_and_caps_panel() {
+        let window_width =
+            ACTIVITY_BAR_WIDTH + TERMINAL_MIN_CONTENT_WIDTH + PANEL_MAX_WIDTH + 120.0;
+
+        assert_eq!(max_sidebar_panel_width(window_width, 0.0), PANEL_MAX_WIDTH);
+
+        let constrained_width = ACTIVITY_BAR_WIDTH + TERMINAL_MIN_CONTENT_WIDTH + 260.0;
+        assert_eq!(max_sidebar_panel_width(constrained_width, 0.0), 260.0);
+
+        let tiny_width = ACTIVITY_BAR_WIDTH + TERMINAL_MIN_CONTENT_WIDTH - 20.0;
+        assert_eq!(max_sidebar_panel_width(tiny_width, 0.0), PANEL_MIN_WIDTH);
+    }
+}
+
 pub(super) fn perf_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
@@ -45,7 +64,7 @@ pub(super) fn max_agent_panel_width(window_width: f32) -> f32 {
 }
 
 pub(super) fn max_sidebar_panel_width(window_width: f32, agent_panel_outer_width: f32) -> f32 {
-    (window_width - agent_panel_outer_width - TERMINAL_MIN_CONTENT_WIDTH)
+    (window_width - agent_panel_outer_width - ACTIVITY_BAR_WIDTH - TERMINAL_MIN_CONTENT_WIDTH)
         .clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
 }
 

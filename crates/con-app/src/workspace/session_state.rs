@@ -42,10 +42,17 @@ impl ConWorkspace {
             .tabs
             .iter()
             .map(|tab| {
-                let terminal = tab.pane_tree.focused_terminal();
-                let cwd = terminal.current_dir(cx);
-                let title = terminal.title(cx).unwrap_or_else(|| tab.title.clone());
-                let pane_layout = tab.pane_tree.to_state(cx, capture_screen_text);
+                let focused_terminal = tab.pane_tree.try_visible_focus_terminal();
+                let terminal = focused_terminal.map(|(_, terminal)| terminal);
+                let cwd = terminal.and_then(|t| t.current_dir(cx));
+                let title = terminal
+                    .and_then(|t| t.title(cx))
+                    .unwrap_or_else(|| tab.title.clone());
+                let pane_layout = tab.pane_tree.to_persisted_state(cx, capture_screen_text);
+                let focused_pane_id = focused_pane_id_for_persisted_layout(
+                    tab.pane_tree.focused_pane_id(),
+                    pane_layout.as_ref(),
+                );
                 let pane_states = tab
                     .pane_tree
                     .pane_terminals()
@@ -73,8 +80,8 @@ impl ConWorkspace {
                 con_core::session::TabState {
                     title,
                     cwd,
-                    layout: Some(pane_layout),
-                    focused_pane_id: Some(tab.pane_tree.focused_pane_id()),
+                    layout: pane_layout,
+                    focused_pane_id: Some(focused_pane_id),
                     panes: pane_states,
                     shell_history,
                     conversation_id: Some(tab.session.conversation_id()),
@@ -101,8 +108,10 @@ impl ConWorkspace {
                 .collect(),
             input_history: self.global_input_history.iter().cloned().collect(),
             conversation_id: None, // deprecated — per-tab now
-            vertical_tabs_pinned: self.sidebar.read(cx).is_pinned(),
-            vertical_tabs_width: Some(self.sidebar.read(cx).panel_width()),
+            left_panel_width: Some(self.sidebar.read(cx).panel_width()),
+            activity_slot: Some(self.activity_slot.as_str().to_string()),
+            left_panel_open: Some(self.left_panel_open),
+            editor_area_height: None,
         }
     }
 
@@ -408,5 +417,77 @@ impl ConWorkspace {
                 (!trimmed.is_empty()).then(|| trimmed.to_string())
             })
             .collect()
+    }
+}
+
+fn focused_pane_id_for_persisted_layout(
+    focused_pane_id: usize,
+    layout: Option<&PaneLayoutState>,
+) -> usize {
+    let Some(layout) = layout else {
+        return focused_pane_id;
+    };
+    if layout_contains_pane(layout, focused_pane_id) {
+        return focused_pane_id;
+    }
+    first_pane_id_in_layout(layout).unwrap_or(focused_pane_id)
+}
+
+fn layout_contains_pane(layout: &PaneLayoutState, pane_id: usize) -> bool {
+    match layout {
+        PaneLayoutState::Leaf {
+            pane_id: leaf_id, ..
+        } => *leaf_id == pane_id,
+        PaneLayoutState::Split { first, second, .. } => {
+            layout_contains_pane(first, pane_id) || layout_contains_pane(second, pane_id)
+        }
+    }
+}
+
+fn first_pane_id_in_layout(layout: &PaneLayoutState) -> Option<usize> {
+    match layout {
+        PaneLayoutState::Leaf { pane_id, .. } => Some(*pane_id),
+        PaneLayoutState::Split { first, second, .. } => {
+            first_pane_id_in_layout(first).or_else(|| first_pane_id_in_layout(second))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::focused_pane_id_for_persisted_layout;
+    use con_core::session::{PaneLayoutState, PaneSplitDirection};
+
+    fn leaf(pane_id: usize) -> PaneLayoutState {
+        PaneLayoutState::Leaf {
+            pane_id,
+            cwd: None,
+            active_surface_id: None,
+            surfaces: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn persisted_focus_prefers_focused_pane_when_layout_contains_it() {
+        let layout = PaneLayoutState::Split {
+            direction: PaneSplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(leaf(1)),
+            second: Box::new(leaf(2)),
+        };
+
+        assert_eq!(focused_pane_id_for_persisted_layout(2, Some(&layout)), 2);
+    }
+
+    #[test]
+    fn persisted_focus_falls_back_when_focused_pane_is_not_serialized() {
+        let layout = PaneLayoutState::Split {
+            direction: PaneSplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(leaf(1)),
+            second: Box::new(leaf(2)),
+        };
+
+        assert_eq!(focused_pane_id_for_persisted_layout(99, Some(&layout)), 1);
     }
 }

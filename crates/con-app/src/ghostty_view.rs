@@ -131,6 +131,10 @@ pub struct GhosttyView {
     document_view: Option<id>,
     #[cfg(target_os = "macos")]
     nsview: Option<id>,
+    /// The GPUI Metal view (GPUIView) — cached so detach_host_view can restore
+    /// first responder to it without walking the view hierarchy.
+    #[cfg(target_os = "macos")]
+    gpui_nsview: Option<id>,
     #[cfg(target_os = "macos")]
     native_underlay_view: Option<id>,
     #[cfg(target_os = "macos")]
@@ -205,6 +209,8 @@ impl GhosttyView {
             document_view: None,
             #[cfg(target_os = "macos")]
             nsview: None,
+            #[cfg(target_os = "macos")]
+            gpui_nsview: None,
             #[cfg(target_os = "macos")]
             native_underlay_view: None,
             #[cfg(target_os = "macos")]
@@ -424,6 +430,14 @@ impl GhosttyView {
                 let superview: id = msg_send![host_view, superview];
                 if !superview.is_null() {
                     let _: () = msg_send![host_view, removeFromSuperview];
+                    // Restore first responder to the GPUI Metal view (GPUIView) so
+                    // keyboard events reach GPUI after the Ghostty NSView is gone.
+                    if let Some(gpui_view) = self.gpui_nsview {
+                        let window: id = msg_send![superview, window];
+                        if !window.is_null() {
+                            let _: () = msg_send![window, makeFirstResponder: gpui_view];
+                        }
+                    }
                 }
             }
         }
@@ -588,6 +602,9 @@ impl GhosttyView {
             raw_window_handle::RawWindowHandle::AppKit(handle) => handle.ns_view.as_ptr() as id,
             _ => return,
         };
+
+        // Cache the GPUI Metal view so detach_host_view can restore first responder to it.
+        self.gpui_nsview = Some(gpui_nsview);
 
         let parent_nsview: id = unsafe {
             let superview: id = msg_send![gpui_nsview, superview];

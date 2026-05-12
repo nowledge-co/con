@@ -34,6 +34,9 @@ const SPLIT_PREVIEW_SEAM_THICKNESS: f32 = 6.0;
 const TAB_DRAG_PREVIEW_WIDTH: f32 = 180.0;
 const TAB_DRAG_PREVIEW_HEIGHT: f32 = 28.0;
 
+use crate::activity_bar::{
+    ACTIVITY_BAR_WIDTH, ActivityBar, ActivitySlot, ActivitySlotChanged, ActivityTogglePanel,
+};
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, InlineInputSubmit,
     InlineSkillAutocompleteChanged, LoadConversation, NewConversation, PanelState,
@@ -42,6 +45,8 @@ use crate::agent_panel::{
 use crate::command_palette::{
     CommandPalette, PaletteDismissed, PaletteSelect, ToggleCommandPalette,
 };
+use crate::editor_view::{ActiveFileChanged, EditorEmptied, EditorView};
+use crate::file_tree_view::{FileTreeView, OpenFile};
 use crate::input_bar::{
     EscapeInput, InputBar, InputEdited, InputMode, InputScopeChanged, PaneInfo,
     SkillAutocompleteChanged, SubmitInput, TogglePaneScopePicker as TogglePaneScopePickerRequested,
@@ -51,14 +56,13 @@ use crate::motion::MotionValue;
 use crate::pane_tree::{
     PaneTree, SplitDirection, SplitPlacement, SurfaceCreateOptions, SurfaceRenameEditor,
 };
-use crate::settings_panel::{
-    self, AppearancePreview, SaveSettings, SettingsPanel, TabsOrientationChanged, ThemePreview,
-};
+use crate::settings_panel::{self, AppearancePreview, SaveSettings, SettingsPanel, ThemePreview};
 use crate::sidebar::{
     DraggedTab, DraggedTabOrigin, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry,
     SessionSidebar, SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate, SidebarPaneToTab,
     SidebarRename, SidebarReorder, SidebarSelect, SidebarSetColor,
 };
+use crate::sidebar_search_view::SidebarSearchView;
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
 use con_terminal::TerminalTheme;
 
@@ -68,19 +72,21 @@ use crate::ghostty_view::{
 };
 use crate::{
     AddWorkspaceLayoutTabs, ClearRestoredTerminalHistory, ClearTerminal, ClosePane, CloseSurface,
-    CloseTab, CollapseSidebar, CycleInputMode, ExportWorkspaceLayout, FocusInput, Minimize,
-    NewSurface, NewSurfaceSplitDown, NewSurfaceSplitRight, NewTab, NextSurface, NextTab,
-    OpenWorkspaceLayoutWindow, PreviousSurface, PreviousTab, Quit, RenameSurface, SelectTab1,
-    SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8, SelectTab9,
-    SplitDown, SplitLeft, SplitRight, SplitUp, ToggleAgentPanel, TogglePaneScopePicker,
-    TogglePaneZoom, ToggleVerticalTabs,
+    CloseTab, CollapseSidebar, Copy, Cut, CycleInputMode, EditorDeleteBackward,
+    EditorDeleteForward, EditorInsertNewline, EditorMoveDown, EditorMoveEnd, EditorMoveHome,
+    EditorMoveLeft, EditorMoveLineEnd, EditorMoveLineStart, EditorMoveRight, EditorMoveUp,
+    EditorSave, EditorSelectDown, EditorSelectEnd, EditorSelectHome, EditorSelectLeft,
+    EditorSelectRight, EditorSelectUp, ExportWorkspaceLayout, FocusInput, Minimize, NewSurface,
+    NewSurfaceSplitDown, NewSurfaceSplitRight, NewTab, NextSurface, NextTab,
+    OpenWorkspaceLayoutWindow, Paste, PreviousSurface, PreviousTab, Quit, RenameSurface, SelectAll,
+    SelectTab1, SelectTab2, SelectTab3, SelectTab4, SelectTab5, SelectTab6, SelectTab7, SelectTab8,
+    SelectTab9, SplitDown, SplitLeft, SplitRight, SplitUp, ToggleAgentPanel, ToggleLeftPanel,
+    TogglePaneScopePicker, TogglePaneZoom, Undo,
 };
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
 };
-use con_core::config::{
-    AppearanceConfig, Config, TabsOrientation, TerminalConfig, sanitize_terminal_font_family,
-};
+use con_core::config::{AppearanceConfig, Config, TerminalConfig, sanitize_terminal_font_family};
 use con_core::control::{
     AgentAskResult, ControlCommand, ControlError, ControlRequestEnvelope, ControlResult,
     SystemIdentifyResult, TabInfo,
@@ -103,6 +109,7 @@ mod chrome_actions;
 mod control_agent_tools;
 mod control_requests;
 mod control_surfaces;
+mod editor_actions;
 mod helpers;
 mod input_events;
 mod lifecycle;
@@ -152,7 +159,6 @@ pub struct ConWorkspace {
     background_image_position: String,
     background_image_fit: String,
     background_image_repeat: bool,
-    tabs_orientation: TabsOrientation,
     agent_panel: Entity<AgentPanel>,
     input_bar: Entity<InputBar>,
     settings_panel: Entity<SettingsPanel>,
@@ -197,19 +203,11 @@ pub struct ConWorkspace {
     #[cfg(target_os = "macos")]
     top_chrome_snap_guard_until: Option<Instant>,
     #[cfg(target_os = "macos")]
-    sidebar_snap_guard_until: Option<Instant>,
-    #[cfg(target_os = "macos")]
-    sidebar_snap_guard_width: f32,
-    #[cfg(target_os = "macos")]
     agent_panel_release_cover_until: Option<Instant>,
     #[cfg(target_os = "macos")]
     input_bar_release_cover_until: Option<Instant>,
     #[cfg(target_os = "macos")]
     top_chrome_release_cover_until: Option<Instant>,
-    #[cfg(target_os = "macos")]
-    sidebar_release_cover_until: Option<Instant>,
-    #[cfg(target_os = "macos")]
-    sidebar_release_cover_width: f32,
     /// Pending create-pane requests that need a window context to process.
     pending_create_pane_requests: Vec<PendingCreatePane>,
     /// Pending window-aware control requests such as tab lifecycle mutations.
@@ -226,16 +224,15 @@ pub struct ConWorkspace {
     pending_control_agent_requests: HashMap<usize, PendingControlAgentRequest>,
     shell_suggestion_rx: crossbeam_channel::Receiver<ShellSuggestionResult>,
     shell_suggestion_tx: crossbeam_channel::Sender<ShellSuggestionResult>,
-    /// Background AI engine that produces a label + icon for each
-    /// vertical-tabs row. Shares the harness's tokio runtime and the
-    /// user's `agent.suggestion_model` settings.
+    /// Background AI engine that produces optional tab labels and icons.
+    /// Shares the harness's tokio runtime and the user's
+    /// `agent.suggestion_model` settings.
     tab_summary_engine: TabSummaryEngine,
     tab_summary_rx: crossbeam_channel::Receiver<(u64, u64, TabSummary)>,
     tab_summary_tx: crossbeam_channel::Sender<(u64, u64, TabSummary)>,
     /// Bumped whenever summary-model settings change so late async
     /// responses from the old configuration are ignored.
     tab_summary_generation: u64,
-    last_sidebar_pinned: bool,
     /// Monotonic counter for [`Tab::summary_id`] — stable across the
     /// window's lifetime so the summary engine's per-tab cache
     /// survives reorders and tab close/reopen.
@@ -292,4 +289,18 @@ pub struct ConWorkspace {
     pane_title_drag_tab_bounds: std::sync::Arc<std::sync::Mutex<Vec<Bounds<Pixels>>>>,
     /// When true, the per-pane title bar is hidden even in split layouts.
     hide_pane_title_bar: bool,
+
+    /// Workspace-level focus handle — focused when an editor pane is active
+    /// so keyboard actions (Cmd+T, Cmd+W, etc.) still reach the workspace.
+    workspace_focus: gpui::FocusHandle,
+    /// Activity bar — always-visible 40 px icon rail on the far left.
+    activity_bar: Entity<ActivityBar>,
+    /// Which slot is active in the activity bar.
+    activity_slot: ActivitySlot,
+    /// Whether the left panel (sidebar / file tree) is open.
+    left_panel_open: bool,
+    /// File tree view — global singleton, root follows active tab cwd.
+    file_tree_view: Entity<FileTreeView>,
+    /// Search view — global singleton, root follows the same sidebar root.
+    search_view: Entity<SidebarSearchView>,
 }

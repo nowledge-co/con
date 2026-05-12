@@ -87,7 +87,8 @@ impl ConWorkspace {
             }
             InputMode::Smart => {
                 let is_remote = self
-                    .effective_remote_host_for_tab(self.active_tab, self.active_terminal(), cx)
+                    .try_active_terminal()
+                    .and_then(|t| self.effective_remote_host_for_tab(self.active_tab, t, cx))
                     .is_some();
                 match self.harness.classify_input(&content, is_remote) {
                     InputKind::ShellCommand(cmd) => {

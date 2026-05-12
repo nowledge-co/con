@@ -1,5 +1,146 @@
 use super::*;
 
+pub(super) enum FileTreeFocusSource<'a> {
+    Terminal { cwd: Option<&'a str> },
+    Editor { file_path: Option<&'a Path> },
+}
+
+pub(super) fn file_tree_root_for_focus(
+    source: FileTreeFocusSource<'_>,
+    current_root: Option<&Path>,
+) -> Option<PathBuf> {
+    match source {
+        FileTreeFocusSource::Terminal { cwd } => cwd.map(PathBuf::from),
+        FileTreeFocusSource::Editor { file_path } => {
+            let file_path = file_path?;
+            if let Some(root) = current_root {
+                if file_path.starts_with(root) {
+                    return Some(root.to_path_buf());
+                }
+            }
+            file_path.parent().map(Path::to_path_buf)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WorkspaceCloseIntent {
+    CloseEditorFile,
+    ClosePane,
+    CloseTab,
+    CloseWindow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EditorFileCloseOutcome {
+    KeepEditorPane,
+    CloseEditorPane,
+    CloseWorkspaceTabOrWindow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EditorLineBoundary {
+    Start,
+    End,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ActivePaneFocusTarget {
+    Terminal,
+    Editor,
+    Workspace,
+}
+
+pub(super) fn active_pane_focus_target(
+    has_focused_terminal: bool,
+    has_focused_editor: bool,
+) -> ActivePaneFocusTarget {
+    if has_focused_terminal {
+        ActivePaneFocusTarget::Terminal
+    } else if has_focused_editor {
+        ActivePaneFocusTarget::Editor
+    } else {
+        ActivePaneFocusTarget::Workspace
+    }
+}
+
+pub(super) fn resize_drag_should_continue(pressed_button: Option<MouseButton>) -> bool {
+    pressed_button == Some(MouseButton::Left)
+}
+
+pub(super) fn workspace_close_intent(
+    pane_count: usize,
+    editor_file_tabs: Option<usize>,
+    tab_count: usize,
+) -> WorkspaceCloseIntent {
+    if matches!(editor_file_tabs, Some(count) if count > 0) {
+        return WorkspaceCloseIntent::CloseEditorFile;
+    }
+    if pane_count > 1 {
+        return WorkspaceCloseIntent::ClosePane;
+    }
+    if tab_count > 1 {
+        return WorkspaceCloseIntent::CloseTab;
+    }
+    WorkspaceCloseIntent::CloseWindow
+}
+
+pub(super) fn workspace_close_intent_for_close_tab(
+    pane_count: usize,
+    keyboard_focused_editor_file_tabs: Option<usize>,
+    focused_pane_editor_file_tabs: Option<usize>,
+    tab_count: usize,
+) -> WorkspaceCloseIntent {
+    workspace_close_intent(
+        pane_count,
+        keyboard_focused_editor_file_tabs.or(focused_pane_editor_file_tabs),
+        tab_count,
+    )
+}
+
+pub(super) fn editor_file_close_outcome(
+    pane_count: usize,
+    editor_pane_empty: bool,
+) -> EditorFileCloseOutcome {
+    if !editor_pane_empty {
+        return EditorFileCloseOutcome::KeepEditorPane;
+    }
+    if pane_count > 1 {
+        return EditorFileCloseOutcome::CloseEditorPane;
+    }
+    EditorFileCloseOutcome::CloseWorkspaceTabOrWindow
+}
+
+pub(super) fn editor_line_boundary_for_key(
+    key: &str,
+    control: bool,
+    platform: bool,
+    alt: bool,
+    shift: bool,
+) -> Option<EditorLineBoundary> {
+    if !control || platform || alt || shift {
+        return None;
+    }
+
+    match key {
+        "a" => Some(EditorLineBoundary::Start),
+        "e" => Some(EditorLineBoundary::End),
+        _ => None,
+    }
+}
+
+pub(super) fn focused_editor_pane_key_fallback_allowed(input_surface_focused: bool) -> bool {
+    !input_surface_focused
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn should_show_activity_bar(
+    _left_sidebar_available: bool,
+    _activity_slot: ActivitySlot,
+) -> bool {
+    true
+}
+
 pub(super) fn point_in_bounds(
     p: &gpui::Point<gpui::Pixels>,
     b: &gpui::Bounds<gpui::Pixels>,

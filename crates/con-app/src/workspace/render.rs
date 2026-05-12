@@ -3,6 +3,144 @@ mod top_bar;
 
 use super::*;
 
+impl ConWorkspace {
+    fn has_active_resize_drag(&self) -> bool {
+        self.sidebar_drag.is_some()
+            || self.agent_panel_drag.is_some()
+            || self
+                .tabs
+                .get(self.active_tab)
+                .is_some_and(|tab| tab.pane_tree.is_dragging())
+    }
+
+    fn finish_active_resize_drag(&mut self, cx: &mut Context<Self>) -> bool {
+        let mut changed = false;
+        let mut should_save_session = false;
+
+        if self.sidebar_drag.take().is_some() {
+            changed = true;
+            should_save_session = true;
+        }
+
+        if self.agent_panel_drag.take().is_some() {
+            changed = true;
+            should_save_session = true;
+        }
+
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            let pane_tree = &mut tab.pane_tree;
+            if pane_tree.is_dragging() {
+                pane_tree.end_drag();
+                for terminal in pane_tree.all_terminals() {
+                    terminal.notify(cx);
+                }
+                changed = true;
+            }
+        }
+
+        if should_save_session {
+            self.save_session(cx);
+        }
+        if changed {
+            cx.notify();
+        }
+
+        changed
+    }
+
+    fn handle_active_resize_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        win: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.has_active_resize_drag() {
+            return false;
+        }
+
+        if !resize_drag_should_continue(event.pressed_button) {
+            self.finish_active_resize_drag(cx);
+            return true;
+        }
+
+        if let Some((start_x, start_width)) = self.sidebar_drag {
+            let win_w = win.bounds().size.width.as_f32();
+            let agent_w = if self.agent_panel_open {
+                self.agent_panel_width.min(max_agent_panel_width(win_w)) + 1.0
+            } else {
+                0.0
+            };
+            let max_width = max_sidebar_panel_width(win_w, agent_w);
+            let delta = f32::from(event.position.x) - start_x;
+            let new_width = (start_width + delta).clamp(PANEL_MIN_WIDTH, max_width);
+            let current_width = self.sidebar.read(cx).panel_width();
+            if (current_width - new_width).abs() > 0.5 {
+                self.sidebar
+                    .update(cx, |sidebar, cx| sidebar.set_panel_width(new_width, cx));
+                cx.notify();
+            }
+            return true;
+        }
+
+        if let Some((start_x, start_width)) = self.agent_panel_drag {
+            let delta = start_x - f32::from(event.position.x);
+            let max_width = max_agent_panel_width(win.bounds().size.width.as_f32());
+            let new_width = (start_width + delta).clamp(AGENT_PANEL_MIN_WIDTH, max_width);
+            if (self.agent_panel_width - new_width).abs() > 1.0 {
+                self.agent_panel_width = new_width;
+                cx.notify();
+            }
+            return true;
+        }
+
+        if self.active_tab >= self.tabs.len() {
+            return true;
+        }
+
+        let top_bar_height = self.current_top_bar_height();
+        let input_bar_height = if self.input_bar_visible { 42.0 } else { 0.0 };
+        let win_w = f32::from(win.bounds().size.width);
+        let win_h = f32::from(win.bounds().size.height);
+        let effective_agent_panel_width = self.agent_panel_width.min(max_agent_panel_width(win_w));
+        let agent_panel_drag_width = if self.agent_panel_open {
+            effective_agent_panel_width + 7.0
+        } else {
+            0.0
+        };
+        let leading_panel_w = ACTIVITY_BAR_WIDTH
+            + if self.left_panel_open {
+                self.sidebar.read(cx).panel_width()
+            } else {
+                0.0
+            };
+
+        let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
+        if !pane_tree.is_dragging() {
+            return false;
+        }
+
+        let (current_pos, total_size) = if let Some(dir) = pane_tree.dragging_direction() {
+            match dir {
+                SplitDirection::Horizontal => (
+                    f32::from(event.position.x) - leading_panel_w,
+                    win_w - agent_panel_drag_width - leading_panel_w,
+                ),
+                SplitDirection::Vertical => (
+                    f32::from(event.position.y),
+                    win_h - top_bar_height - input_bar_height,
+                ),
+            }
+        } else {
+            return true;
+        };
+
+        if pane_tree.update_drag(current_pos, total_size) {
+            cx.notify();
+        }
+        true
+    }
+}
+
 impl Render for ConWorkspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.flush_pending_create_pane_requests(window, cx);
@@ -11,7 +149,7 @@ impl Render for ConWorkspace {
             return div().size_full().into_any_element();
         }
 
-        let active_terminal = self.active_terminal().clone();
+        let active_terminal = self.try_active_terminal().cloned();
 
         // If a modal was dismissed internally (escape/backdrop), restore terminal focus
         let is_modal_open = self.is_modal_open(cx);
@@ -79,10 +217,13 @@ impl Render for ConWorkspace {
             })
             .collect();
 
-        let cwd = active_terminal.current_dir(cx);
+        let cwd = active_terminal.as_ref().and_then(|t| t.current_dir(cx));
         // Scan skills when cwd changes (project-local + platform global skills path).
         if let Some(ref raw_cwd) = cwd {
             self.harness.scan_skills(raw_cwd);
+        }
+        if self.file_tree_view.read(cx).root().is_none() {
+            self.sync_file_tree_from_active_focus(cx);
         }
         let display_cwd = cwd
             .map(|cwd| match dirs::home_dir() {
@@ -162,17 +303,12 @@ impl Render for ConWorkspace {
         #[cfg(target_os = "macos")]
         let (top_chrome_snap_guard_active, top_chrome_snap_guard_expired) =
             Self::snap_guard_state(&mut self.top_chrome_snap_guard_until, window);
-        #[cfg(target_os = "macos")]
-        let (sidebar_snap_guard_active, sidebar_snap_guard_expired) =
-            Self::snap_guard_state(&mut self.sidebar_snap_guard_until, window);
         #[cfg(not(target_os = "macos"))]
         let agent_panel_snap_guard_active = false;
         #[cfg(not(target_os = "macos"))]
         let input_bar_snap_guard_active = false;
         #[cfg(not(target_os = "macos"))]
         let top_chrome_snap_guard_active = false;
-        #[cfg(not(target_os = "macos"))]
-        let sidebar_snap_guard_active = false;
         #[cfg(target_os = "macos")]
         {
             let release_cover = Duration::from_millis(CHROME_RELEASE_COVER_MS);
@@ -185,12 +321,6 @@ impl Render for ConWorkspace {
             if top_chrome_snap_guard_expired && !self.horizontal_tabs_visible() {
                 Self::extend_guard(&mut self.top_chrome_release_cover_until, release_cover);
             }
-            if sidebar_snap_guard_expired && !self.vertical_tabs_active() {
-                self.sidebar_release_cover_width = self
-                    .sidebar_release_cover_width
-                    .max(self.sidebar_snap_guard_width);
-                Self::extend_guard(&mut self.sidebar_release_cover_until, release_cover);
-            }
         }
         #[cfg(target_os = "macos")]
         let agent_panel_release_cover_active =
@@ -201,20 +331,12 @@ impl Render for ConWorkspace {
         #[cfg(target_os = "macos")]
         let top_chrome_release_cover_active =
             Self::snap_guard_active(&mut self.top_chrome_release_cover_until, window);
-        #[cfg(target_os = "macos")]
-        let sidebar_release_cover_active =
-            Self::snap_guard_active(&mut self.sidebar_release_cover_until, window);
         #[cfg(not(target_os = "macos"))]
         let agent_panel_release_cover_active = false;
         #[cfg(not(target_os = "macos"))]
         let input_bar_release_cover_active = false;
         #[cfg(not(target_os = "macos"))]
         let top_chrome_release_cover_active = false;
-        #[cfg(target_os = "macos")]
-        if !sidebar_snap_guard_active && !sidebar_release_cover_active {
-            self.sidebar_snap_guard_width = 0.0;
-            self.sidebar_release_cover_width = 0.0;
-        }
         #[cfg(target_os = "macos")]
         {
             let allow_native_transition_underlay = self.terminal_opacity >= 0.999;
@@ -271,49 +393,6 @@ impl Render for ConWorkspace {
         } else {
             0.0
         };
-        let max_vertical_tabs_width =
-            max_sidebar_panel_width(window_width, agent_panel_outer_width);
-        let vertical_tabs_width = if self.vertical_tabs_active() {
-            self.sidebar.update(cx, |sidebar, _cx| {
-                sidebar.set_effective_panel_max_width(max_vertical_tabs_width);
-                sidebar.occupied_width_with_max(max_vertical_tabs_width)
-            })
-        } else {
-            #[cfg(target_os = "macos")]
-            {
-                if sidebar_snap_guard_active {
-                    self.sidebar_snap_guard_width
-                } else {
-                    0.0
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                0.0
-            }
-        };
-        let vertical_tabs_pinned = self.vertical_tabs_active() && self.sidebar.read(cx).is_pinned();
-
-        // Render the vertical-tabs hover-card overlay up front so it
-        // takes the (re-entrant) sidebar borrow before `theme` claims
-        // the immutable cx borrow that the rest of `render` relies on.
-        let vertical_tabs_overlay = if self.vertical_tabs_active() {
-            self.sidebar.update(cx, |sidebar, cx| {
-                if cx.has_active_drag() {
-                    sidebar.update_drag_preview_from_mouse(
-                        window.mouse_position(),
-                        window.viewport_size(),
-                        cx,
-                    );
-                }
-                sidebar
-                    .drag_preview_overlay(window, cx)
-                    .or_else(|| sidebar.render_hover_card_overlay(window, cx))
-            })
-        } else {
-            None
-        };
-
         let theme = cx.theme();
         let ui_surface_opacity = self.ui_surface_opacity();
         let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
@@ -354,7 +433,13 @@ impl Render for ConWorkspace {
         let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
         #[cfg(not(target_os = "macos"))]
         let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
-        let terminal_content_left = vertical_tabs_width;
+        let sidebar_content_width = if self.left_panel_open {
+            self.sidebar.read(cx).panel_width()
+        } else {
+            0.0
+        };
+        let left_panel_width = ACTIVITY_BAR_WIDTH + sidebar_content_width;
+        let terminal_content_left = left_panel_width;
         let terminal_content_width =
             (window_width - terminal_content_left - agent_panel_outer_width).max(0.0);
 
@@ -370,6 +455,14 @@ impl Render for ConWorkspace {
                 if let Some(workspace) = workspace.upgrade() {
                     workspace.update(cx, |workspace, cx| {
                         workspace.focus_surface_in_active_tab(surface_id, window, cx);
+                    });
+                }
+            };
+            let workspace = cx.weak_entity();
+            let focus_pane_cb = move |pane_id: usize, window: &mut Window, cx: &mut App| {
+                if let Some(workspace) = workspace.upgrade() {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.focus_pane_in_active_tab(pane_id, window, cx);
                     });
                 }
             };
@@ -412,6 +505,7 @@ impl Render for ConWorkspace {
                 session_id,
                 begin_drag_cb,
                 focus_surface_cb,
+                focus_pane_cb,
                 rename_surface_cb,
                 close_surface_cb,
                 close_pane_cb,
@@ -624,37 +718,81 @@ impl Render for ConWorkspace {
                 main_area.bg(portable_terminal_backdrop_color)
             });
 
-        if self.vertical_tabs_active() {
-            main_area = main_area.child(
+        // ── Left sidebar: feature rail is always visible; content can collapse.
+        let show_left_panel = self.left_panel_open;
+        let sidebar_content: AnyElement = match self.activity_slot {
+            ActivitySlot::Files => self.file_tree_view.clone().into_any_element(),
+            ActivitySlot::Search => self.search_view.clone().into_any_element(),
+        };
+        let mut left_sidebar = div()
+            .w(px(left_panel_width))
+            .h_full()
+            .flex()
+            .flex_row()
+            .flex_shrink_0()
+            .overflow_hidden()
+            .bg(elevated_panel_surface_color)
+            .child(
                 div()
+                    .w(px(ACTIVITY_BAR_WIDTH))
                     .h_full()
                     .flex_shrink_0()
                     .overflow_hidden()
-                    .bg(elevated_panel_surface_color)
-                    .child(self.sidebar.clone()),
+                    .child(self.activity_bar.clone()),
             );
-        }
-        if !self.vertical_tabs_active() && sidebar_snap_guard_active && vertical_tabs_width > 0.0 {
-            main_area = main_area.child(
+        if show_left_panel {
+            left_sidebar = left_sidebar.child(
                 div()
-                    .w(px(vertical_tabs_width))
+                    .w(px(sidebar_content_width))
                     .h_full()
                     .flex_shrink_0()
-                    .bg(elevated_panel_surface_color),
+                    .overflow_hidden()
+                    .child(sidebar_content),
             );
         }
+        main_area = main_area.child(left_sidebar);
+        // ── Main column: terminal area only (editor panes live inside pane tree) ──
+        let main_column = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .child(terminal_area);
 
-        main_area = main_area.child(terminal_area);
+        main_area = main_area.child(main_column);
 
-        if self.vertical_tabs_active() && vertical_tabs_width > 0.0 {
+        main_area = main_area.child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px((left_panel_width - 1.0).max(0.0)))
+                .w(px(1.0))
+                .bg(chrome_static_seam_color),
+        );
+        if show_left_panel {
             main_area = main_area.child(
                 div()
+                    .id("left-sidebar-resize-handle")
                     .absolute()
                     .top_0()
                     .bottom_0()
-                    .left(px((vertical_tabs_width - 1.0).max(0.0)))
-                    .w(px(1.0))
-                    .bg(chrome_static_seam_color),
+                    .left(px((left_panel_width - 3.0).max(0.0)))
+                    .w(px(6.0))
+                    .cursor_col_resize()
+                    .occlude()
+                    .bg(theme.transparent)
+                    .hover(|s| s.bg(theme.muted.opacity(0.08)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                            this.release_active_terminal_mouse_selection(cx);
+                            let width = this.sidebar.read(cx).panel_width();
+                            this.sidebar_drag = Some((f32::from(event.position.x), width));
+                            cx.notify();
+                        }),
+                    ),
             );
         }
 
@@ -715,6 +853,7 @@ impl Render for ConWorkspace {
                                                     f32::from(event.position.x),
                                                     effective_agent_panel_width,
                                                 ));
+                                                cx.notify();
                                             },
                                         ),
                                     ),
@@ -727,35 +866,6 @@ impl Render for ConWorkspace {
                             .h_full()
                             .opacity(agent_panel_content_opacity)
                             .child(self.agent_panel.clone()),
-                    ),
-            );
-        }
-
-        if let Some(overlay) = vertical_tabs_overlay {
-            main_area = main_area.child(overlay);
-        }
-
-        if vertical_tabs_pinned {
-            let handle_left = (vertical_tabs_width - 3.0).max(0.0);
-            main_area = main_area.child(
-                div()
-                    .id("vertical-tabs-resize-handle")
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px(handle_left))
-                    .w(px(6.0))
-                    .cursor_col_resize()
-                    .occlude()
-                    .bg(theme.transparent)
-                    .hover(|s| s.bg(theme.muted.opacity(0.08)))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, event: &MouseDownEvent, _window, cx| {
-                            this.release_active_terminal_mouse_selection(cx);
-                            let width = this.sidebar.read(cx).panel_width();
-                            this.sidebar_drag = Some((f32::from(event.position.x), width));
-                        }),
                     ),
             );
         }
@@ -786,7 +896,8 @@ impl Render for ConWorkspace {
             .flex_col()
             .size_full()
             .bg(theme.transparent)
-            .font_family(theme.mono_font_family.clone());
+            .font_family(theme.mono_font_family.clone())
+            .track_focus(&self.workspace_focus);
 
         // Linux: con paints its own client-side decorations, so we
         // also have to clip the window to a rounded rectangle the
@@ -808,39 +919,7 @@ impl Render for ConWorkspace {
             .on_mouse_move({
                 let pending = self.pending_drag_init.clone();
                 cx.listener(move |this, event: &MouseMoveEvent, win, cx| {
-                    if let Some((start_x, start_width)) = this.sidebar_drag {
-                        let win_w = win.bounds().size.width.as_f32();
-                        let agent_w = if this.agent_panel_open {
-                            this.agent_panel_width.min(max_agent_panel_width(win_w)) + 1.0
-                        } else {
-                            0.0
-                        };
-                        let max_width = max_sidebar_panel_width(win_w, agent_w);
-                        let delta = f32::from(event.position.x) - start_x;
-                        let new_width = (start_width + delta).clamp(PANEL_MIN_WIDTH, max_width);
-                        let current_width = this.sidebar.read(cx).panel_width();
-                        if (current_width - new_width).abs() > 0.5 {
-                            this.sidebar
-                                .update(cx, |sidebar, cx| sidebar.set_panel_width(new_width, cx));
-                            cx.notify();
-                        }
-                        return;
-                    }
-
-                    // Agent panel resize drag
-                    if let Some((start_x, start_width)) = this.agent_panel_drag {
-                        let delta = start_x - f32::from(event.position.x);
-                        let max_width = max_agent_panel_width(win.bounds().size.width.as_f32());
-                        let new_width =
-                            (start_width + delta).clamp(AGENT_PANEL_MIN_WIDTH, max_width);
-                        if (this.agent_panel_width - new_width).abs() > 1.0 {
-                            this.agent_panel_width = new_width;
-                            if this.active_tab >= this.tabs.len() {
-                                cx.notify();
-                                return;
-                            }
-                            cx.notify();
-                        }
+                    if this.handle_active_resize_mouse_move(event, win, cx) {
                         return;
                     }
 
@@ -908,7 +987,7 @@ impl Render for ConWorkspace {
                     // Compute layout-dependent inputs *before* re-borrowing
                     // `this` mutably for the pane tree, otherwise we
                     // collide with the immutable borrow needed by
-                    // `vertical_tabs_active` / `sidebar.read`.
+                    // `left_panel_open` state.
                     let win_w = f32::from(win.bounds().size.width);
                     let win_h = f32::from(win.bounds().size.height);
                     let effective_agent_panel_width =
@@ -918,16 +997,12 @@ impl Render for ConWorkspace {
                     } else {
                         0.0
                     };
-                    let vertical_tabs_w = if this.vertical_tabs_active() {
-                        this.sidebar
-                            .read(cx)
-                            .occupied_width_with_max(max_sidebar_panel_width(
-                                win_w,
-                                agent_panel_drag_width,
-                            ))
-                    } else {
-                        0.0
-                    };
+                    let leading_panel_w = ACTIVITY_BAR_WIDTH
+                        + if this.left_panel_open {
+                            this.sidebar.read(cx).panel_width()
+                        } else {
+                            0.0
+                        };
 
                     let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
 
@@ -937,13 +1012,13 @@ impl Render for ConWorkspace {
 
                     // Estimate terminal area from window bounds minus fixed chrome
                     // (tab bar ~38px, input bar ~40px, agent panel if open,
-                    // vertical-tabs panel on the leading edge if enabled).
+                    // file tree panel on the leading edge if enabled).
                     let (current_pos, total_size) =
                         if let Some(dir) = pane_tree.dragging_direction() {
                             match dir {
                                 SplitDirection::Horizontal => (
-                                    f32::from(event.position.x) - vertical_tabs_w,
-                                    win_w - agent_panel_drag_width - vertical_tabs_w,
+                                    f32::from(event.position.x) - leading_panel_w,
+                                    win_w - agent_panel_drag_width - leading_panel_w,
                                 ),
                                 SplitDirection::Vertical => (
                                     f32::from(event.position.y),
@@ -962,16 +1037,7 @@ impl Render for ConWorkspace {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                    if this.sidebar_drag.is_some() {
-                        this.sidebar_drag = None;
-                        this.save_session(cx);
-                        cx.notify();
-                        return;
-                    }
-                    if this.agent_panel_drag.is_some() {
-                        this.agent_panel_drag = None;
-                        this.save_session(cx);
-                        cx.notify();
+                    if this.finish_active_resize_drag(cx) {
                         return;
                     }
                     // Clear any stale pane_title_drag state (GPUI drag handles
@@ -984,26 +1050,8 @@ impl Render for ConWorkspace {
                         );
                         cx.notify();
                     }
-                    // Safety cleanup/redraw for sidebar drag state — on_drop may not
-                    // fire if the cursor was outside all sidebar hit targets, and GPUI
-                    // can leave the last drop-indicator paint around until the next
-                    // sidebar repaint. Force one repaint on mouseup in vertical-tabs mode.
-                    if this.vertical_tabs_active() {
-                        this.sidebar.update(cx, |sidebar, cx| {
-                            sidebar.force_clear_drag_state(cx);
-                        });
-                    }
-
                     if this.active_tab >= this.tabs.len() {
                         return;
-                    }
-                    let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
-                    if pane_tree.is_dragging() {
-                        pane_tree.end_drag();
-                        for terminal in pane_tree.all_terminals() {
-                            terminal.notify(cx);
-                        }
-                        cx.notify();
                     }
                 }),
             )
@@ -1011,7 +1059,6 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::minimize))
             .on_action(cx.listener(Self::toggle_agent_panel))
             .on_action(cx.listener(Self::toggle_input_bar))
-            .on_action(cx.listener(Self::toggle_vertical_tabs))
             .on_action(cx.listener(Self::collapse_sidebar))
             .on_action(cx.listener(Self::toggle_settings))
             .on_action(cx.listener(Self::toggle_command_palette))
@@ -1048,9 +1095,45 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::rename_current_surface))
             .on_action(cx.listener(Self::close_surface))
             .on_action(cx.listener(Self::focus_input))
+            .on_action(cx.listener(Self::editor_move_left))
+            .on_action(cx.listener(Self::editor_move_right))
+            .on_action(cx.listener(Self::editor_move_up))
+            .on_action(cx.listener(Self::editor_move_down))
+            .on_action(cx.listener(Self::editor_move_home))
+            .on_action(cx.listener(Self::editor_move_end))
+            .on_action(cx.listener(Self::editor_move_line_start))
+            .on_action(cx.listener(Self::editor_move_line_end))
+            .on_action(cx.listener(Self::editor_select_left))
+            .on_action(cx.listener(Self::editor_select_right))
+            .on_action(cx.listener(Self::editor_select_up))
+            .on_action(cx.listener(Self::editor_select_down))
+            .on_action(cx.listener(Self::editor_select_home))
+            .on_action(cx.listener(Self::editor_select_end))
+            .on_action(cx.listener(Self::editor_delete_backward))
+            .on_action(cx.listener(Self::editor_delete_forward))
+            .on_action(cx.listener(Self::editor_insert_newline))
+            .on_action(cx.listener(Self::editor_save))
+            .on_action(cx.listener(Self::editor_undo))
+            .on_action(cx.listener(Self::editor_copy))
+            .on_action(cx.listener(Self::editor_cut))
+            .on_action(cx.listener(Self::editor_paste))
+            .on_action(cx.listener(Self::editor_select_all))
             .on_action(cx.listener(Self::cycle_input_mode))
             .on_action(cx.listener(Self::toggle_pane_scope_picker))
+            .on_action(cx.listener(Self::toggle_left_panel))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if this.editor_has_keyboard_focus(window, cx)
+                    && this.handle_editor_text_key_down(event, window, cx)
+                {
+                    return;
+                }
+                if focused_editor_pane_key_fallback_allowed(
+                    this.is_input_surface_focused(window, cx),
+                ) && this.handle_focused_editor_pane_key_down(event, window, cx)
+                {
+                    return;
+                }
+
                 if !this.pane_scope_picker_open {
                     return;
                 }
@@ -1234,46 +1317,13 @@ impl Render for ConWorkspace {
             );
         }
 
-        if sidebar_snap_guard_active {
-            if self.vertical_tabs_active() {
-                root = root.child(
-                    div()
-                        .absolute()
-                        .top(px(top_bar_height))
-                        .bottom_0()
-                        .left(px(
-                            (vertical_tabs_width - CHROME_MOTION_SEAM_OVERDRAW).max(0.0)
-                        ))
-                        .w(px(CHROME_MOTION_SEAM_OVERDRAW))
-                        .bg(chrome_transition_seam_color),
-                );
-            }
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            if sidebar_release_cover_active && self.sidebar_release_cover_width > 0.0 {
-                root = root.child(
-                    div()
-                        .absolute()
-                        .top(px(top_bar_height))
-                        .bottom_0()
-                        .left_0()
-                        .w(px(self.sidebar_release_cover_width))
-                        .bg(chrome_transition_seam_color),
-                );
-            }
-        }
-
-        if self.sidebar_drag.is_some() && vertical_tabs_width > 0.0 {
+        if self.sidebar_drag.is_some() {
             root = root.child(
                 div()
                     .absolute()
                     .top(px(top_bar_height))
                     .bottom_0()
-                    .left(px(
-                        (vertical_tabs_width - CHROME_MOTION_SEAM_OVERDRAW).max(0.0)
-                    ))
+                    .left(px((left_panel_width - CHROME_MOTION_SEAM_OVERDRAW).max(0.0)))
                     .w(px(CHROME_MOTION_SEAM_OVERDRAW))
                     .bg(chrome_transition_seam_color),
             );
@@ -1359,6 +1409,45 @@ impl Render for ConWorkspace {
                     .right(px(animated_panel_width))
                     .w(px(CHROME_TRANSITION_SEAM_COVER))
                     .bg(chrome_transition_seam_color),
+            );
+        }
+
+        if self.has_active_resize_drag() {
+            let resize_direction = if self.sidebar_drag.is_some() || self.agent_panel_drag.is_some()
+            {
+                SplitDirection::Horizontal
+            } else {
+                self.tabs
+                    .get(self.active_tab)
+                    .and_then(|tab| tab.pane_tree.dragging_direction())
+                    .unwrap_or(SplitDirection::Horizontal)
+            };
+            let mut overlay = div()
+                .id("resize-capture-overlay")
+                .absolute()
+                .top_0()
+                .right_0()
+                .bottom_0()
+                .left_0();
+            overlay = match resize_direction {
+                SplitDirection::Horizontal => overlay.cursor_col_resize(),
+                SplitDirection::Vertical => overlay.cursor_row_resize(),
+            };
+            root = root.child(
+                overlay
+                    .occlude()
+                    .bg(theme.transparent)
+                    .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                        this.handle_active_resize_mouse_move(event, window, cx);
+                        cx.stop_propagation();
+                    }))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                            this.finish_active_resize_drag(cx);
+                            cx.stop_propagation();
+                        }),
+                    ),
             );
         }
 

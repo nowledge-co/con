@@ -68,24 +68,26 @@ impl ConWorkspace {
                 self.focus_agent_inline_input_next_frame(window, cx);
             }
         } else {
-            self.active_terminal().focus(window, cx);
+            if let Some(t) = self.try_active_terminal() {
+                t.focus(window, cx);
+            }
         }
         self.save_session(cx);
         cx.notify();
     }
 
-    pub(super) fn toggle_vertical_tabs(
+    pub(super) fn toggle_left_panel(
         &mut self,
-        _: &ToggleVerticalTabs,
+        _: &ToggleLeftPanel,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let next = if self.vertical_tabs_active() {
-            TabsOrientation::Horizontal
-        } else {
-            TabsOrientation::Vertical
-        };
-        self.apply_tabs_orientation(next, true, cx);
+        self.left_panel_open = !self.left_panel_open;
+        self.activity_bar.update(cx, |bar, _cx| {
+            bar.left_panel_open = self.left_panel_open;
+        });
+        self.save_session(cx);
+        cx.notify();
     }
 
     pub(super) fn collapse_sidebar(
@@ -94,11 +96,12 @@ impl ConWorkspace {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.vertical_tabs_active() {
+        if !self.left_panel_open {
             return;
         }
-        self.sidebar.update(cx, |sidebar, cx| {
-            sidebar.toggle_pinned(cx);
+        self.left_panel_open = false;
+        self.activity_bar.update(cx, |bar, _cx| {
+            bar.left_panel_open = false;
         });
         self.save_session(cx);
         cx.notify();
@@ -225,8 +228,8 @@ impl ConWorkspace {
     }
 
     pub(super) fn layout_profile_export_root(&self, cx: &App) -> std::path::PathBuf {
-        self.active_terminal()
-            .current_dir(cx)
+        self.try_active_terminal()
+            .and_then(|t| t.current_dir(cx))
             .map(std::path::PathBuf::from)
             .and_then(|path| {
                 let path = std::fs::canonicalize(&path).unwrap_or(path);
@@ -419,10 +422,9 @@ impl ConWorkspace {
             terminal.ensure_surface(window, cx);
         }
         self.sync_active_tab_native_view_visibility(cx);
-        self.tabs[self.active_tab]
-            .pane_tree
-            .focused_terminal()
-            .focus(window, cx);
+        if let Some(terminal) = self.tabs[self.active_tab].pane_tree.try_focused_terminal() {
+            terminal.focus(window, cx);
+        }
         self.sync_active_terminal_focus_states(cx);
         self.sync_sidebar(cx);
         self.request_tab_summaries(cx);
