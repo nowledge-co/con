@@ -1205,7 +1205,7 @@ impl Render for EditorView {
             let label_color = if is_active {
                 fg.opacity(0.92)
             } else {
-                theme.muted_foreground.opacity(0.74)
+                theme.muted_foreground
             };
             let mut tab_el = div()
                 .id(("editor-file-tab", index))
@@ -1244,11 +1244,7 @@ impl Render for EditorView {
                         .text_size(px(12.0))
                         .line_height(px(14.0))
                         .font_family(ui_font.clone())
-                        .font_weight(if is_active {
-                            FontWeight::MEDIUM
-                        } else {
-                            FontWeight::NORMAL
-                        })
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(label_color)
                         .child(SharedString::from(label)),
                 );

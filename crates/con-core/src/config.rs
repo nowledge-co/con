@@ -120,8 +120,8 @@ pub struct AppearanceConfig {
     /// `false` (title bar visible). When `true` the title bar is suppressed
     /// even in split layouts; the fullscreen/close buttons are also hidden.
     pub hide_pane_title_bar: bool,
-    /// Workspace tab presentation. Horizontal is the default for compatibility;
-    /// vertical restores the sidebar tab rail/panel.
+    /// Workspace tab presentation. Vertical is the default; horizontal remains
+    /// available for users who prefer a top tab strip.
     pub tabs_orientation: TabsOrientation,
 }
 
@@ -142,7 +142,7 @@ impl Default for AppearanceConfig {
             tab_accent_inactive_hover_alpha: default_tab_accent_inactive_hover_alpha(),
             restore_terminal_text: default_restore_terminal_text(),
             hide_pane_title_bar: false,
-            tabs_orientation: TabsOrientation::Horizontal,
+            tabs_orientation: TabsOrientation::Vertical,
         }
     }
 }
@@ -150,8 +150,8 @@ impl Default for AppearanceConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TabsOrientation {
-    #[default]
     Horizontal,
+    #[default]
     Vertical,
 }
 
@@ -1042,6 +1042,24 @@ search_files = "alt-f"
     }
 
     #[test]
+    fn omitted_tabs_orientation_defaults_to_vertical() {
+        let content = r#"
+[appearance]
+terminal_opacity = 0.8
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+
+        assert_eq!(
+            config.appearance.tabs_orientation,
+            TabsOrientation::Vertical
+        );
+        assert_eq!(
+            Config::default().appearance.tabs_orientation,
+            TabsOrientation::Vertical
+        );
+    }
+
+    #[test]
     fn tabs_orientation_config_is_preserved() {
         let content = r#"
 [appearance]
@@ -1062,6 +1080,20 @@ toggle_vertical_tabs = "secondary-b"
         assert!(serialized.contains("tabs_orientation = \"vertical\""));
         assert!(!serialized.contains("toggle_vertical_tabs"));
         assert!(serialized.contains("toggle_left_panel"));
+    }
+
+    #[test]
+    fn explicit_horizontal_tabs_orientation_is_preserved() {
+        let content = r#"
+[appearance]
+tabs_orientation = "horizontal"
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+
+        assert_eq!(
+            config.appearance.tabs_orientation,
+            TabsOrientation::Horizontal
+        );
     }
 
     #[test]

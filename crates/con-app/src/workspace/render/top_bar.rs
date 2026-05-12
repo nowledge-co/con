@@ -345,15 +345,15 @@ impl ConWorkspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .size(px(16.0))
+                    .size(px(17.0))
                     .flex_shrink_0()
-                    .rounded(px(4.0))
+                    .rounded(px(5.0))
                     .cursor_pointer()
                     // Windows: without `.occlude()` the parent top_bar's
                     // `WindowControlArea::Drag` hit-test swallows the
                     // click (returns HTCAPTION → window drag starts).
                     .occlude()
-                    .hover(|s| s.bg(theme.muted.opacity(0.15)));
+                    .hover(|s| s.bg(theme.muted.opacity(0.12)));
                 if !is_active {
                     close_el = close_el.invisible().group_hover("tab", |s| s.visible());
                 }
@@ -368,7 +368,7 @@ impl ConWorkspace {
                         svg()
                             .path("phosphor/x.svg")
                             .size(px(10.0))
-                            .text_color(theme.muted_foreground.opacity(0.5)),
+                            .text_color(theme.muted_foreground.opacity(0.42)),
                     );
 
                 // Drop indicator: 2px vertical line on the left edge of
@@ -417,7 +417,7 @@ impl ConWorkspace {
                     .flex()
                     .flex_1()
                     .min_w_0()
-                    .max_w(px(200.0))
+                    .max_w(px(220.0))
                     .items_center()
                     .px(px(10.0))
                     .h(px(30.0))
@@ -632,7 +632,12 @@ impl ConWorkspace {
                     );
                 }
 
-                let mut tab_content = div().flex().items_center().gap(px(5.0)).w_full().min_w_0();
+                let mut tab_content = div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .size_full()
+                    .min_w_0();
 
                 if needs_attention {
                     tab_content = tab_content.child(
@@ -644,43 +649,50 @@ impl ConWorkspace {
                     );
                 }
 
-                // Tab active indicator dot — only shown on the active tab.
-                // Has accent color → use that color; no color → green dot.
-                if is_active {
-                    let dot_color = if let Some(color) = tab_color {
-                        crate::tab_colors::tab_accent_color_hsla(color, cx)
-                    } else {
-                        // Green active indicator
-                        crate::tab_colors::active_tab_indicator_color()
-                    };
-                    tab_content = tab_content.child(
-                        div()
-                            .size(px(7.0))
-                            .rounded_full()
-                            .flex_shrink_0()
-                            .bg(dot_color),
-                    );
-                }
-
-                tab_content = tab_content.child(
-                    svg()
-                        .path("phosphor/terminal.svg")
-                        .size(px(12.0))
-                        .flex_shrink_0()
-                        .text_color(if is_active {
-                            theme.foreground.opacity(0.74)
-                        } else {
-                            theme.muted_foreground.opacity(0.56)
-                        }),
-                );
-
                 tab_content = tab_content.child(
                     div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
                         .flex_1()
-                        .min_w_0()
+                        .min_w(px(0.0))
                         .overflow_x_hidden()
                         .whitespace_nowrap()
-                        .child(display_title),
+                        .child(
+                            svg()
+                                .path(tab_icon)
+                                .size(px(12.5))
+                                .flex_shrink_0()
+                                .text_color(if is_active {
+                                    tab_color
+                                        .map(|color| {
+                                            crate::tab_colors::tab_accent_color_hsla(color, cx)
+                                        })
+                                        .unwrap_or_else(|| theme.foreground.opacity(0.68))
+                                } else {
+                                    theme.muted_foreground.opacity(0.38)
+                                }),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .overflow_x_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .font_family(theme.mono_font_family.clone())
+                                .line_height(px(14.0))
+                                .font_weight(if is_active {
+                                    FontWeight::SEMIBOLD
+                                } else {
+                                    FontWeight::MEDIUM
+                                })
+                                .text_color(if is_active {
+                                    theme.foreground.opacity(0.88)
+                                } else {
+                                    theme.muted_foreground.opacity(0.62)
+                                })
+                                .child(display_title),
+                        ),
                 );
 
                 tab_content = tab_content.child(close_button);

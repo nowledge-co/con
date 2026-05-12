@@ -179,7 +179,7 @@ impl ConWorkspace {
         input_bar_progress: f32,
         ui_surface_opacity: f32,
         elevated_ui_surface_opacity: f32,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         if self.pane_scope_picker_open
@@ -205,11 +205,11 @@ impl ConWorkspace {
                     .enumerate()
                     .map(|(ix, pane)| (pane.id, ix))
                     .collect();
-                let popup_available_width = (terminal_content_width - 40.0).max(280.0);
+                let popup_available_width = (terminal_content_width - 48.0).max(300.0);
                 let popup_width = px((terminal_content_width * 0.38)
-                    .clamp(360.0, 520.0)
+                    .clamp(380.0, 540.0)
                     .min(popup_available_width));
-                let popup_bottom = px(58.0 + (43.0 * input_bar_progress.max(0.01)));
+                let popup_bottom = px(62.0 + (43.0 * input_bar_progress.max(0.01)));
                 let preview_content = self.render_scope_node(
                     &layout,
                     &pane_map,
@@ -220,46 +220,40 @@ impl ConWorkspace {
                 );
                 let theme = cx.theme();
                 let popup_surface = if theme.is_dark() {
-                    theme.background.opacity(elevated_ui_surface_opacity)
+                    theme
+                        .background
+                        .opacity(elevated_ui_surface_opacity.max(0.96))
                 } else {
-                    theme.background.opacity(0.98)
+                    theme.title_bar.opacity(0.99)
                 };
                 let preview_surface = if theme.is_dark() {
                     theme.title_bar.opacity(ui_surface_opacity * 0.98)
                 } else {
-                    theme.muted.opacity(0.055)
+                    theme.foreground.opacity(0.038)
                 };
                 let segmented_surface = if theme.is_dark() {
                     theme.title_bar.opacity(ui_surface_opacity * 0.96)
                 } else {
-                    theme.muted.opacity(0.065)
+                    theme.foreground.opacity(0.035)
                 };
-                let scope_frame_inset = px(4.0);
-                let scope_frame_radius = px(10.0);
-                let pane_picker_binding =
-                    crate::keycaps::first_action_keystroke(&TogglePaneScopePicker, window)
-                        .map(|stroke| {
-                            crate::keycaps::keycaps_for_stroke(&stroke, theme).into_any_element()
-                        })
-                        .unwrap_or_else(|| {
-                            crate::keycaps::keycaps_for_binding("secondary-'", theme)
-                        });
-                let local_keycap = |label: &'static str| {
+                let scope_frame_inset = px(3.0);
+                let scope_frame_radius = px(9.0);
+                let local_keycap = |label: String| {
                     let wide = label.chars().count() > 1;
                     div()
-                        .h(px(19.0))
-                        .min_w(if wide { px(32.0) } else { px(19.0) })
+                        .h(px(17.0))
+                        .min_w(if wide { px(28.0) } else { px(17.0) })
                         .px(px(if wide { 6.0 } else { 0.0 }))
-                        .rounded(px(5.0))
+                        .rounded(px(4.5))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .bg(theme.muted.opacity(0.14))
-                        .text_size(px(10.5))
+                        .bg(theme.foreground.opacity(0.048))
+                        .text_size(px(9.5))
                         .line_height(px(11.0))
                         .font_family(theme.mono_font_family.clone())
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.foreground.opacity(0.74))
+                        .text_color(theme.foreground.opacity(0.66))
                         .child(label)
                 };
 
@@ -267,7 +261,7 @@ impl ConWorkspace {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .gap(px(12.0))
+                    .gap(px(14.0))
                     .child(
                         div().flex().items_center().gap(px(6.0)).child(
                             div()
@@ -276,18 +270,19 @@ impl ConWorkspace {
                                 .gap(px(2.0))
                                 .child(
                                     div()
-                                        .text_size(px(12.0))
+                                        .text_size(px(12.5))
                                         .font_family(theme.mono_font_family.clone())
                                         .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(theme.foreground.opacity(0.86))
                                         .child("Pane scope"),
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(10.5))
+                                        .text_size(px(10.0))
                                         .line_height(px(13.0))
                                         .font_family(theme.mono_font_family.clone())
-                                        .text_color(theme.muted_foreground.opacity(0.58))
-                                        .child("Choose where command-mode input is sent"),
+                                        .text_color(theme.muted_foreground.opacity(0.52))
+                                        .child("Choose where input is sent"),
                                 ),
                         ),
                     )
@@ -295,62 +290,80 @@ impl ConWorkspace {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(4.0))
-                            .child(pane_picker_binding)
+                            .gap(px(7.0))
+                            .px(px(6.0))
+                            .py(px(4.0))
+                            .rounded(px(8.0))
+                            .bg(theme.foreground.opacity(0.026))
                             .child(
                                 div()
-                                    .text_size(px(10.0))
+                                    .text_size(px(9.5))
+                                    .line_height(px(11.0))
                                     .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.58))
-                                    .child("then"),
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.muted_foreground.opacity(0.56))
+                                    .child("Toggle"),
                             )
-                            .child(local_keycap("1-9"))
-                            .child(local_keycap("A"))
-                            .child(local_keycap("F")),
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(3.0))
+                                    .child(local_keycap("1-9".to_string()))
+                                    .child(local_keycap("A".to_string()))
+                                    .child(local_keycap("F".to_string())),
+                            ),
                     );
 
-                let preset_segment = |id: &'static str, label: &'static str, active: bool| {
-                    div().flex_1().child(
-                        div()
-                            .id(SharedString::from(id))
-                            .h(px(24.0))
-                            .w_full()
-                            .rounded(px(7.0))
-                            .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .bg(if active {
-                                theme.primary.opacity(0.14)
-                            } else {
-                                theme.transparent
-                            })
-                            .hover(|s| {
-                                s.bg(if active {
-                                    theme.primary.opacity(0.16)
+                let preset_segment =
+                    |id: &'static str, icon: &'static str, label: &'static str, active: bool| {
+                        div().flex_1().child(
+                            div()
+                                .id(SharedString::from(id))
+                                .h(px(23.0))
+                                .w_full()
+                                .rounded(px(6.0))
+                                .cursor_pointer()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .gap(px(6.0))
+                                .bg(if active {
+                                    theme.primary.opacity(0.11)
                                 } else {
-                                    theme.muted.opacity(0.05)
+                                    theme.transparent
                                 })
-                            })
-                            .child(
-                                div()
-                                    .text_size(px(11.0))
-                                    .line_height(px(13.0))
-                                    .font_family(theme.mono_font_family.clone())
-                                    .font_weight(if active {
-                                        FontWeight::MEDIUM
+                                .hover(|s| {
+                                    s.bg(if active {
+                                        theme.primary.opacity(0.14)
                                     } else {
-                                        FontWeight::NORMAL
+                                        theme.foreground.opacity(0.045)
                                     })
-                                    .text_color(if active {
-                                        theme.primary
-                                    } else {
-                                        theme.muted_foreground.opacity(0.72)
-                                    })
-                                    .child(label),
-                            ),
-                    )
-                };
+                                })
+                                .child(svg().path(icon).size(px(12.0)).text_color(if active {
+                                    theme.primary.opacity(0.88)
+                                } else {
+                                    theme.muted_foreground.opacity(0.48)
+                                }))
+                                .child(
+                                    div()
+                                        .text_size(px(10.8))
+                                        .line_height(px(13.0))
+                                        .font_family(theme.mono_font_family.clone())
+                                        .font_weight(if active {
+                                            FontWeight::MEDIUM
+                                        } else {
+                                            FontWeight::NORMAL
+                                        })
+                                        .text_color(if active {
+                                            theme.primary.opacity(0.94)
+                                        } else {
+                                            theme.muted_foreground.opacity(0.68)
+                                        })
+                                        .child(label),
+                                ),
+                        )
+                    };
 
                 let presets_row = div()
                     .flex()
@@ -359,7 +372,7 @@ impl ConWorkspace {
                     .child(
                         div()
                             .w_full()
-                            .h(px(32.0))
+                            .h(px(31.0))
                             .p(scope_frame_inset)
                             .rounded(scope_frame_radius)
                             .bg(segmented_surface)
@@ -367,38 +380,48 @@ impl ConWorkspace {
                             .items_center()
                             .gap(px(2.0))
                             .child(
-                                preset_segment("scope-all", "All panes", is_broadcast)
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(
-                                            |this: &mut ConWorkspace,
-                                             _: &MouseDownEvent,
-                                             window,
-                                             cx| {
-                                                this.set_scope_broadcast(window, cx);
-                                            },
-                                        ),
+                                preset_segment(
+                                    "scope-all",
+                                    "phosphor/squares-four.svg",
+                                    "All panes",
+                                    is_broadcast,
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(
+                                        |this: &mut ConWorkspace,
+                                         _: &MouseDownEvent,
+                                         window,
+                                         cx| {
+                                            this.set_scope_broadcast(window, cx);
+                                        },
                                     ),
+                                ),
                             )
                             .child(
-                                preset_segment("scope-focused", "Focused", is_focused)
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(
-                                            |this: &mut ConWorkspace,
-                                             _: &MouseDownEvent,
-                                             window,
-                                             cx| {
-                                                this.set_scope_focused(window, cx);
-                                            },
-                                        ),
+                                preset_segment(
+                                    "scope-focused",
+                                    "phosphor/target.svg",
+                                    "Focused",
+                                    is_focused,
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(
+                                        |this: &mut ConWorkspace,
+                                         _: &MouseDownEvent,
+                                         window,
+                                         cx| {
+                                            this.set_scope_focused(window, cx);
+                                        },
                                     ),
+                                ),
                             ),
                     )
                     .child(div().flex_1());
 
                 let preview = div()
-                    .h(px(224.0))
+                    .h(px(214.0))
                     .w_full()
                     .rounded(scope_frame_radius)
                     .p(scope_frame_inset)
@@ -411,12 +434,12 @@ impl ConWorkspace {
                         .left(px(terminal_content_left + 20.0))
                         .bottom(popup_bottom)
                         .w(popup_width)
-                        .rounded(px(14.0))
+                        .rounded(px(12.0))
                         .bg(popup_surface)
-                        .p(px(12.0))
+                        .p(px(11.0))
                         .flex()
                         .flex_col()
-                        .gap(px(12.0))
+                        .gap(px(10.0))
                         .child(presets)
                         .child(presets_row)
                         .child(preview)

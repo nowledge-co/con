@@ -48,6 +48,23 @@ impl ConWorkspace {
         changed
     }
 
+    fn leading_panel_width_for_pane_resize(&self, cx: &mut Context<Self>) -> f32 {
+        if !self.left_panel_open {
+            return 0.0;
+        }
+
+        let sidebar = self.sidebar.read(cx);
+        if self.vertical_tabs_enabled() {
+            if self.sidebar_tools_open {
+                sidebar.panel_width()
+            } else {
+                sidebar.rendered_width()
+            }
+        } else {
+            sidebar.panel_width()
+        }
+    }
+
     fn handle_active_resize_mouse_move(
         &mut self,
         event: &MouseMoveEvent,
@@ -107,16 +124,7 @@ impl ConWorkspace {
         } else {
             0.0
         };
-        let leading_panel_w = if self.left_panel_open {
-            let sidebar = self.sidebar.read(cx);
-            if self.vertical_tabs_enabled() {
-                sidebar.rendered_width()
-            } else {
-                sidebar.panel_width()
-            }
-        } else {
-            0.0
-        };
+        let leading_panel_w = self.leading_panel_width_for_pane_resize(cx);
 
         let pane_tree = &mut self.tabs[self.active_tab].pane_tree;
         if !pane_tree.is_dragging() {
@@ -483,12 +491,31 @@ impl Render for ConWorkspace {
         let terminal_content_width =
             (window_width - terminal_content_left - agent_panel_outer_width).max(0.0);
         let pane_tree_rendered = {
-            let pending = self.pending_drag_init.clone();
-            let begin_drag_cb = move |split_id: usize, start_pos: f32| {
-                if let Ok(mut guard) = pending.lock() {
-                    *guard = Some((split_id, start_pos));
-                }
-            };
+            let workspace = cx.weak_entity();
+            let begin_drag_cb =
+                move |split_id: usize, start_pos: f32, _window: &mut Window, cx: &mut App| {
+                    if let Some(workspace) = workspace.upgrade() {
+                        workspace.update(cx, |workspace, cx| {
+                            if workspace.active_tab >= workspace.tabs.len() {
+                                return;
+                            }
+                            let tab_idx = workspace.active_tab;
+                            let start_pos =
+                                match workspace.tabs[tab_idx].pane_tree.split_direction(split_id) {
+                                    Some(SplitDirection::Horizontal) => {
+                                        start_pos
+                                            - workspace.leading_panel_width_for_pane_resize(cx)
+                                    }
+                                    Some(SplitDirection::Vertical) | None => start_pos,
+                                };
+                            workspace.release_active_terminal_mouse_selection(cx);
+                            workspace.tabs[tab_idx]
+                                .pane_tree
+                                .begin_drag(split_id, start_pos);
+                            cx.notify();
+                        });
+                    }
+                };
             let workspace = cx.weak_entity();
             let focus_surface_cb = move |surface_id: usize, window: &mut Window, cx: &mut App| {
                 if let Some(workspace) = workspace.upgrade() {
@@ -551,6 +578,7 @@ impl Render for ConWorkspace {
                 toggle_zoom_cb,
                 self.surface_rename.clone(),
                 pane_divider_color,
+                chrome_transition_seam_color,
                 tab_accent_color,
                 self.tab_accent_inactive_alpha,
                 self.hide_pane_title_bar,
@@ -705,7 +733,9 @@ impl Render for ConWorkspace {
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .bg(theme.transparent)
+            .when(cfg!(not(target_os = "macos")), |terminal_area| {
+                terminal_area.bg(portable_terminal_backdrop_color)
+            })
             .child(pane_content);
 
         #[cfg(not(target_os = "macos"))]
@@ -971,7 +1001,6 @@ impl Render for ConWorkspace {
             // Pane drag-to-resize: capture mouse move/up on root so it works
             // even when cursor is over terminal views (which capture mouse events).
             .on_mouse_move({
-                let pending = self.pending_drag_init.clone();
                 cx.listener(move |this, event: &MouseMoveEvent, win, cx| {
                     if this.handle_active_resize_mouse_move(event, win, cx) {
                         return;
@@ -1029,14 +1058,6 @@ impl Render for ConWorkspace {
 
                     let top_bar_height = this.current_top_bar_height();
                     let input_bar_height = if this.input_bar_visible { 42.0 } else { 0.0 };
-                    // Consume a pending drag initiation written by divider on_mouse_down
-                    if let Ok(mut guard) = pending.lock() {
-                        if let Some((split_id, start_pos)) = guard.take() {
-                            this.release_active_terminal_mouse_selection(cx);
-                            let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
-                            pane_tree.begin_drag(split_id, start_pos);
-                        }
-                    }
 
                     // Compute layout-dependent inputs *before* re-borrowing
                     // `this` mutably for the pane tree, otherwise we
@@ -1051,16 +1072,7 @@ impl Render for ConWorkspace {
                     } else {
                         0.0
                     };
-                    let leading_panel_w = if this.left_panel_open {
-                        let sidebar = this.sidebar.read(cx);
-                        if this.vertical_tabs_enabled() {
-                            sidebar.rendered_width()
-                        } else {
-                            sidebar.panel_width()
-                        }
-                    } else {
-                        0.0
-                    };
+                    let leading_panel_w = this.leading_panel_width_for_pane_resize(cx);
 
                     let pane_tree = &mut this.tabs[this.active_tab].pane_tree;
 

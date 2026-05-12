@@ -33,6 +33,24 @@ fn key_label(key: &str) -> String {
     }
 }
 
+pub(crate) fn keycap_labels_for_stroke(stroke: &Keystroke) -> Vec<String> {
+    let mut parts = Vec::new();
+    if stroke.modifiers.control {
+        parts.push(control_label().to_string());
+    }
+    if stroke.modifiers.alt {
+        parts.push(alt_label().to_string());
+    }
+    if stroke.modifiers.shift {
+        parts.push(shift_label().to_string());
+    }
+    if stroke.modifiers.platform {
+        parts.push(platform_label().to_string());
+    }
+    parts.push(key_label(&stroke.key));
+    parts
+}
+
 #[cfg(target_os = "macos")]
 fn control_label() -> &'static str {
     "⌃"
@@ -113,27 +131,16 @@ fn keycap(label: String, theme: &gpui_component::Theme) -> Div {
 }
 
 pub(crate) fn keycaps_for_stroke(stroke: &Keystroke, theme: &gpui_component::Theme) -> Div {
-    let mut parts = Vec::new();
-    if stroke.modifiers.control {
-        parts.push(control_label().to_string());
-    }
-    if stroke.modifiers.alt {
-        parts.push(alt_label().to_string());
-    }
-    if stroke.modifiers.shift {
-        parts.push(shift_label().to_string());
-    }
-    if stroke.modifiers.platform {
-        parts.push(platform_label().to_string());
-    }
-    parts.push(key_label(&stroke.key));
-
     div()
         .flex()
         .items_center()
         .justify_end()
         .gap(px(3.0))
-        .children(parts.into_iter().map(|part| keycap(part, theme)))
+        .children(
+            keycap_labels_for_stroke(stroke)
+                .into_iter()
+                .map(|part| keycap(part, theme)),
+        )
 }
 
 pub(crate) fn keycaps_for_binding(binding: &str, theme: &gpui_component::Theme) -> AnyElement {

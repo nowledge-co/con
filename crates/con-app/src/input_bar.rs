@@ -48,9 +48,9 @@ impl InputMode {
 
     fn icon(self) -> &'static str {
         match self {
-            Self::Smart => "phosphor/magic-wand-duotone.svg",
+            Self::Smart => "phosphor/magic-wand.svg",
             Self::Shell => "phosphor/terminal.svg",
-            Self::Agent => "phosphor/oven-duotone.svg",
+            Self::Agent => "phosphor/sparkle.svg",
         }
     }
 
@@ -230,14 +230,14 @@ impl InputBar {
 
     fn pane_scope_summary(&self) -> (String, &'static str) {
         match self.pane_scope_mode {
-            PaneScopeMode::Broadcast => ("All panes".to_string(), "phosphor/broadcast-duotone.svg"),
-            PaneScopeMode::Focused => ("Focused".to_string(), "phosphor/cursor-click.svg"),
+            PaneScopeMode::Broadcast => ("All panes".to_string(), "phosphor/squares-four.svg"),
+            PaneScopeMode::Focused => ("Focused".to_string(), "phosphor/target.svg"),
             PaneScopeMode::Custom => {
                 let targets = self.effective_target_ids();
                 if targets.len() > 1 {
                     (
                         format!("{} panes", targets.len()),
-                        "phosphor/squares-four.svg",
+                        "phosphor/selection-plus.svg",
                     )
                 } else {
                     let title = self
@@ -246,7 +246,7 @@ impl InputBar {
                         .find(|pane| pane.id == targets[0])
                         .map(Self::pane_scope_title)
                         .unwrap_or_else(|| "Focused".to_string());
-                    (title, "phosphor/squares-four.svg")
+                    (title, "phosphor/target.svg")
                 }
             }
         }
@@ -1177,9 +1177,9 @@ impl Render for InputBar {
         let input_value = input_state.read(cx).value().to_string();
         let input_cursor = input_state.read(cx).cursor();
         let mono_scale = mono_density_scale(theme);
-        let control_size = mono_space_px(theme, 24.0);
-        let mode_icon_size = mono_space_px(theme, 14.0);
-        let compact_icon_size = mono_space_px(theme, 11.0);
+        let control_size = mono_space_px(theme, 28.0);
+        let mode_icon_size = mono_space_px(theme, 15.0);
+        let compact_icon_size = mono_space_px(theme, 14.0);
 
         let mode_tint = self.mode.tint(cx);
 
@@ -1190,10 +1190,10 @@ impl Render for InputBar {
             .items_center()
             .justify_center()
             .size(control_size)
-            .rounded(px(6.0 * mono_scale))
+            .rounded(px(7.0 * mono_scale))
             .cursor_pointer()
-            .bg(mode_tint.opacity(0.08))
-            .hover(|s| s.bg(mode_tint.opacity(0.14)))
+            .bg(mode_tint.opacity(0.075))
+            .hover(|s| s.bg(mode_tint.opacity(0.12)))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -1215,12 +1215,13 @@ impl Render for InputBar {
         let all_selected = self.all_panes_selected();
         let pane_row = if has_multiple_panes && self.mode != InputMode::Agent {
             let (scope_label, scope_icon) = self.pane_scope_summary();
-            let scope_tint =
-                if all_selected || matches!(self.pane_scope_mode, PaneScopeMode::Custom) {
-                    theme.primary
-                } else {
-                    theme.muted_foreground.opacity(0.8)
-                };
+            let scope_is_expanded =
+                all_selected || matches!(self.pane_scope_mode, PaneScopeMode::Custom);
+            let scope_tint = if scope_is_expanded {
+                theme.primary.opacity(0.86)
+            } else {
+                theme.muted_foreground.opacity(0.78)
+            };
             Some(
                 div()
                     .flex()
@@ -1229,31 +1230,23 @@ impl Render for InputBar {
                         div()
                             .id("pane-scope")
                             .h(control_size)
-                            .px(px(8.0 * mono_scale))
-                            .rounded(px(7.0 * mono_scale))
+                            .px(px(11.0 * mono_scale))
+                            .rounded(px(8.0 * mono_scale))
                             .cursor_pointer()
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
-                            .bg(
-                                if all_selected
-                                    || matches!(self.pane_scope_mode, PaneScopeMode::Custom)
-                                {
-                                    theme.primary.opacity(0.08)
-                                } else {
-                                    theme.title_bar.opacity(self.ui_opacity * 0.94)
-                                },
-                            )
+                            .gap(px(8.0 * mono_scale))
+                            .bg(if scope_is_expanded {
+                                theme.primary.opacity(0.050)
+                            } else {
+                                theme.foreground.opacity(0.045)
+                            })
                             .hover(|s| {
-                                s.bg(
-                                    if all_selected
-                                        || matches!(self.pane_scope_mode, PaneScopeMode::Custom)
-                                    {
-                                        theme.primary.opacity(0.11)
-                                    } else {
-                                        theme.title_bar.opacity(self.ui_opacity)
-                                    },
-                                )
+                                s.bg(if scope_is_expanded {
+                                    theme.primary.opacity(0.082)
+                                } else {
+                                    theme.foreground.opacity(0.065)
+                                })
                             })
                             .on_mouse_down(
                                 MouseButton::Left,
@@ -1271,19 +1264,19 @@ impl Render for InputBar {
                             )
                             .child(
                                 div()
-                                    .text_size(mono_px(theme, 10.5))
-                                    .line_height(mono_px(theme, 12.0))
+                                    .text_size(mono_px(theme, 11.0))
+                                    .line_height(mono_px(theme, 14.0))
                                     .font_family(theme.mono_font_family.clone())
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(
-                                        if all_selected
-                                            || matches!(self.pane_scope_mode, PaneScopeMode::Custom)
-                                        {
-                                            theme.primary
-                                        } else {
-                                            theme.muted_foreground.opacity(0.76)
-                                        },
-                                    )
+                                    .text_color(if scope_is_expanded {
+                                        theme.primary.opacity(0.92)
+                                    } else {
+                                        theme.muted_foreground.opacity(0.76)
+                                    })
+                                    .max_w(px(128.0 * mono_scale))
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
                                     .child(scope_label),
                             ),
                     )
@@ -1300,19 +1293,19 @@ impl Render for InputBar {
             .items_center()
             .justify_center()
             .size(control_size)
-            .rounded(px(12.0 * mono_scale))
+            .rounded(px(8.0 * mono_scale))
             .cursor_pointer()
             .flex_shrink_0()
             .bg(if has_text {
                 theme.primary
             } else {
-                theme.muted.opacity(0.12)
+                theme.foreground.opacity(0.055)
             })
             .hover(|s| {
                 if has_text {
                     s.bg(theme.primary_hover)
                 } else {
-                    s.bg(theme.muted.opacity(0.18))
+                    s.bg(theme.foreground.opacity(0.075))
                 }
             })
             .on_mouse_down(
@@ -1324,11 +1317,11 @@ impl Render for InputBar {
             .child(
                 svg()
                     .path("phosphor/arrow-up.svg")
-                    .size(mono_space_px(theme, 12.0))
+                    .size(mono_space_px(theme, 13.0))
                     .text_color(if has_text {
                         theme.primary_foreground
                     } else {
-                        theme.muted_foreground.opacity(0.4)
+                        theme.muted_foreground.opacity(0.44)
                     }),
             );
 
@@ -1601,12 +1594,12 @@ impl Render for InputBar {
             .child(
                 div()
                     .px(px(12.0 * mono_scale))
-                    .py(px(7.0 * mono_scale))
-                    .min_h(px(42.0 * mono_scale))
+                    .py(px(6.0 * mono_scale))
+                    .min_h(px(44.0 * mono_scale))
                     .flex()
                     .items_center()
-                    .h(px(30.0 * mono_scale))
-                    .gap(px(8.0 * mono_scale))
+                    .h(px(32.0 * mono_scale))
+                    .gap(px(9.0 * mono_scale))
                     .child(mode_prefix)
                     .children(pane_row)
                     .child(div().flex_1().min_w_0().child(input_field))

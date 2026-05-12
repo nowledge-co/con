@@ -223,17 +223,20 @@ impl ConWorkspace {
             let panel_for_close = panel.clone();
             let workspace_for_close = workspace.clone();
             let main_window_for_close = main_window;
-            settings_window.on_window_should_close(cx, move |_window, cx| {
-                let _ = panel_for_close.update(cx, |panel, cx| {
-                    panel.revert_standalone_preview(cx);
-                });
-                let _ = main_window_for_close.update(cx, |_, _window, cx| {
-                    let _ = workspace_for_close.update(cx, |workspace, _cx| {
-                        workspace.settings_window = None;
-                        workspace.settings_window_panel = None;
+            settings_window.on_window_should_close(cx, move |window, cx| {
+                let should_close = panel_for_close
+                    .update(cx, |panel, cx| panel.request_standalone_close(window, cx));
+
+                if should_close {
+                    let _ = main_window_for_close.update(cx, |_, _window, cx| {
+                        let _ = workspace_for_close.update(cx, |workspace, _cx| {
+                            workspace.settings_window = None;
+                            workspace.settings_window_panel = None;
+                        });
                     });
-                });
-                true
+                }
+
+                should_close
             });
 
             let view = cx.new(|_| SettingsWindowView {

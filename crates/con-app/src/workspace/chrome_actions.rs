@@ -576,16 +576,16 @@ impl ConWorkspace {
         let base_tile_surface = if theme.is_dark() {
             theme
                 .title_bar
-                .opacity(if is_focused { 0.84 } else { 0.72 })
+                .opacity(if is_focused { 0.80 } else { 0.70 })
         } else {
             theme
-                .background
-                .opacity(if is_focused { 0.96 } else { 0.90 })
+                .foreground
+                .opacity(if is_focused { 0.044 } else { 0.034 })
         };
         let hover_tile_surface = if theme.is_dark() {
-            theme.title_bar.opacity(0.90)
+            theme.title_bar.opacity(0.84)
         } else {
-            theme.background.opacity(0.98)
+            theme.foreground.opacity(0.052)
         };
 
         div()
@@ -595,18 +595,18 @@ impl ConWorkspace {
             .min_w(px(0.0))
             .min_h(px(0.0))
             .overflow_hidden()
-            .px(px(11.0))
-            .py(px(10.0))
-            .rounded(px(10.0))
+            .px(px(10.0))
+            .py(px(9.0))
+            .rounded(px(9.0))
             .cursor_pointer()
             .bg(if is_selected {
-                theme.primary.opacity(0.12)
+                theme.primary.opacity(0.085)
             } else {
                 base_tile_surface
             })
             .hover(|s| {
                 s.bg(if is_selected {
-                    theme.primary.opacity(0.16)
+                    theme.primary.opacity(0.12)
                 } else {
                     hover_tile_surface
                 })
@@ -634,10 +634,10 @@ impl ConWorkspace {
                                     .flex()
                                     .items_center()
                                     .gap(px(6.0))
-                                    .child(div().size(px(6.0)).rounded_full().bg(status_color))
+                                    .child(div().size(px(5.0)).rounded_full().bg(status_color))
                                     .child(
                                         div()
-                                            .text_size(px(11.5))
+                                            .text_size(px(11.2))
                                             .line_height(px(14.0))
                                             .font_family(theme.mono_font_family.clone())
                                             .font_weight(FontWeight::MEDIUM)
@@ -656,8 +656,8 @@ impl ConWorkspace {
                             )
                             .children(status_text.map(|text| {
                                 div()
-                                    .text_size(px(10.5))
-                                    .line_height(px(13.0))
+                                    .text_size(px(10.0))
+                                    .line_height(px(12.0))
                                     .font_family(theme.mono_font_family.clone())
                                     .text_color(theme.muted_foreground.opacity(0.62))
                                     .min_w_0()
@@ -670,17 +670,17 @@ impl ConWorkspace {
                     .child(
                         div().flex().items_center().gap(px(4.0)).child(
                             div()
-                                .size(px(20.0))
+                                .size(px(18.0))
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .rounded(px(6.0))
+                                .rounded(px(5.0))
                                 .bg(if is_selected {
-                                    theme.primary.opacity(0.13)
+                                    theme.primary.opacity(0.10)
                                 } else {
-                                    theme.title_bar_border.opacity(0.18)
+                                    theme.foreground.opacity(0.055)
                                 })
-                                .text_size(px(10.0))
+                                .text_size(px(9.8))
                                 .font_family(theme.mono_font_family.clone())
                                 .text_color(if is_selected {
                                     theme.primary

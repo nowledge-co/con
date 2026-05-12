@@ -1037,12 +1037,22 @@ impl PaneTree {
         Self::find_split_ratio(&self.root, drag.split_id).map(|(_, dir)| dir)
     }
 
+    /// Returns the split direction for a split id.
+    pub fn split_direction(&self, split_id: SplitId) -> Option<SplitDirection> {
+        Self::find_split_ratio(&self.root, split_id).map(|(_, dir)| dir)
+    }
+
+    /// Returns the currently-dragged split, if a divider drag is active.
+    pub fn dragging_split_id(&self) -> Option<SplitId> {
+        self.dragging.as_ref().map(|drag| drag.split_id)
+    }
+
     /// Render the pane tree as a GPUI element.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
         session_id: u64,
-        begin_drag_cb: impl Fn(SplitId, f32) + 'static,
+        begin_drag_cb: impl Fn(SplitId, f32, &mut Window, &mut App) + 'static,
         focus_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
         focus_pane_cb: impl Fn(PaneId, &mut Window, &mut App) + 'static,
         rename_surface_cb: impl Fn(SurfaceId, &mut Window, &mut App) + 'static,
@@ -1051,6 +1061,7 @@ impl PaneTree {
         toggle_zoom_cb: impl Fn(PaneId, &mut Window, &mut App) + 'static,
         rename_editor: Option<SurfaceRenameEditor>,
         divider_color: Hsla,
+        resize_cover_color: Hsla,
         tab_accent_color: Option<con_core::session::TabAccentColor>,
         tab_accent_inactive_alpha: f32,
         hide_pane_title_bar: bool,
@@ -1065,6 +1076,7 @@ impl PaneTree {
         let has_splits = self.pane_count() > 1;
         let focused_pane_id = self.focused_pane_id;
         let zoomed_pane_id = self.zoomed_pane_id;
+        let active_drag_split_id = self.dragging_split_id();
 
         if let Some(zoomed_id) = zoomed_pane_id {
             if let Some(zoomed) = Self::render_zoomed_leaf(
@@ -1103,6 +1115,8 @@ impl PaneTree {
             toggle_zoom_cb,
             rename_editor,
             divider_color,
+            resize_cover_color,
+            active_drag_split_id,
             has_splits,
             zoomed_pane_id,
             session_id,
@@ -1855,7 +1869,7 @@ impl PaneTree {
         node: &PaneNode,
         focused_id: PaneId,
         has_splits: bool,
-        begin_drag_cb: std::sync::Arc<dyn Fn(SplitId, f32) + 'static>,
+        begin_drag_cb: std::sync::Arc<dyn Fn(SplitId, f32, &mut Window, &mut App) + 'static>,
         focus_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
         focus_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         rename_surface_cb: std::sync::Arc<dyn Fn(SurfaceId, &mut Window, &mut App) + 'static>,
@@ -1864,6 +1878,8 @@ impl PaneTree {
         toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         rename_editor: Option<SurfaceRenameEditor>,
         divider_color: Hsla,
+        resize_cover_color: Hsla,
+        active_drag_split_id: Option<SplitId>,
         tree_has_splits: bool,
         zoomed_pane_id: Option<PaneId>,
         session_id: u64,
@@ -1936,6 +1952,8 @@ impl PaneTree {
                     toggle_zoom_cb_first,
                     rename_editor_first,
                     divider_color,
+                    resize_cover_color,
+                    active_drag_split_id,
                     tree_has_splits,
                     zoomed_pane_id,
                     session_id,
@@ -1957,6 +1975,8 @@ impl PaneTree {
                     toggle_zoom_cb_second,
                     rename_editor_second,
                     divider_color,
+                    resize_cover_color,
+                    active_drag_split_id,
                     tree_has_splits,
                     zoomed_pane_id,
                     session_id,
@@ -1967,6 +1987,7 @@ impl PaneTree {
                 );
 
                 let divider_id = ElementId::Name(format!("divider-{}", sid).into());
+                let is_active_drag_divider = active_drag_split_id == Some(sid);
                 let divider = match dir {
                     SplitDirection::Horizontal => {
                         let handle = div()
@@ -1976,7 +1997,11 @@ impl PaneTree {
                             .left(px(-2.0))
                             .w(px(5.0))
                             .cursor_col_resize()
-                            .bg(gpui::transparent_black());
+                            .bg(if is_active_drag_divider {
+                                resize_cover_color
+                            } else {
+                                gpui::transparent_black()
+                            });
                         div()
                             .id(divider_id)
                             .relative()
@@ -1986,8 +2011,10 @@ impl PaneTree {
                             .bg(divider_color)
                             .child(handle.on_mouse_down(
                                 MouseButton::Left,
-                                move |event: &MouseDownEvent, _window, _cx| {
-                                    cb_divider(sid, f32::from(event.position.x));
+                                move |event: &MouseDownEvent, window, cx| {
+                                    cb_divider(sid, f32::from(event.position.x), window, cx);
+                                    window.prevent_default();
+                                    cx.stop_propagation();
                                 },
                             ))
                     }
@@ -1999,7 +2026,11 @@ impl PaneTree {
                             .top(px(-2.0))
                             .h(px(5.0))
                             .cursor_row_resize()
-                            .bg(gpui::transparent_black());
+                            .bg(if is_active_drag_divider {
+                                resize_cover_color
+                            } else {
+                                gpui::transparent_black()
+                            });
                         div()
                             .id(divider_id)
                             .relative()
@@ -2009,8 +2040,10 @@ impl PaneTree {
                             .bg(divider_color)
                             .child(handle.on_mouse_down(
                                 MouseButton::Left,
-                                move |event: &MouseDownEvent, _window, _cx| {
-                                    cb_divider(sid, f32::from(event.position.y));
+                                move |event: &MouseDownEvent, window, cx| {
+                                    cb_divider(sid, f32::from(event.position.y), window, cx);
+                                    window.prevent_default();
+                                    cx.stop_propagation();
                                 },
                             ))
                     }
@@ -2135,57 +2168,14 @@ impl PaneTree {
 
     /// Render the persistent title bar shown at the top of each pane when
     /// there are 2+ panes in the split tree.
-    #[allow(clippy::too_many_arguments)]
-    /// Returns the dot color for the active-pane indicator, or `None` when the
-    /// pane is not focused (no dot should be rendered).
-    ///
-    /// - Focused + accent color → use the accent hue.
-    /// - Focused + no accent   → fall back to `theme.success` (green).
-    /// - Not focused           → `None`.
-    fn active_pane_dot_color(
-        is_focused: bool,
-        tab_accent_color: Option<con_core::session::TabAccentColor>,
-        theme: &gpui_component::Theme,
-        cx: &App,
-    ) -> Option<Hsla> {
-        if !is_focused {
-            return None;
-        }
-        Some(if let Some(color) = tab_accent_color {
-            crate::tab_colors::tab_accent_color_hsla(color, cx)
-        } else {
-            theme.success
-        })
-    }
-
-    /// Pure predicate: should the active-pane dot be shown?
-    /// Extracted for unit-testability without a GPUI context.
-    #[cfg(test)]
-    fn should_show_active_pane_dot(is_focused: bool) -> bool {
-        is_focused
-    }
-
-    fn inactive_title_bar_opacity(tab_accent_inactive_alpha: f32) -> f32 {
-        // Map tab_accent_inactive_alpha (0.0..=MAX ~0.30) to a title-bar-friendly
-        // opacity range (0.55..=0.85) so the bar always has a solid themed
-        // background regardless of the accent slider position.
-        let max_accent = con_core::config::AppearanceConfig::MAX_TAB_ACCENT_INACTIVE_ALPHA;
-        let t = (tab_accent_inactive_alpha / max_accent.max(f32::EPSILON)).clamp(0.0, 1.0);
-        (0.55 + t * 0.30).clamp(0.55, 0.85) // 0.55 at min → 0.85 at max
-    }
-
     fn pane_chrome_bg(
         theme: &gpui_component::Theme,
-        is_focused: bool,
-        tab_accent_inactive_alpha: f32,
+        _is_focused: bool,
+        _tab_accent_inactive_alpha: f32,
     ) -> Hsla {
-        if is_focused {
-            theme.title_bar.opacity(1.0)
-        } else {
-            theme
-                .title_bar
-                .opacity(Self::inactive_title_bar_opacity(tab_accent_inactive_alpha))
-        }
+        // Keep pane chrome opaque. Text rendered over translucent blurred/native
+        // backing picks up rough glyph edges on macOS.
+        theme.title_bar.opacity(1.0)
     }
 
     fn render_pane_title_bar(
@@ -2195,7 +2185,7 @@ impl PaneTree {
         is_focused: bool,
         has_splits: bool,
         is_zoomed: bool,
-        tab_accent_color: Option<con_core::session::TabAccentColor>,
+        _tab_accent_color: Option<con_core::session::TabAccentColor>,
         tab_accent_inactive_alpha: f32,
         close_pane_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
         toggle_zoom_cb: std::sync::Arc<dyn Fn(PaneId, &mut Window, &mut App) + 'static>,
@@ -2204,23 +2194,12 @@ impl PaneTree {
     ) -> AnyElement {
         let theme = cx.theme();
         let title_color = if is_focused {
-            theme.foreground.opacity(0.74)
+            theme.foreground.opacity(0.76)
         } else {
-            theme.muted_foreground.opacity(0.70)
+            theme.muted_foreground
         };
         let btn_color = theme.foreground.opacity(0.52);
         let btn_hover_bg = theme.foreground.opacity(0.08);
-
-        // Active-pane indicator dot — same color as the tab accent (or green fallback)
-        let dot =
-            Self::active_pane_dot_color(is_focused, tab_accent_color, theme, cx).map(|dot_color| {
-                div()
-                    .flex_shrink_0()
-                    .size(px(6.0))
-                    .rounded_full()
-                    .mr(px(5.0))
-                    .bg(dot_color)
-            });
 
         // ⛶/⛶ fullscreen toggle button — always visible
         let zoom_icon = if is_zoomed {
@@ -2295,11 +2274,7 @@ impl PaneTree {
             .text_size(px(12.0))
             .line_height(px(16.0))
             .font_family(theme.font_family.clone())
-            .font_weight(if is_focused {
-                FontWeight::MEDIUM
-            } else {
-                FontWeight::NORMAL
-            })
+            .font_weight(FontWeight::MEDIUM)
             .text_color(title_color)
             .text_center()
             .child(SharedString::from(title));
@@ -2336,10 +2311,9 @@ impl PaneTree {
                 },
             );
 
-        if let Some(dot) = dot {
-            bar = bar.child(dot);
-        }
-
+        // Reserve the same leading width as the trailing zoom button so the
+        // centered title does not drift when the active-pane dot is absent.
+        bar = bar.child(div().flex_shrink_0().w(px(20.0)));
         bar = bar.child(title_el).child(zoom_btn);
 
         if let Some(close) = close_btn {
@@ -3440,25 +3414,5 @@ mod tests {
         };
 
         assert!(!tree.is_noop_pane_move(1, 0, SplitDirection::Horizontal, SplitPlacement::After,));
-    }
-
-    #[::core::prelude::v1::test]
-    fn active_pane_dot_not_shown_when_unfocused() {
-        assert!(!PaneTree::should_show_active_pane_dot(false));
-    }
-
-    #[::core::prelude::v1::test]
-    fn active_pane_dot_shown_when_focused() {
-        assert!(PaneTree::should_show_active_pane_dot(true));
-    }
-
-    #[::core::prelude::v1::test]
-    fn active_pane_dot_color_returns_none_when_unfocused() {
-        // active_pane_dot_color delegates the focused=false path to
-        // should_show_active_pane_dot; verify the contract without a GPUI context
-        // by testing the predicate directly.
-        assert!(!PaneTree::should_show_active_pane_dot(false));
-        // Focused path requires a Theme + App — covered by the predicate tests above
-        // and by visual inspection in the running app.
     }
 }
