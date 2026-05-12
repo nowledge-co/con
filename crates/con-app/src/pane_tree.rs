@@ -1137,10 +1137,15 @@ impl PaneTree {
     fn try_first_terminal_with_id(node: &PaneNode) -> Option<(PaneId, &TerminalPane)> {
         match node {
             PaneNode::Leaf {
-                content: PaneContent::Terminal { surfaces, .. },
+                content:
+                    PaneContent::Terminal {
+                        surfaces,
+                        active_surface_id,
+                    },
                 id,
                 ..
-            } => surfaces.first().map(|s| (*id, &s.terminal)),
+            } => Self::active_surface(surfaces, *active_surface_id)
+                .map(|surface| (*id, &surface.terminal)),
             PaneNode::Leaf { .. } => None,
             PaneNode::Split { first, second, .. } => Self::try_first_terminal_with_id(first)
                 .or_else(|| Self::try_first_terminal_with_id(second)),
@@ -1150,9 +1155,15 @@ impl PaneTree {
     fn try_first_terminal(node: &PaneNode) -> Option<&TerminalPane> {
         match node {
             PaneNode::Leaf {
-                content: PaneContent::Terminal { surfaces, .. },
+                content:
+                    PaneContent::Terminal {
+                        surfaces,
+                        active_surface_id,
+                    },
                 ..
-            } => surfaces.first().map(|s| &s.terminal),
+            } => {
+                Self::active_surface(surfaces, *active_surface_id).map(|surface| &surface.terminal)
+            }
             PaneNode::Leaf { .. } => None,
             PaneNode::Split { first, second, .. } => {
                 Self::try_first_terminal(first).or_else(|| Self::try_first_terminal(second))

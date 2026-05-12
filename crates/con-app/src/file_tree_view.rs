@@ -205,7 +205,10 @@ fn build_entries(dir: &Path, depth: usize, _expand_root: bool) -> Vec<FileEntry>
         if name.starts_with('.') {
             continue;
         }
-        let is_dir = path.is_dir();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        let is_dir = file_type.is_dir();
         let fe = FileEntry {
             path,
             name,
@@ -453,6 +456,21 @@ mod tests {
             names,
             vec!["Alpha", "beta", "src", "apple.txt", "README.md", "zeta.txt"]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_entries_does_not_expand_directory_symlinks() {
+        let root = temp_tree();
+        std::os::unix::fs::symlink(root.join("src"), root.join("linked-src")).unwrap();
+
+        let entries = build_entries(&root, 1, false);
+        let linked = entries
+            .iter()
+            .find(|entry| entry.name == "linked-src")
+            .expect("symlink should still be listed");
+
+        assert!(!linked.is_dir);
     }
 
     #[test]
