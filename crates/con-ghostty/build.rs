@@ -1,4 +1,6 @@
+use std::collections::{HashSet, VecDeque};
 use std::env;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -65,15 +67,15 @@ fn build_macos() {
     let optimize = ghostty_optimize();
     let zig_bin = env::var_os("CON_ZIG_BIN").unwrap_or_else(|| std::ffi::OsString::from("zig"));
 
+    let build_args = vec![
+        "build".to_string(),
+        "-Dapp-runtime=none".to_string(),
+        "-Dxcframework-target=native".to_string(),
+        "-Demit-macos-app=false".to_string(),
+        format!("-Doptimize={optimize}"),
+    ];
     let mut cmd = Command::new(&zig_bin);
-    cmd.args([
-        "build",
-        "-Dapp-runtime=none",
-        "-Dxcframework-target=native",
-        "-Demit-macos-app=false",
-        &format!("-Doptimize={optimize}"),
-    ])
-    .current_dir(&ghostty_dir);
+    cmd.args(&build_args).current_dir(&ghostty_dir);
 
     let status = cmd.status().unwrap_or_else(|err| {
         panic!(
@@ -83,7 +85,22 @@ fn build_macos() {
     });
 
     if !status.success() {
-        panic!("zig build failed for libghostty");
+        println!(
+            "cargo:warning=zig build failed for libghostty; prefetching Zig package cache and retrying"
+        );
+        prefetch_zig_dependencies(&zig_bin, &ghostty_dir, None);
+
+        let mut retry = Command::new(&zig_bin);
+        retry.args(&build_args).current_dir(&ghostty_dir);
+        let retry_status = retry.status().unwrap_or_else(|err| {
+            panic!(
+                "failed to retry `{}` build for libghostty: {err}",
+                zig_bin.to_string_lossy()
+            )
+        });
+        if !retry_status.success() {
+            panic!("zig build failed for libghostty");
+        }
     }
 
     let lib_path = find_lib(&ghostty_dir, "libghostty-fat.a");
@@ -857,9 +874,281 @@ fn configure_zig_command(command: &mut Command, zig_global_cache_dir: Option<&st
     }
 }
 
+fn prefetch_zig_dependencies(zig_bin: &OsStr, root: &Path, zig_global_cache_dir: Option<&Path>) {
+    let Some(cache_dir) = resolve_zig_global_cache_dir(zig_bin, zig_global_cache_dir) else {
+        println!("cargo:warning=con-ghostty: could not resolve Zig global cache dir for prefetch");
+        return;
+    };
+
+    let mut zon_queue = VecDeque::new();
+    collect_zon_files(root, &mut zon_queue);
+
+    let mut seen_zon_files = HashSet::new();
+    let mut seen_urls = HashSet::new();
+    let mut fetched = 0usize;
+    let mut failed = 0usize;
+
+    while let Some(zon_file) = zon_queue.pop_front() {
+        if !seen_zon_files.insert(zon_file.clone()) {
+            continue;
+        }
+
+        let Ok(text) = fs::read_to_string(&zon_file) else {
+            continue;
+        };
+
+        for url in extract_zon_urls(&text) {
+            if !seen_urls.insert(url.clone()) {
+                continue;
+            }
+
+            match prefetch_zig_url(zig_bin, &url, zig_global_cache_dir) {
+                Some(package_hash) => {
+                    fetched += 1;
+                    let package_root = cache_dir.join("p").join(package_hash);
+                    collect_zon_files(&package_root, &mut zon_queue);
+                }
+                None => {
+                    failed += 1;
+                    println!("cargo:warning=con-ghostty: failed to prefetch Zig package {url}");
+                }
+            }
+        }
+    }
+
+    println!("cargo:warning=con-ghostty: prefetched {fetched} Zig package(s), {failed} failed");
+}
+
+fn collect_zon_files(root: &Path, out: &mut VecDeque<PathBuf>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if matches!(name.as_ref(), ".git" | ".zig-cache" | "zig-out" | "target") {
+            continue;
+        }
+
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.is_dir() {
+            collect_zon_files(&path, out);
+        } else if metadata.is_file() && name == "build.zig.zon" {
+            out.push_back(path);
+        }
+    }
+}
+
+fn extract_zon_urls(text: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    for line in text.lines() {
+        let line = line.trim_start();
+        if line.starts_with("//") {
+            continue;
+        }
+        let Some(url_field) = line.find(".url") else {
+            continue;
+        };
+        let line = &line[url_field..];
+        let Some(start) = line.find('"') else {
+            continue;
+        };
+        let rest = &line[start + 1..];
+        let Some(end) = rest.find('"') else {
+            continue;
+        };
+        let url = &rest[..end];
+        if url.starts_with("https://")
+            || url.starts_with("http://")
+            || url.starts_with("git+https://")
+            || url.starts_with("git+http://")
+        {
+            urls.push(url.to_string());
+        }
+    }
+    urls
+}
+
+fn prefetch_zig_url(
+    zig_bin: &OsStr,
+    url: &str,
+    zig_global_cache_dir: Option<&Path>,
+) -> Option<String> {
+    if let Some((repo_url, revision)) = parse_git_package_url(url) {
+        return prefetch_zig_git_url(zig_bin, &repo_url, &revision, zig_global_cache_dir);
+    }
+
+    let package_name = url.rsplit('/').next().unwrap_or("package.tar.gz");
+    let tmp = env::temp_dir().join(format!(
+        "con-ghostty-zig-fetch-{}-{}",
+        std::process::id(),
+        sanitize_filename(package_name)
+    ));
+
+    let curl_status = Command::new("curl")
+        .args(["-fL", "--retry", "3", "--retry-delay", "1", url, "-o"])
+        .arg(&tmp)
+        .status();
+    match curl_status {
+        Ok(status) if status.success() => {
+            let hash = zig_fetch_path(zig_bin, &tmp, zig_global_cache_dir);
+            let _ = fs::remove_file(&tmp);
+            hash
+        }
+        Ok(status) => {
+            let _ = fs::remove_file(&tmp);
+            println!("cargo:warning=con-ghostty: curl exited with status {status} for {url}");
+            None
+        }
+        Err(err) => {
+            let _ = fs::remove_file(&tmp);
+            println!("cargo:warning=con-ghostty: failed to run curl for {url}: {err}");
+            None
+        }
+    }
+}
+
+fn parse_git_package_url(url: &str) -> Option<(String, String)> {
+    let rest = url
+        .strip_prefix("git+https://")
+        .map(|rest| format!("https://{rest}"))
+        .or_else(|| {
+            url.strip_prefix("git+http://")
+                .map(|rest| format!("http://{rest}"))
+        })?;
+    let (repo_url, revision) = rest.rsplit_once('#')?;
+    if repo_url.is_empty() || revision.is_empty() {
+        return None;
+    }
+    Some((repo_url.to_string(), revision.to_string()))
+}
+
+fn prefetch_zig_git_url(
+    zig_bin: &OsStr,
+    repo_url: &str,
+    revision: &str,
+    zig_global_cache_dir: Option<&Path>,
+) -> Option<String> {
+    let tmp_root = env::temp_dir().join(format!(
+        "con-ghostty-zig-git-{}-{}",
+        std::process::id(),
+        sanitize_filename(revision)
+    ));
+    let checkout = tmp_root.join("checkout");
+    let archive = tmp_root.join("package.tar.gz");
+
+    let result = (|| {
+        fs::create_dir_all(&tmp_root).ok()?;
+        run_status(
+            Command::new("git")
+                .args(["clone", "--no-checkout", "--filter=blob:none", repo_url])
+                .arg(&checkout),
+        )?;
+        run_status(
+            Command::new("git")
+                .args(["fetch", "--depth", "1", "origin", revision])
+                .current_dir(&checkout),
+        )?;
+        run_status(
+            Command::new("git")
+                .args(["checkout", "--detach", revision])
+                .current_dir(&checkout),
+        )?;
+        run_status(
+            Command::new("git")
+                .args(["archive", "--format=tar.gz", "-o"])
+                .arg(&archive)
+                .arg(revision)
+                .current_dir(&checkout),
+        )?;
+        zig_fetch_path(zig_bin, &archive, zig_global_cache_dir)
+    })();
+
+    let _ = fs::remove_dir_all(&tmp_root);
+    result
+}
+
+fn run_status(command: &mut Command) -> Option<()> {
+    command.status().ok().filter(|status| status.success())?;
+    Some(())
+}
+
+fn zig_fetch_path(
+    zig_bin: &OsStr,
+    path: &Path,
+    zig_global_cache_dir: Option<&Path>,
+) -> Option<String> {
+    let mut cmd = Command::new(zig_bin);
+    configure_zig_command(&mut cmd, zig_global_cache_dir);
+    let output = cmd.arg("fetch").arg(path).output().ok()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        println!(
+            "cargo:warning=con-ghostty: zig fetch {} failed: {stderr}",
+            path.display()
+        );
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_string)
+}
+
+fn resolve_zig_global_cache_dir(zig_bin: &OsStr, configured_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(dir) = configured_dir {
+        return Some(dir.to_path_buf());
+    }
+    if let Some(dir) = env::var_os("ZIG_GLOBAL_CACHE_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+
+    let output = Command::new(zig_bin).arg("env").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let line = line.trim();
+        if !line.starts_with(".global_cache_dir") {
+            continue;
+        }
+        let Some(start) = line.find('"') else {
+            continue;
+        };
+        let rest = &line[start + 1..];
+        let Some(end) = rest.find('"') else {
+            continue;
+        };
+        return Some(PathBuf::from(&rest[..end]));
+    }
+    None
+}
+
+fn sanitize_filename(input: &str) -> String {
+    input
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::cargo_target_to_zig_target;
+    use super::{cargo_target_to_zig_target, extract_zon_urls, parse_git_package_url};
 
     #[test]
     fn maps_linux_targets_to_generic_zig_targets() {
@@ -892,5 +1181,47 @@ mod tests {
     #[test]
     fn leaves_unknown_targets_unmodified() {
         assert_eq!(cargo_target_to_zig_target("wasm32-unknown-unknown"), None);
+    }
+
+    #[test]
+    fn extracts_package_urls_from_zon_text_without_comments() {
+        let zon = r#"
+        .{
+            .dependencies = .{
+                .real = .{
+                    .url = "https://deps.files.ghostty.org/package.tar.gz",
+                    .hash = "package-0.1.0-abc",
+                },
+                // .url = "https://example.com/commented-out.tar.gz",
+                .inline_comment = .{ .url = "https://github.com/example/project.tar.gz", // keep
+                },
+            },
+        }
+        "#;
+
+        assert_eq!(
+            extract_zon_urls(zon),
+            vec![
+                "https://deps.files.ghostty.org/package.tar.gz".to_string(),
+                "https://github.com/example/project.tar.gz".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_git_package_urls() {
+        assert_eq!(
+            parse_git_package_url(
+                "git+https://github.com/jacobsandlund/uucode#5f05f8f83a75caea201f12cc8ea32a2d82ea9732"
+            ),
+            Some((
+                "https://github.com/jacobsandlund/uucode".to_string(),
+                "5f05f8f83a75caea201f12cc8ea32a2d82ea9732".to_string(),
+            ))
+        );
+        assert_eq!(
+            parse_git_package_url("https://example.com/pkg.tar.gz"),
+            None
+        );
     }
 }
