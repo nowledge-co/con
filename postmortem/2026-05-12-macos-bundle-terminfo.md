@@ -23,11 +23,12 @@ bundle look valid to Ghostty instead of allowing a safer fallback path.
 ## Fix applied
 
 - Copy Ghostty's `share/terminfo` into the macOS app bundle.
-- Make macOS verification fail when `terminfo/78/xterm-ghostty` is missing.
+- Make macOS verification fail when no compiled `xterm-ghostty` entry exists
+  anywhere under `Contents/Resources/terminfo`.
 - Make runtime app-bundle resource discovery require the terminfo sentinel
   before setting `GHOSTTY_RESOURCES_DIR`.
 - Added a regression test for a bundle with `Resources/ghostty` but no
-  `Resources/terminfo`.
+  `Resources/terminfo`, plus coverage for alternate compiled terminfo buckets.
 
 ## What we learned
 

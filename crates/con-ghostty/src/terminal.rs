@@ -386,13 +386,37 @@ fn installed_app_ghostty_resources_dir_for_exe(exe: &Path) -> Option<PathBuf> {
         if ancestor.extension().is_some_and(|ext| ext == "app") {
             let resources_root = ancestor.join("Contents/Resources");
             let ghostty_dir = resources_root.join("ghostty");
-            let terminfo_sentinel = resources_root.join("terminfo/78/xterm-ghostty");
-            if ghostty_dir.is_dir() && terminfo_sentinel.is_file() {
+            let terminfo_dir = resources_root.join("terminfo");
+            if ghostty_dir.is_dir() && has_xterm_ghostty_terminfo(&terminfo_dir) {
                 return Some(ghostty_dir);
             }
         }
     }
     None
+}
+
+fn has_xterm_ghostty_terminfo(terminfo_dir: &Path) -> bool {
+    contains_file_named(terminfo_dir, std::ffi::OsStr::new("xterm-ghostty"))
+}
+
+fn contains_file_named(dir: &Path, file_name: &std::ffi::OsStr) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_file() && entry.file_name() == file_name {
+            return true;
+        }
+        if file_type.is_dir() && contains_file_named(&entry.path(), file_name) {
+            return true;
+        }
+    }
+
+    false
 }
 
 // ── GhosttyApp — singleton managing all surfaces ────────────
@@ -1686,22 +1710,7 @@ mod tests {
 
     #[test]
     fn finds_ghostty_resources_inside_installed_app_bundle() {
-        struct Cleanup(std::path::PathBuf);
-        impl Drop for Cleanup {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
-
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "con-ghostty-resources-test-{}-{unique}",
-            std::process::id()
-        ));
-        let _cleanup = Cleanup(root.clone());
+        let (_cleanup, root) = temp_test_dir("con-ghostty-resources-test");
         let app_root = root.join("con Beta.app");
         let macos_dir = app_root.join("Contents/MacOS");
         let resources_dir = app_root.join("Contents/Resources/ghostty");
@@ -1717,23 +1726,25 @@ mod tests {
     }
 
     #[test]
-    fn ignores_installed_app_resources_when_bundled_terminfo_is_missing() {
-        struct Cleanup(std::path::PathBuf);
-        impl Drop for Cleanup {
-            fn drop(&mut self) {
-                let _ = std::fs::remove_dir_all(&self.0);
-            }
-        }
+    fn finds_ghostty_resources_when_terminfo_uses_letter_bucket() {
+        let (_cleanup, root) = temp_test_dir("con-ghostty-letter-terminfo-test");
+        let app_root = root.join("con Beta.app");
+        let macos_dir = app_root.join("Contents/MacOS");
+        let resources_dir = app_root.join("Contents/Resources/ghostty");
+        let terminfo_file = app_root.join("Contents/Resources/terminfo/x/xterm-ghostty");
+        std::fs::create_dir_all(&macos_dir).unwrap();
+        std::fs::create_dir_all(&resources_dir).unwrap();
+        std::fs::create_dir_all(terminfo_file.parent().unwrap()).unwrap();
+        std::fs::write(&terminfo_file, b"terminfo").unwrap();
 
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "con-ghostty-missing-terminfo-test-{}-{unique}",
-            std::process::id()
-        ));
-        let _cleanup = Cleanup(root.clone());
+        let found = installed_app_ghostty_resources_dir_for_exe(&macos_dir.join("con"));
+
+        assert_eq!(found.as_deref(), Some(resources_dir.as_path()));
+    }
+
+    #[test]
+    fn ignores_installed_app_resources_when_bundled_terminfo_is_missing() {
+        let (_cleanup, root) = temp_test_dir("con-ghostty-missing-terminfo-test");
         let app_root = root.join("con.app");
         let macos_dir = app_root.join("Contents/MacOS");
         let resources_dir = app_root.join("Contents/Resources/ghostty");
@@ -1743,5 +1754,22 @@ mod tests {
         let found = installed_app_ghostty_resources_dir_for_exe(&macos_dir.join("con"));
 
         assert_eq!(found, None);
+    }
+
+    struct Cleanup(std::path::PathBuf);
+
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn temp_test_dir(prefix: &str) -> (Cleanup, std::path::PathBuf) {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()));
+        (Cleanup(root.clone()), root)
     }
 }

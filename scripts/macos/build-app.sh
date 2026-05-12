@@ -49,8 +49,13 @@ log "Embedded Ghostty resources from $ghostty_resources_dir"
 
 ghostty_share_dir="$(dirname "$ghostty_resources_dir")"
 ghostty_terminfo_dir="$ghostty_share_dir/terminfo"
-if [[ -z "$ghostty_terminfo_dir" || ! -d "$ghostty_terminfo_dir" ]]; then
+if [[ ! -d "$ghostty_terminfo_dir" ]]; then
   log "Ghostty terminfo not found in cargo build output"
+  exit 1
+fi
+ghostty_terminfo_entry="$(find "$ghostty_terminfo_dir" -type f -name xterm-ghostty -print -quit)"
+if [[ -z "$ghostty_terminfo_entry" || ! -r "$ghostty_terminfo_entry" ]]; then
+  log "Ghostty xterm-ghostty terminfo entry not found in cargo build output: $ghostty_terminfo_dir"
   exit 1
 fi
 rsync -a "$ghostty_terminfo_dir/" "$resources_dir/terminfo/"
