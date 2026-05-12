@@ -576,16 +576,16 @@ impl ConWorkspace {
         let base_tile_surface = if theme.is_dark() {
             theme
                 .title_bar
-                .opacity(if is_focused { 0.78 } else { 0.68 })
+                .opacity(if is_focused { 0.80 } else { 0.70 })
         } else {
             theme
-                .background
-                .opacity(if is_focused { 0.95 } else { 0.88 })
+                .foreground
+                .opacity(if is_focused { 0.044 } else { 0.034 })
         };
         let hover_tile_surface = if theme.is_dark() {
             theme.title_bar.opacity(0.84)
         } else {
-            theme.background.opacity(0.98)
+            theme.foreground.opacity(0.052)
         };
 
         div()

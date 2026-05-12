@@ -220,19 +220,21 @@ impl ConWorkspace {
                 );
                 let theme = cx.theme();
                 let popup_surface = if theme.is_dark() {
-                    theme.background.opacity(elevated_ui_surface_opacity)
+                    theme
+                        .background
+                        .opacity(elevated_ui_surface_opacity.max(0.96))
                 } else {
-                    theme.background.opacity(0.98)
+                    theme.title_bar.opacity(0.99)
                 };
                 let preview_surface = if theme.is_dark() {
                     theme.title_bar.opacity(ui_surface_opacity * 0.98)
                 } else {
-                    theme.muted.opacity(0.055)
+                    theme.foreground.opacity(0.038)
                 };
                 let segmented_surface = if theme.is_dark() {
                     theme.title_bar.opacity(ui_surface_opacity * 0.96)
                 } else {
-                    theme.muted.opacity(0.065)
+                    theme.foreground.opacity(0.035)
                 };
                 let scope_frame_inset = px(3.0);
                 let scope_frame_radius = px(9.0);
@@ -247,19 +249,19 @@ impl ConWorkspace {
                 let local_keycap = |label: &'static str| {
                     let wide = label.chars().count() > 1;
                     div()
-                        .h(px(19.0))
-                        .min_w(if wide { px(32.0) } else { px(19.0) })
+                        .h(px(18.0))
+                        .min_w(if wide { px(30.0) } else { px(18.0) })
                         .px(px(if wide { 6.0 } else { 0.0 }))
                         .rounded(px(5.0))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .bg(theme.muted.opacity(0.14))
-                        .text_size(px(10.5))
+                        .bg(theme.foreground.opacity(0.055))
+                        .text_size(px(10.0))
                         .line_height(px(11.0))
                         .font_family(theme.mono_font_family.clone())
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.foreground.opacity(0.74))
+                        .text_color(theme.foreground.opacity(0.64))
                         .child(label)
                 };
 
@@ -302,7 +304,7 @@ impl ConWorkspace {
                                 div()
                                     .text_size(px(10.0))
                                     .font_family(theme.mono_font_family.clone())
-                                    .text_color(theme.muted_foreground.opacity(0.42))
+                                    .text_color(theme.muted_foreground.opacity(0.36))
                                     .child("then"),
                             )
                             .child(local_keycap("1-9"))
@@ -338,7 +340,7 @@ impl ConWorkspace {
                                 .child(svg().path(icon).size(px(12.0)).text_color(if active {
                                     theme.primary.opacity(0.88)
                                 } else {
-                                    theme.muted_foreground.opacity(0.56)
+                                    theme.muted_foreground.opacity(0.48)
                                 }))
                                 .child(
                                     div()
@@ -377,7 +379,7 @@ impl ConWorkspace {
                             .child(
                                 preset_segment(
                                     "scope-all",
-                                    "phosphor/selection-all.svg",
+                                    "phosphor/columns.svg",
                                     "All panes",
                                     is_broadcast,
                                 )
