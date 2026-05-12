@@ -3320,6 +3320,17 @@ mod tests {
     }
 
     #[::core::prelude::v1::test]
+    fn focus_pane_supports_non_terminal_leaves_before_zoom() {
+        let mut tree = simple_two_pane_tree();
+
+        tree.focus_pane(1);
+        assert!(tree.toggle_zoom_focused());
+
+        assert_eq!(tree.focused_pane_id(), 1);
+        assert_eq!(tree.zoomed_pane_id(), Some(1));
+    }
+
+    #[::core::prelude::v1::test]
     fn merge_tree_assigns_unique_split_ids() {
         let mut target = simple_two_pane_tree();
         let incoming = simple_two_pane_tree();
