@@ -348,7 +348,7 @@ impl ConWorkspace {
         if !self.has_active_tab() {
             return;
         }
-        log::warn!(
+        log::debug!(
             "[editor-focus] focus_pane_in_active_tab: pane={} old_focused={}",
             pane_id,
             self.tabs[self.active_tab].pane_tree.focused_pane_id()

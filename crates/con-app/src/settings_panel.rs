@@ -4646,6 +4646,7 @@ impl SettingsPanel {
             ("Cycle Input Mode", "cycle_input_mode"),
             ("Toggle Pane Scope", "toggle_pane_scope"),
             ("Toggle Left Sidebar", "toggle_left_panel"),
+            ("Hide Left Sidebar", "collapse_sidebar"),
             ("Quit", "quit"),
         ];
 

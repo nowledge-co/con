@@ -34,9 +34,7 @@ const SPLIT_PREVIEW_SEAM_THICKNESS: f32 = 6.0;
 const TAB_DRAG_PREVIEW_WIDTH: f32 = 180.0;
 const TAB_DRAG_PREVIEW_HEIGHT: f32 = 28.0;
 
-use crate::activity_bar::{
-    ACTIVITY_BAR_WIDTH, ActivityBar, ActivitySlot, ActivitySlotChanged, ActivityTogglePanel,
-};
+use crate::activity_bar::{ActivityBar, ActivitySlot, ActivitySlotChanged, ActivityTogglePanel};
 use crate::agent_panel::{
     AgentPanel, CancelRequest, DeleteConversation, InlineInputSubmit,
     InlineSkillAutocompleteChanged, LoadConversation, NewConversation, PanelState,
@@ -58,9 +56,9 @@ use crate::pane_tree::{
 };
 use crate::settings_panel::{self, AppearancePreview, SaveSettings, SettingsPanel, ThemePreview};
 use crate::sidebar::{
-    DraggedTab, DraggedTabOrigin, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry,
-    SessionSidebar, SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate, SidebarPaneToTab,
-    SidebarRename, SidebarReorder, SidebarSelect, SidebarSetColor,
+    DraggedTab, DraggedTabOrigin, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, RAIL_WIDTH,
+    SessionEntry, SessionSidebar, SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate,
+    SidebarPaneToTab, SidebarRename, SidebarReorder, SidebarSelect, SidebarSetColor,
 };
 use crate::sidebar_search_view::SidebarSearchView;
 use crate::terminal_pane::{TerminalPane, subscribe_terminal_pane};
@@ -293,11 +291,11 @@ pub struct ConWorkspace {
     /// Workspace-level focus handle — focused when an editor pane is active
     /// so keyboard actions (Cmd+T, Cmd+W, etc.) still reach the workspace.
     workspace_focus: gpui::FocusHandle,
-    /// Activity bar — always-visible 40 px icon rail on the far left.
+    /// File/search section switcher in the left sidebar.
     activity_bar: Entity<ActivityBar>,
-    /// Which slot is active in the activity bar.
+    /// Which file/search section is active.
     activity_slot: ActivitySlot,
-    /// Whether the left panel (sidebar / file tree) is open.
+    /// Whether the whole left sidebar is visible.
     left_panel_open: bool,
     /// File tree view — global singleton, root follows active tab cwd.
     file_tree_view: Entity<FileTreeView>,

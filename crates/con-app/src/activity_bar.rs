@@ -1,26 +1,26 @@
-//! Activity bar — the narrow feature rail inside the left sidebar.
+//! Activity bar — the file/search section switcher inside the left sidebar.
 //!
-//! Clicking a slot icon switches the left panel content. Clicking the
-//! already-active slot toggles the left panel open/closed (same behaviour
-//! as VS Code's activity bar).
+//! Clicking a slot icon switches the sidebar section. Clicking the
+//! already-active slot toggles the left sidebar closed.
 //!
 //! Visual rules
 //! ---
-//! - Fixed width: 40 px, always visible.
+//! - Fixed height: 36 px while the left sidebar is visible.
 //! - Active slot: accent-colored icon.
 //! - Inactive slots: muted_foreground icon.
 //! - No text labels — icons only.
 //! - Surface separation via bg opacity, no borders.
 
 use gpui::{
-    Context, EventEmitter, IntoElement, ParentElement, Render, Styled, Window, div, prelude::*, px,
+    Context, EventEmitter, FontWeight, IntoElement, ParentElement, Render, Styled, Window, div,
+    prelude::*, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, Sizable as _,
     button::{Button, ButtonVariants as _},
 };
 
-pub const ACTIVITY_BAR_WIDTH: f32 = 40.0;
+pub const ACTIVITY_BAR_HEADER_HEIGHT: f32 = 36.0;
 
 /// The content slot currently shown in the left panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,36 +89,52 @@ impl Render for ActivityBar {
         let theme = cx.theme();
         let active_slot = self.active_slot;
 
-        let bg = theme.background;
-
         div()
             .id("activity-bar")
-            .w(px(ACTIVITY_BAR_WIDTH))
-            .h_full()
+            .h(px(ACTIVITY_BAR_HEADER_HEIGHT))
+            .w_full()
             .flex()
-            .flex_col()
+            .flex_row()
             .items_center()
-            .pt(px(8.0))
-            .gap(px(4.0))
-            .bg(bg)
-            .child(activity_slot_button(
-                "activity-files",
-                "phosphor/folder-open.svg",
-                active_slot == ActivitySlot::Files,
-                theme,
-                cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
-                    this.set_slot(ActivitySlot::Files, cx);
-                }),
-            ))
-            .child(activity_slot_button(
-                "activity-search",
-                "phosphor/magnifying-glass.svg",
-                active_slot == ActivitySlot::Search,
-                theme,
-                cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
-                    this.set_slot(ActivitySlot::Search, cx);
-                }),
-            ))
+            .justify_between()
+            .gap(px(6.0))
+            .px(px(8.0))
+            .flex_shrink_0()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(3.0))
+                    .child(activity_slot_button(
+                        "activity-files",
+                        "phosphor/folder-open.svg",
+                        active_slot == ActivitySlot::Files,
+                        theme,
+                        cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
+                            this.set_slot(ActivitySlot::Files, cx);
+                        }),
+                    ))
+                    .child(activity_slot_button(
+                        "activity-search",
+                        "phosphor/magnifying-glass.svg",
+                        active_slot == ActivitySlot::Search,
+                        theme,
+                        cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
+                            this.set_slot(ActivitySlot::Search, cx);
+                        }),
+                    )),
+            )
+            .child(
+                div()
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .font_family(theme.font_family.clone())
+                    .text_color(theme.muted_foreground.opacity(0.62))
+                    .child(match active_slot {
+                        ActivitySlot::Files => "FILES",
+                        ActivitySlot::Search => "SEARCH",
+                    }),
+            )
     }
 }
 
@@ -142,7 +158,7 @@ where
         .ghost()
         .text_color(icon_color)
         .rounded(px(6.0))
-        .with_size(px(32.0))
+        .with_size(px(28.0))
         .cursor_pointer()
         .on_click(handler)
 }

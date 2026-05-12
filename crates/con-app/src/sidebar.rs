@@ -1,9 +1,7 @@
 //! Left-sidebar support state.
 //!
-//! The product sidebar is an activity rail plus content panel. This module
-//! still owns the shared width, opacity, tab metadata, and drag helpers used by
-//! older session/sidebar internals while the visible product surface is file
-//! explorer and search.
+//! This module owns the vertical tab rail/panel inside the product sidebar:
+//! shared width, opacity, tab metadata, hover cards, and drag helpers.
 //!
 //! Visual rules
 //! ---
@@ -380,6 +378,13 @@ impl SessionSidebar {
 
     pub fn panel_width(&self) -> f32 {
         self.panel_width
+    }
+
+    pub fn rendered_width(&self) -> f32 {
+        match self.mode {
+            PanelMode::Collapsed => RAIL_WIDTH,
+            PanelMode::Pinned => self.effective_panel_width(),
+        }
     }
 
     pub fn set_panel_width(&mut self, width: f32, cx: &mut Context<Self>) {
@@ -1664,8 +1669,18 @@ impl Render for SessionSidebar {
                     .child(panel)
                     .into_any_element()
             }
-            // Collapsed mode: no rail — activity bar handles navigation.
-            PanelMode::Collapsed => div().into_any_element(),
+            PanelMode::Collapsed => {
+                let mut rail = div()
+                    .relative()
+                    .h_full()
+                    .w(px(RAIL_WIDTH))
+                    .flex_shrink_0()
+                    .child(self.render_rail(window, cx));
+                if let Some(hover_card) = self.render_hover_card_overlay(window, cx) {
+                    rail = rail.child(hover_card);
+                }
+                rail.into_any_element()
+            }
         }
     }
 }

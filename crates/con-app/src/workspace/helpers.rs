@@ -135,10 +135,10 @@ pub(super) fn focused_editor_pane_key_fallback_allowed(input_surface_focused: bo
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn should_show_activity_bar(
-    _left_sidebar_available: bool,
+    left_sidebar_available: bool,
     _activity_slot: ActivitySlot,
 ) -> bool {
-    true
+    left_sidebar_available
 }
 
 pub(super) fn point_in_bounds(

@@ -3,16 +3,24 @@
 Status: Implemented
 
 The left sidebar is the workspace's navigation and project panel area. It is not
-the old vertical-tabs feature.
+the workspace tab identity by itself; vertical tabs remain the primary tab
+rail/panel inside the sidebar.
 
 ## Layout
 
 ```text
-[ActivityBar 40 px] [optional content panel] [pane tree] [agent panel]
+[vertical tabs] [Files/Search sections] [pane tree] [agent panel]
 ```
 
-The activity rail is always visible. The content panel can collapse, resize, and
-switch between sidebar features.
+When the left sidebar is hidden, none of the three sidebar columns render. This
+preserves the clean terminal view users expect from the sidebar toggle.
+
+When the left sidebar is visible:
+
+- vertical tabs can stay folded as a 44 px rail or unfold into the pinned tab
+  panel,
+- the file/search section header switches editor tools,
+- the file/search section uses the same resizable content width.
 
 ## Slots
 
@@ -24,16 +32,21 @@ switch between sidebar features.
 
 - `Cmd+B` dispatches `ToggleLeftPanel`.
 - The top bar sidebar button dispatches the same behavior.
-- Clicking an inactive activity icon switches slot and opens the panel.
-- Clicking the active activity icon toggles the content panel.
-- Collapsing the content panel never hides the 40 px icon rail.
+- The toggle hides or unhides the whole sidebar, including vertical tabs,
+  section icons, and file/search content.
+- The vertical tab collapse/expand button only changes folded/unfolded tab
+  mode while the sidebar is visible.
+- Clicking an inactive section icon switches slot and opens the panel.
+- Clicking the active section icon toggles the sidebar.
 
 ## Width Rules
 
 The panel can resize across the available window width after accounting for the
-activity rail and agent panel. The workspace owns this drag state because it has
-the full layout budget. A capture overlay is rendered during drag so releasing
-the mouse outside the handle exits resize mode reliably.
+vertical tabs and agent panel. When vertical tabs are unfolded, resize uses a
+split budget so the tab panel and file/search section cannot crowd out the
+terminal pane. The workspace owns this drag state because it has the full layout
+budget. A capture overlay is rendered during drag so releasing the mouse outside
+the handle exits resize mode reliably.
 
 ## Root Sync
 
