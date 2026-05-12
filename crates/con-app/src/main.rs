@@ -1360,8 +1360,11 @@ fn configurable_app_binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
     push_global::<ToggleInputBar>(&mut specs, &kb.toggle_input_bar);
     push_global::<TogglePaneScopePicker>(&mut specs, &kb.toggle_pane_scope);
     push_global::<ToggleLeftPanel>(&mut specs, &kb.toggle_left_panel);
-    push_global::<FocusFiles>(&mut specs, &kb.focus_files);
-    push_global::<SearchFiles>(&mut specs, &kb.search_files);
+    // Text inputs/editors may consume Cmd/Ctrl+Shift+E/F for editing/search
+    // behavior before a global binding wins. Files/Search are app navigation,
+    // so bind them explicitly in those focused contexts too.
+    push_app_override::<FocusFiles>(&mut specs, &kb.focus_files);
+    push_app_override::<SearchFiles>(&mut specs, &kb.search_files);
     push_global::<CollapseSidebar>(&mut specs, &kb.collapse_sidebar);
 
     specs
@@ -1631,6 +1634,20 @@ mod tests {
                 "FocusInput",
                 scope_names(&specs_for_action::<FocusInput>(&specs)),
             ),
+        ] {
+            assert_eq!(
+                scopes,
+                vec![None],
+                "{name} should be a single global binding"
+            );
+        }
+    }
+
+    #[test]
+    fn file_sidebar_shortcuts_override_text_inputs_and_editor_views() {
+        let specs = default_specs();
+
+        for (name, scopes) in [
             (
                 "FocusFiles",
                 scope_names(&specs_for_action::<FocusFiles>(&specs)),
@@ -1642,8 +1659,8 @@ mod tests {
         ] {
             assert_eq!(
                 scopes,
-                vec![None],
-                "{name} should be a single global binding"
+                vec![None, Some("EditorView"), Some("Input")],
+                "{name} must work from terminals, inputs, and editor panes"
             );
         }
     }
@@ -1756,8 +1773,6 @@ mod tests {
                     || action == TypeId::of::<SelectTab1>()
                     || action == TypeId::of::<command_palette::ToggleCommandPalette>()
                     || action == TypeId::of::<FocusInput>()
-                    || action == TypeId::of::<FocusFiles>()
-                    || action == TypeId::of::<SearchFiles>()
             })
             .filter(|spec| spec.scope.name().is_some())
             .collect::<Vec<_>>();
