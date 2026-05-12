@@ -7,7 +7,7 @@ macOS now opens on Linux with client-side decorations (no native WM
 titlebar stacked on top of the GPUI shell), a transparent ARGB
 window with rounded corners, the same caption cluster Windows
 ships, IoskeleyMono-shaped styled cells, the user's theme palette,
-and KWin Wayland backdrop blur where the compositor exposes it.
+and per-pane / per-surface opacity composited by the desktop.
 This document is the Linux single-source-of-truth equivalent of
 `docs/impl/windows-port.md`: it captures the upstream constraints,
 the recommended architecture, and the staged path from today's
@@ -74,14 +74,19 @@ What that gives you:
   relying on libghostty-vt's terminal-only stream handler, so Linux
   pane/session state can follow shell-reported directory changes
 - transparent ARGB window with rounded corners (14 px on Linux, no
-  corners from `NSWindow` or DWM here so we clip the GPUI root
-  ourselves) and per-pane / per-surface opacity that composites
+  corners from `NSWindow` or DWM here so we use a transparent GPUI
+  toplevel and clip the workspace frame itself). The top-level
+  GPUI `Root` must stay transparent; otherwise the clipped workspace
+  still sits over an opaque rectangular app fill and the outer
+  corners read as square. Per-pane / per-surface opacity composites
   through to the desktop
-- backdrop blur on KDE Plasma Wayland via `org_kde_kwin_blur` —
-  real Gaussian blur of what's behind the window. On X11 / mutter /
-  sway the blur toggle still ships but the visible result is
-  transparency only (no portable backdrop-blur protocol exists
-  outside KWin)
+- Linux backdrop blur is intentionally not enabled yet. KWin exposes
+  `org_kde_kwin_blur`, but GPUI's current Wayland hook commits blur
+  for the whole surface instead of a rounded region, which makes the
+  window look rectangular even when the app paint is clipped. Shape
+  correctness wins until the platform layer can set a rounded blur
+  region. On X11 / mutter / sway there is no portable backdrop-blur
+  protocol anyway
 - a snappy paint pipeline: redundant per-tick snapshot refreshes
   and `Vec<Cell>` deep-equality compares were removed, PTY output now
   wakes the Linux terminal view directly instead of waiting for the
@@ -287,7 +292,7 @@ can ship.
 | 2b | GPUI feasibility spike | confirm whether con needs foreign-surface embedding, texture interop, or neither | bounded GPUI worklist exists, or path is ruled out | ✅ landed |
 | 2c | Architecture decision | pick Linux backend lane | one recommended implementation path, no split-brain plan | ✅ landed |
 | 3 | Linux backend scaffold | `con-ghostty/src/linux/` plus `con-app/src/linux_view.rs` (or equivalent) with real lifecycle types | Linux no longer routes through the generic stub path conceptually | ✅ landed |
-| 4 | First real terminal surface | PTY spawn, resize, exit, `libghostty-vt` state, GPUI-owned pane paint, real product chrome (no native WM titlebar), embedded mono font, transparent + rounded window with compositor-gated blur | VT-backed Linux pane compiles and displays live shell state with SGR colors / bold / italic / underline / strikethrough / inverse, cursor block, theme palette synced from settings, IoskeleyMono shaping, client-side titlebar with min/max/close caption cluster, transparent ARGB window with rounded corners and per-pane / per-surface opacity, real KWin Wayland blur where available, fast paint pipeline (16 ms keystroke-echo round-trip), no placeholder flash on alt-screen TUIs | ✅ landed (preview) |
+| 4 | First real terminal surface | PTY spawn, resize, exit, `libghostty-vt` state, GPUI-owned pane paint, real product chrome (no native WM titlebar), embedded mono font, transparent + rounded window | VT-backed Linux pane compiles and displays live shell state with SGR colors / bold / italic / underline / strikethrough / inverse, cursor block, theme palette synced from settings, IoskeleyMono shaping, client-side titlebar with min/max/close caption cluster, transparent ARGB window with rounded corners and per-pane / per-surface opacity, fast paint pipeline (16 ms keystroke-echo round-trip), no placeholder flash on alt-screen TUIs | ✅ landed (preview) |
 | 5 | Input + selection + glyph-atlas grid renderer | keyboard, mouse, clipboard, bracketed paste, DECCKM, CJK IME text/preedit input, selection, plus the long-term GPUI-owned glyph-atlas grid renderer matching the D3D11/DirectWrite path Windows uses | vim/tmux/fzf/less usable on Linux at full speed | 🚧 in progress (DECCKM, bracketed paste, CJK IME text/preedit input, terminal-local Tab / Shift+Tab capture, and basic left-drag text selection are wired; mouse reporting, scrollback gestures, desktop IME validation matrix, and the glyph-atlas renderer remain) |
 | 6 | Packaging | one-line installer, tarball release, desktop entry, icon integration, appcast / notify-only updater, plus native artifact strategy (`.deb`, AppImage, Flatpak, etc.) | tarball installer exists; runtime Linux app id, desktop-file basename, and `StartupWMClass` are aligned as `co.nowledge.con`; native package format decision remains | 🚧 partially landed |
 
@@ -317,10 +322,9 @@ With phase 4 landed (preview), the remaining Linux tasks are:
    a terminal-local key context so shell completion and reverse focus
    traversal are not intercepted by GPUI's app-level focus navigation.
 3. Validate on hardware-accelerated native Linux desktops (Wayland
-   on KDE Plasma to confirm `org_kde_kwin_blur`; Wayland on
-   GNOME / sway and X11 on each major WM to confirm the
-   transparency / CSD / caption-cluster fallback paths). The
-   cloud-VM XFCE + llvmpipe + Xvfb-style display has covered the
+   on KDE Plasma, GNOME / sway, and X11 on each major WM to confirm
+   the transparency / rounded-CSD / caption-cluster fallback paths).
+   The cloud-VM XFCE + llvmpipe + Xvfb-style display has covered the
    software path end to end (full launch flow, styled output,
    transparent rounded chrome, htop in the alternate screen,
    keystroke-echo benchmark), but the hardware path still wants a

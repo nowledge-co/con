@@ -3,6 +3,9 @@ mod top_bar;
 
 use super::*;
 
+#[cfg(target_os = "linux")]
+const LINUX_WINDOW_CORNER_RADIUS: Pixels = px(14.0);
+
 impl ConWorkspace {
     fn has_active_resize_drag(&self) -> bool {
         self.sidebar_drag.is_some()
@@ -983,19 +986,6 @@ impl Render for ConWorkspace {
             .font_family(theme.mono_font_family.clone())
             .track_focus(&self.workspace_focus);
 
-        // Linux: con paints its own client-side decorations, so we
-        // also have to clip the window to a rounded rectangle the
-        // same way macOS gets from NSWindow + transparent backdrop
-        // and Windows 11 gets from DWM. Wrap with `overflow_hidden`
-        // so child surfaces (top bar, terminal pane, modals) all
-        // respect the corner radius. 14px matches Mica's perceived
-        // radius on Win11 and reads as "windowed" rather than
-        // "phone-app sheet".
-        #[cfg(target_os = "linux")]
-        {
-            root = root.rounded(px(14.0)).overflow_hidden();
-        }
-
         root = root
             .key_context("ConWorkspace")
             // Pane drag-to-resize: capture mouse move/up on root so it works
@@ -1574,6 +1564,36 @@ impl Render for ConWorkspace {
         let palette_visible = self.command_palette.read(cx).is_visible();
         if palette_visible {
             root = root.child(self.command_palette.clone());
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let mut workspace_frame = root;
+
+            if let Decorations::Client { tiling } = window.window_decorations()
+                && !window.is_maximized()
+                && !window.is_fullscreen()
+            {
+                if !(tiling.top || tiling.left) {
+                    workspace_frame = workspace_frame.rounded_tl(LINUX_WINDOW_CORNER_RADIUS);
+                }
+                if !(tiling.top || tiling.right) {
+                    workspace_frame = workspace_frame.rounded_tr(LINUX_WINDOW_CORNER_RADIUS);
+                }
+                if !(tiling.bottom || tiling.left) {
+                    workspace_frame = workspace_frame.rounded_bl(LINUX_WINDOW_CORNER_RADIUS);
+                }
+                if !(tiling.bottom || tiling.right) {
+                    workspace_frame = workspace_frame.rounded_br(LINUX_WINDOW_CORNER_RADIUS);
+                }
+                workspace_frame = workspace_frame.overflow_hidden();
+            }
+
+            root = div()
+                .relative()
+                .size_full()
+                .bg(transparent_black())
+                .child(workspace_frame);
         }
 
         root.into_any_element()
