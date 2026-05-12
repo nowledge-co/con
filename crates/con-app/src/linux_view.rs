@@ -1067,7 +1067,6 @@ impl Render for GhosttyView {
             configured_pane_opacity
         };
         let pane_background = theme.background.opacity(pane_opacity);
-        let row_clear_background = theme.transparent;
         let selection = self.selection;
         let selection_bg = theme.selection.opacity(0.42);
         self.sync_row_cache(
@@ -1116,7 +1115,6 @@ impl Render for GhosttyView {
                             &row,
                             px(font_size_px),
                             px(line_height_px),
-                            row_clear_background,
                         ));
                     }
                 } else if let Some(row) = self.row_cache.get(row_idx) {
@@ -1124,7 +1122,6 @@ impl Render for GhosttyView {
                         row,
                         px(font_size_px),
                         px(line_height_px),
-                        row_clear_background,
                     ));
                 }
             }
@@ -1565,7 +1562,6 @@ fn render_cached_terminal_row(
     row: &CachedTerminalRow,
     font_size: Pixels,
     line_height: Pixels,
-    clear_bg: Hsla,
 ) -> AnyElement {
     div()
         .w_full()
@@ -1578,7 +1574,6 @@ fn render_cached_terminal_row(
         // word-wrap breaks continuous runs at word boundaries and pushes
         // them down, making TUI layouts look garbled in narrow panes.
         .whitespace_nowrap()
-        .bg(clear_bg)
         .text_size(font_size)
         .line_height(line_height)
         .child(StyledText::new(row.text.clone()).with_runs(row.runs.clone()))
