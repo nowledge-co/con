@@ -17,7 +17,7 @@ Watch the short flow once, then use the table below as a reference.
 | Show or hide the bottom input bar | <kbd>⌃</kbd> <kbd>\`</kbd> | <kbd>⌃</kbd> <kbd>\`</kbd> |
 | Show or hide the agent panel | <kbd>⌘</kbd> <kbd>L</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>L</kbd> |
 | Show or hide vertical tabs | <kbd>⌘</kbd> <kbd>B</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>B</kbd> |
-| Focus Files | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>E</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>E</kbd> |
+| Focus Files | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>E</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>E</kbd> |
 | Search Files | <kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>F</kbd> | <kbd>⌃</kbd> <kbd>⇧</kbd> <kbd>F</kbd> |
 | Cycle bottom-bar mode | <kbd>⌘</kbd> <kbd>;</kbd> | <kbd>⌃</kbd> <kbd>;</kbd> |
 | Show or hide Quick Terminal | <kbd>⌘</kbd> <kbd>Backslash</kbd> after enabling | Not available |

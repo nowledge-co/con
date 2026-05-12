@@ -1360,9 +1360,9 @@ fn configurable_app_binding_specs(kb: &KeybindingConfig) -> Vec<BindingSpec> {
     push_global::<ToggleInputBar>(&mut specs, &kb.toggle_input_bar);
     push_global::<TogglePaneScopePicker>(&mut specs, &kb.toggle_pane_scope);
     push_global::<ToggleLeftPanel>(&mut specs, &kb.toggle_left_panel);
-    // Text inputs/editors may consume Cmd/Ctrl+Shift+E/F for editing/search
-    // behavior before a global binding wins. Files/Search are app navigation,
-    // so bind them explicitly in those focused contexts too.
+    // Text inputs/editors may consume file/search navigation chords for
+    // editing/search behavior before a global binding wins. Files/Search are
+    // app navigation, so bind them explicitly in those focused contexts too.
     push_app_override::<FocusFiles>(&mut specs, &kb.focus_files);
     push_app_override::<SearchFiles>(&mut specs, &kb.search_files);
     push_global::<CollapseSidebar>(&mut specs, &kb.collapse_sidebar);
@@ -1747,13 +1747,15 @@ mod tests {
 
     #[test]
     fn file_sidebar_shortcut_matcher_accepts_configured_chords() {
-        let focus = Keystroke::parse("secondary-shift-e").unwrap();
+        let focus_binding = if cfg!(target_os = "macos") {
+            "secondary-alt-e"
+        } else {
+            "secondary-shift-e"
+        };
+        let focus = Keystroke::parse(focus_binding).unwrap();
         let search = Keystroke::parse("secondary-shift-f").unwrap();
 
-        assert!(keystroke_matches_single_binding(
-            &focus,
-            "secondary-shift-e"
-        ));
+        assert!(keystroke_matches_single_binding(&focus, focus_binding));
         assert!(keystroke_matches_single_binding(
             &search,
             "secondary-shift-f"
@@ -1766,12 +1768,15 @@ mod tests {
 
     #[test]
     fn file_sidebar_shortcut_matcher_ignores_multi_stroke_bindings() {
-        let focus = Keystroke::parse("secondary-shift-e").unwrap();
+        let focus_binding = if cfg!(target_os = "macos") {
+            "secondary-alt-e"
+        } else {
+            "secondary-shift-e"
+        };
+        let focus = Keystroke::parse(focus_binding).unwrap();
+        let chord = format!("secondary-k {focus_binding}");
 
-        assert!(!keystroke_matches_single_binding(
-            &focus,
-            "secondary-k secondary-shift-e"
-        ));
+        assert!(!keystroke_matches_single_binding(&focus, &chord));
     }
 
     #[test]

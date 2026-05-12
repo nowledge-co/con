@@ -21,21 +21,6 @@ unsafe extern "C" {
         callback: extern "C" fn(),
     ) -> bool;
     fn con_unregister_quick_terminal_hotkey();
-    fn con_install_file_sidebar_shortcuts(
-        focus_key_code: u32,
-        focus_shift: bool,
-        focus_control: bool,
-        focus_alt: bool,
-        focus_command: bool,
-        focus_callback: Option<extern "C" fn()>,
-        search_key_code: u32,
-        search_shift: bool,
-        search_control: bool,
-        search_alt: bool,
-        search_command: bool,
-        search_callback: Option<extern "C" fn()>,
-    );
-    fn con_uninstall_file_sidebar_shortcuts();
     fn con_app_is_active() -> bool;
 }
 
@@ -76,102 +61,6 @@ pub fn update_from_keybindings(keybindings: &KeybindingConfig) {
         },
         on_quick_terminal_pressed,
     );
-    update_file_sidebar_shortcuts(keybindings);
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct LocalShortcut {
-    key_code: u32,
-    shift: bool,
-    control: bool,
-    alt: bool,
-    command: bool,
-}
-
-fn update_file_sidebar_shortcuts(keybindings: &KeybindingConfig) {
-    let focus = parse_local_shortcut(&keybindings.focus_files);
-    let search = parse_local_shortcut(&keybindings.search_files);
-
-    if focus.is_none() && search.is_none() {
-        unsafe { con_uninstall_file_sidebar_shortcuts() };
-        return;
-    }
-
-    if focus.is_none() && !keybindings.focus_files.trim().is_empty() {
-        log::warn!(
-            "focus files shortcut: unsupported binding {:?}, disabling native shortcut",
-            keybindings.focus_files
-        );
-    }
-    if search.is_none() && !keybindings.search_files.trim().is_empty() {
-        log::warn!(
-            "search files shortcut: unsupported binding {:?}, disabling native shortcut",
-            keybindings.search_files
-        );
-    }
-
-    let focus = focus.unwrap_or(LocalShortcut::disabled());
-    let search = search.unwrap_or(LocalShortcut::disabled());
-    unsafe {
-        con_install_file_sidebar_shortcuts(
-            focus.key_code,
-            focus.shift,
-            focus.control,
-            focus.alt,
-            focus.command,
-            if focus.is_enabled() {
-                Some(on_focus_files_shortcut_pressed)
-            } else {
-                None
-            },
-            search.key_code,
-            search.shift,
-            search.control,
-            search.alt,
-            search.command,
-            if search.is_enabled() {
-                Some(on_search_files_shortcut_pressed)
-            } else {
-                None
-            },
-        );
-    }
-}
-
-impl LocalShortcut {
-    const DISABLED_KEY_CODE: u32 = u32::MAX;
-
-    fn disabled() -> Self {
-        Self {
-            key_code: Self::DISABLED_KEY_CODE,
-            shift: false,
-            control: false,
-            alt: false,
-            command: false,
-        }
-    }
-
-    fn is_enabled(self) -> bool {
-        self.key_code != Self::DISABLED_KEY_CODE
-    }
-}
-
-fn parse_local_shortcut(binding: &str) -> Option<LocalShortcut> {
-    let mut strokes = binding.split_whitespace();
-    let stroke = strokes.next()?;
-    if strokes.next().is_some() {
-        return None;
-    }
-
-    let keystroke = parse_global_hotkey(stroke)?;
-    let key_code = gpui_key_to_keycode(&keystroke.key)?;
-    Some(LocalShortcut {
-        key_code,
-        shift: keystroke.modifiers.shift,
-        control: keystroke.modifiers.control,
-        alt: keystroke.modifiers.alt,
-        command: keystroke.modifiers.platform,
-    })
 }
 
 fn register_hotkey(
@@ -266,42 +155,6 @@ extern "C" fn on_quick_terminal_pressed() {
     });
 }
 
-extern "C" fn on_focus_files_shortcut_pressed() {
-    if hotkeys_suspended() {
-        return;
-    }
-
-    GLOBAL_HOTKEY_APP.with(|app| {
-        let Some(app) = app.borrow().clone() else {
-            return;
-        };
-
-        app.update(|cx| {
-            if cx.active_window().is_some() {
-                cx.dispatch_action(&crate::FocusFiles);
-            }
-        });
-    });
-}
-
-extern "C" fn on_search_files_shortcut_pressed() {
-    if hotkeys_suspended() {
-        return;
-    }
-
-    GLOBAL_HOTKEY_APP.with(|app| {
-        let Some(app) = app.borrow().clone() else {
-            return;
-        };
-
-        app.update(|cx| {
-            if cx.active_window().is_some() {
-                cx.dispatch_action(&crate::SearchFiles);
-            }
-        });
-    });
-}
-
 pub fn is_app_active() -> bool {
     unsafe { con_app_is_active() }
 }
@@ -310,7 +163,6 @@ pub fn suspend_global_hotkeys(_keybindings: &KeybindingConfig) {
     unsafe {
         con_unregister_global_hotkey();
         con_unregister_quick_terminal_hotkey();
-        con_uninstall_file_sidebar_shortcuts();
     }
     HOTKEYS_SUSPENDED.with(|s| *s.borrow_mut() = true);
 }
@@ -431,28 +283,6 @@ mod tests {
     #[test]
     fn rejects_unmodified_keys() {
         assert!(parse_global_hotkey("space").is_none());
-    }
-
-    #[test]
-    fn parses_file_sidebar_shortcuts_for_native_monitor() {
-        let focus =
-            parse_local_shortcut("secondary-shift-e").expect("focus files shortcut should parse");
-        assert_eq!(focus.key_code, 0x0E);
-        assert!(focus.shift);
-        assert!(focus.command);
-        assert!(!focus.control);
-        assert!(!focus.alt);
-
-        let search =
-            parse_local_shortcut("secondary-shift-f").expect("search files shortcut should parse");
-        assert_eq!(search.key_code, 0x03);
-        assert!(search.shift);
-        assert!(search.command);
-    }
-
-    #[test]
-    fn rejects_chorded_file_sidebar_shortcuts_for_native_monitor() {
-        assert!(parse_local_shortcut("secondary-shift-e secondary-p").is_none());
     }
 
     #[test]

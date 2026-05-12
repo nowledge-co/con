@@ -39,9 +39,10 @@ When the left sidebar is visible:
   the 44 px rail, or unfolds the session list when already folded.
 - Clicking Files or Search switches the active sidebar panel.
 - Clicking a session switches the active sidebar panel back to tabs/sessions.
-- `FocusFiles` (`Cmd/Ctrl+Shift+E`) opens the Files panel. `SearchFiles`
-  (`Cmd/Ctrl+Shift+F`) opens Search and focuses its query input. Both actions
-  are also exposed in the command palette.
+- `FocusFiles` (`Cmd+Option+E` on macOS, `Ctrl+Shift+E` on Windows/Linux)
+  opens the Files panel. `SearchFiles` (`Cmd/Ctrl+Shift+F`) opens Search and
+  focuses its query input. Both actions are also exposed in the command
+  palette.
 
 ## Width Rules
 
