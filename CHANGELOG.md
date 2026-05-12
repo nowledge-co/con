@@ -6,7 +6,27 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.70` - 2026-05-12
 
+### Added
+
+**Editor**
+
+- Added the first built-in code editor surface, with editable multi-file editor
+  panes, file-tree and search panels in the left sidebar, syntax highlighting,
+  basic diagnostics, save/undo/selection support, and editor panes that
+  participate in the existing split-pane flow. _(PR
+  [#179](https://github.com/nowledge-co/con-terminal/pull/179) by
+  [@sundy-li](https://github.com/sundy-li))_
+
 ### Changed
+
+**Workspace**
+
+- Replaced vertical tabs with an always-visible left activity rail and a
+  collapsible Files/Search panel while keeping horizontal tabs as the tab
+  surface. Existing `toggle_vertical_tabs` keybindings and
+  `vertical_tabs_width` session values are accepted as compatibility aliases.
+  _(PR [#179](https://github.com/nowledge-co/con-terminal/pull/179) by
+  [@sundy-li](https://github.com/sundy-li))_
 
 **Docs**
 

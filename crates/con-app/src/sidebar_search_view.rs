@@ -611,7 +611,12 @@ where
             theme.muted_foreground.opacity(0.86)
         })
         .child(label)
-        .child(Switch::new(id).checked(active).small().on_click(handler))
+        .child(
+            Switch::new(format!("{id}-switch"))
+                .checked(active)
+                .small()
+                .on_click(handler),
+        )
 }
 
 fn empty_state(text: &'static str, theme: &gpui_component::Theme) -> Div {

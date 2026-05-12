@@ -602,6 +602,14 @@ impl EditorView {
         Self::point_hits_scrollbar_in_bounds(bounds, point)
     }
 
+    fn point_in_content_bounds(&self, point: Point<Pixels>) -> bool {
+        Self::point_in_optional_bounds(self.content_bounds, point)
+    }
+
+    fn point_in_optional_bounds(bounds: Option<Bounds<Pixels>>, point: Point<Pixels>) -> bool {
+        bounds.is_some_and(|bounds| bounds.contains(&point))
+    }
+
     fn point_hits_scrollbar_in_bounds(bounds: Bounds<Pixels>, point: Point<Pixels>) -> bool {
         if !bounds.contains(&point) {
             return false;
@@ -1385,6 +1393,9 @@ impl Render for EditorView {
                     if this.point_hits_scrollbar(event.position) {
                         return;
                     }
+                    if !this.point_in_content_bounds(event.position) {
+                        return;
+                    }
                     this.focus_handle.focus(window, cx);
                     this.mouse_down(event);
                     window.prevent_default();
@@ -1392,7 +1403,9 @@ impl Render for EditorView {
                 }),
             )
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                if this.point_hits_scrollbar(event.position) {
+                if this.point_hits_scrollbar(event.position)
+                    || !this.point_in_content_bounds(event.position)
+                {
                     return;
                 }
                 this.mouse_drag(event);
@@ -1402,7 +1415,9 @@ impl Render for EditorView {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                    if this.point_hits_scrollbar(event.position) {
+                    if this.point_hits_scrollbar(event.position)
+                        || !this.point_in_content_bounds(event.position)
+                    {
                         return;
                     }
                     this.mouse_up(event);
@@ -1637,6 +1652,31 @@ mod tests {
         ));
         assert!(!EditorView::point_hits_scrollbar_in_bounds(
             bounds,
+            gpui::point(px(80.0), px(60.0))
+        ));
+    }
+
+    #[test]
+    fn editor_mouse_hit_testing_rejects_non_content_chrome() {
+        let bounds = Bounds::new(
+            gpui::point(px(10.0), px(20.0)),
+            gpui::size(px(200.0), px(100.0)),
+        );
+
+        assert!(EditorView::point_in_optional_bounds(
+            Some(bounds),
+            gpui::point(px(80.0), px(60.0))
+        ));
+        assert!(!EditorView::point_in_optional_bounds(
+            Some(bounds),
+            gpui::point(px(80.0), px(19.0))
+        ));
+        assert!(!EditorView::point_in_optional_bounds(
+            Some(bounds),
+            gpui::point(px(80.0), px(121.0))
+        ));
+        assert!(!EditorView::point_in_optional_bounds(
+            None,
             gpui::point(px(80.0), px(60.0))
         ));
     }

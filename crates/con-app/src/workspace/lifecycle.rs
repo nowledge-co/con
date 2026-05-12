@@ -788,18 +788,17 @@ impl ConWorkspace {
                     &editor_view,
                     window,
                     |this, editor, _event: &EditorEmptied, window, cx| {
-                        let Some(tab) = this.tabs.get(this.active_tab) else {
+                        let Some((tab_index, pane_id)) =
+                            this.tabs.iter().enumerate().find_map(|(tab_index, tab)| {
+                                tab.pane_tree
+                                    .pane_id_for_editor_view(editor)
+                                    .map(|pane_id| (tab_index, pane_id))
+                            })
+                        else {
                             return;
                         };
-                        let Some(pane_id) = tab.pane_tree.find_editor_pane().filter(|pane_id| {
-                            tab.pane_tree
-                                .editor_view_for_pane(*pane_id)
-                                .is_some_and(|view| view == *editor)
-                        }) else {
-                            return;
-                        };
-                        if !this.close_pane_in_tab(this.active_tab, pane_id, window, cx) {
-                            this.close_tab_by_index(this.active_tab, window, cx);
+                        if !this.close_pane_in_tab(tab_index, pane_id, window, cx) {
+                            this.close_tab_by_index(tab_index, window, cx);
                         }
                     },
                 )

@@ -282,7 +282,10 @@ impl ConWorkspace {
     ) {
         let cwd = self
             .has_active_tab()
-            .then(|| self.active_terminal().current_dir(cx))
+            .then(|| {
+                self.try_active_terminal()
+                    .and_then(|terminal| terminal.current_dir(cx))
+            })
             .flatten();
         let config = con_core::Config::load().unwrap_or_default();
         let session = crate::fresh_window_session_with_history_for_cwd(

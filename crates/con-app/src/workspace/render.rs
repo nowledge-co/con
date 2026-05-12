@@ -923,42 +923,6 @@ impl Render for ConWorkspace {
                         return;
                     }
 
-                    if let Some((start_x, start_width)) = this.sidebar_drag {
-                        let win_w = win.bounds().size.width.as_f32();
-                        let agent_w = if this.agent_panel_open {
-                            this.agent_panel_width.min(max_agent_panel_width(win_w)) + 1.0
-                        } else {
-                            0.0
-                        };
-                        let max_width = max_sidebar_panel_width(win_w, agent_w);
-                        let delta = f32::from(event.position.x) - start_x;
-                        let new_width = (start_width + delta).clamp(PANEL_MIN_WIDTH, max_width);
-                        let current_width = this.sidebar.read(cx).panel_width();
-                        if (current_width - new_width).abs() > 0.5 {
-                            this.sidebar
-                                .update(cx, |sidebar, cx| sidebar.set_panel_width(new_width, cx));
-                            cx.notify();
-                        }
-                        return;
-                    }
-
-                    // Agent panel resize drag
-                    if let Some((start_x, start_width)) = this.agent_panel_drag {
-                        let delta = start_x - f32::from(event.position.x);
-                        let max_width = max_agent_panel_width(win.bounds().size.width.as_f32());
-                        let new_width =
-                            (start_width + delta).clamp(AGENT_PANEL_MIN_WIDTH, max_width);
-                        if (this.agent_panel_width - new_width).abs() > 1.0 {
-                            this.agent_panel_width = new_width;
-                            if this.active_tab >= this.tabs.len() {
-                                cx.notify();
-                                return;
-                            }
-                            cx.notify();
-                        }
-                        return;
-                    }
-
                     if let Some(preview) = this
                         .tab_drag_preview
                         .lock()
@@ -1446,15 +1410,28 @@ impl Render for ConWorkspace {
         }
 
         if self.has_active_resize_drag() {
+            let resize_direction = if self.sidebar_drag.is_some() || self.agent_panel_drag.is_some()
+            {
+                SplitDirection::Horizontal
+            } else {
+                self.tabs
+                    .get(self.active_tab)
+                    .and_then(|tab| tab.pane_tree.dragging_direction())
+                    .unwrap_or(SplitDirection::Horizontal)
+            };
+            let mut overlay = div()
+                .id("resize-capture-overlay")
+                .absolute()
+                .top_0()
+                .right_0()
+                .bottom_0()
+                .left_0();
+            overlay = match resize_direction {
+                SplitDirection::Horizontal => overlay.cursor_col_resize(),
+                SplitDirection::Vertical => overlay.cursor_row_resize(),
+            };
             root = root.child(
-                div()
-                    .id("resize-capture-overlay")
-                    .absolute()
-                    .top_0()
-                    .right_0()
-                    .bottom_0()
-                    .left_0()
-                    .cursor_col_resize()
+                overlay
                     .occlude()
                     .bg(theme.transparent)
                     .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {

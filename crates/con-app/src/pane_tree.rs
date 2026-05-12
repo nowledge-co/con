@@ -485,6 +485,10 @@ impl PaneTree {
         Self::editor_view_for_pane_node(&self.root, pane_id)
     }
 
+    pub fn pane_id_for_editor_view(&self, editor: &Entity<EditorView>) -> Option<PaneId> {
+        Self::find_editor_pane_id_by_entity_id(&self.root, editor.entity_id())
+    }
+
     pub fn editor_views(&self) -> Vec<Entity<EditorView>> {
         let mut views = Vec::new();
         Self::collect_editor_views(&self.root, &mut views);
