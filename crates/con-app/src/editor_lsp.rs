@@ -169,6 +169,7 @@ impl Drop for LspClient {
         let _ = self.sender.send(LspClientCommand::Shutdown);
         if let Ok(mut child) = self.child.lock() {
             let _ = child.kill();
+            let _ = child.wait();
         }
         log::debug!("[editor-lsp] stopped {}", self.path.display());
     }

@@ -208,6 +208,7 @@ pub struct EditorView {
     lsp_event_tx: Sender<LspClientEvent>,
     lsp_event_rx: Receiver<LspClientEvent>,
     lsp_event_pump: Option<Task<()>>,
+    dirty_close_blocked_tab: Option<usize>,
 }
 
 impl EditorView {
@@ -229,6 +230,7 @@ impl EditorView {
             lsp_event_tx,
             lsp_event_rx,
             lsp_event_pump: None,
+            dirty_close_blocked_tab: None,
         }
     }
 
@@ -248,6 +250,7 @@ impl EditorView {
         let generation = self.open_generation;
         if let Some(index) = self.tabs.iter().position(|tab| tab.path == path) {
             self.active_tab = index;
+            self.dirty_close_blocked_tab = None;
             self.scroll_handle = UniformListScrollHandle::new();
             cx.emit(ActiveFileChanged);
             cx.notify();
@@ -282,6 +285,7 @@ impl EditorView {
     pub fn open_file_from_content(&mut self, path: PathBuf, content: String) {
         if let Some(index) = self.tabs.iter().position(|tab| tab.path == path) {
             self.active_tab = index;
+            self.dirty_close_blocked_tab = None;
             self.scroll_handle = UniformListScrollHandle::new();
             return;
         }
@@ -290,6 +294,7 @@ impl EditorView {
 
         self.tabs.push(EditorTab::new(path, buffer));
         self.active_tab = self.tabs.len().saturating_sub(1);
+        self.dirty_close_blocked_tab = None;
         self.scroll_handle = UniformListScrollHandle::new();
     }
 
@@ -301,6 +306,7 @@ impl EditorView {
             self.tabs.push(EditorTab::read_error(path, error));
             self.active_tab = self.tabs.len().saturating_sub(1);
         }
+        self.dirty_close_blocked_tab = None;
         self.scroll_handle = UniformListScrollHandle::new();
     }
 
@@ -316,6 +322,7 @@ impl EditorView {
         if index < self.tabs.len() && self.active_tab != index {
             self.open_generation = self.open_generation.wrapping_add(1);
             self.active_tab = index;
+            self.dirty_close_blocked_tab = None;
             self.scroll_handle = UniformListScrollHandle::new();
             if let Some(path) = self.active_path().map(Path::to_path_buf) {
                 self.ensure_lsp_for_path(&path);
@@ -338,8 +345,10 @@ impl EditorView {
             return true;
         }
         if self.tabs[self.active_tab].buffer.is_dirty() {
+            self.dirty_close_blocked_tab = Some(self.active_tab);
             return false;
         }
+        self.dirty_close_blocked_tab = None;
         self.open_generation = self.open_generation.wrapping_add(1);
         let closed_path = self.tabs[self.active_tab].path.clone();
         self.tabs.remove(self.active_tab);
@@ -875,17 +884,21 @@ impl EditorView {
     }
 
     pub fn save_active(&mut self) -> std::io::Result<Option<PathBuf>> {
-        let Some(tab) = self.active_tab_mut() else {
-            return Ok(None);
+        let saved_path = {
+            let Some(tab) = self.active_tab_mut() else {
+                return Ok(None);
+            };
+            if !tab.save_enabled {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("cannot save {}; file failed to load", tab.path.display()),
+                ));
+            }
+            tab.buffer.save_to(&tab.path)?;
+            tab.path.clone()
         };
-        if !tab.save_enabled {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("cannot save {}; file failed to load", tab.path.display()),
-            ));
-        }
-        tab.buffer.save_to(&tab.path)?;
-        Ok(Some(tab.path.clone()))
+        self.dirty_close_blocked_tab = None;
+        Ok(Some(saved_path))
     }
 
     pub fn cut_selection(&mut self) -> Option<String> {
@@ -1155,20 +1168,35 @@ impl Render for EditorView {
             active.path.display()
         )
         .into();
-        let status_bar = div()
+        let dirty_close_blocked = self.dirty_close_blocked_tab == Some(active_index);
+        let mut status_bar = div()
             .h(px(22.0))
             .flex_shrink_0()
             .flex()
             .items_center()
+            .justify_between()
+            .gap(px(12.0))
             .px(px(12.0))
             .bg(theme.muted.opacity(0.05))
             .child(
                 div()
+                    .min_w_0()
+                    .truncate()
                     .text_size(px(10.5))
                     .text_color(theme.muted_foreground.opacity(0.55))
                     .font_family(mono_font.clone())
                     .child(status_text),
             );
+        if dirty_close_blocked {
+            status_bar = status_bar.child(
+                div()
+                    .flex_shrink_0()
+                    .text_size(px(10.5))
+                    .text_color(theme.warning_foreground.opacity(0.86))
+                    .font_family(ui_font.clone())
+                    .child("Unsaved changes - save before closing"),
+            );
+        }
 
         let mono_font_list = mono_font.clone();
         let list_theme = theme.clone();

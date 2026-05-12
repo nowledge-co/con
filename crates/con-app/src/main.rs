@@ -1405,7 +1405,9 @@ fn editor_binding_specs() -> Vec<BindingSpec> {
     push_editor::<EditorMoveDown>(&mut specs, "down");
     push_editor::<EditorMoveHome>(&mut specs, "home");
     push_editor::<EditorMoveEnd>(&mut specs, "end");
+    #[cfg(target_os = "macos")]
     push_editor::<EditorMoveLineStart>(&mut specs, "ctrl-a");
+    #[cfg(target_os = "macos")]
     push_editor::<EditorMoveLineEnd>(&mut specs, "ctrl-e");
     push_editor::<EditorSelectLeft>(&mut specs, "shift-left");
     push_editor::<EditorSelectRight>(&mut specs, "shift-right");
@@ -1688,17 +1690,19 @@ mod tests {
     #[test]
     fn generated_specs_do_not_duplicate_same_key_action_scope() {
         let specs = default_specs();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = std::collections::HashMap::new();
 
         for spec in &specs {
-            let inserted = seen.insert((spec.key.to_string(), spec.action, spec.scope.name()));
-            assert!(
-                inserted,
-                "duplicate keybinding spec for key={:?} scope={:?} action={:?}",
-                spec.key,
-                spec.scope.name(),
-                spec.action
-            );
+            let canonical = con_core::config::canonical_keybinding(spec.key.as_ref())
+                .unwrap_or_else(|| spec.key.to_string());
+            let key = (canonical, spec.scope.name());
+            if let Some(existing_action) = seen.insert(key.clone(), spec.action) {
+                assert_eq!(
+                    existing_action, spec.action,
+                    "duplicate keybinding spec for canonical_key={:?} scope={:?} actions={:?}/{:?}",
+                    key.0, key.1, existing_action, spec.action
+                );
+            }
         }
     }
 

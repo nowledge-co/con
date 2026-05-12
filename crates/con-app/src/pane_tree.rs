@@ -536,7 +536,9 @@ impl PaneTree {
     pub fn focus_pane(&mut self, pane_id: PaneId) {
         if Self::contains_leaf(&self.root, pane_id) {
             self.focused_pane_id = pane_id;
-            self.zoomed_pane_id = None;
+            if self.zoomed_pane_id.is_some_and(|zoomed| zoomed != pane_id) {
+                self.zoomed_pane_id = None;
+            }
         }
     }
 
@@ -2367,13 +2369,7 @@ impl PaneTree {
                 .flex()
                 .flex_col()
                 .size_full()
-                .on_mouse_down(MouseButton::Left, move |event, window, cx| {
-                    log::warn!(
-                        "[editor-focus] editor-pane mouse_down: pane={} pos=({:.1},{:.1})",
-                        pane_id,
-                        f32::from(event.position.x),
-                        f32::from(event.position.y)
-                    );
+                .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
                     focus_cb_click(pane_id, window, cx);
                 })
                 .context_menu(move |menu, _window, _cx| {

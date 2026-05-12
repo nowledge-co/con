@@ -3,6 +3,10 @@
 //! This module deliberately has no GPUI dependencies so editing behavior stays
 //! unit-testable and can evolve independently from rendering.
 
+use std::collections::VecDeque;
+
+const MAX_UNDO_ENTRIES: usize = 256;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CursorPosition {
     pub row: usize,
@@ -22,7 +26,7 @@ pub struct EditorBuffer {
     cursor: CursorPosition,
     selection_anchor: Option<CursorPosition>,
     dirty: bool,
-    undo_stack: Vec<BufferSnapshot>,
+    undo_stack: VecDeque<BufferSnapshot>,
     revision: u64,
 }
 
@@ -76,7 +80,7 @@ impl EditorBuffer {
             cursor: CursorPosition::new(0, 0),
             selection_anchor: None,
             dirty: false,
-            undo_stack: Vec::new(),
+            undo_stack: VecDeque::new(),
             revision: 0,
         }
     }
@@ -334,7 +338,7 @@ impl EditorBuffer {
     }
 
     pub fn undo(&mut self) -> bool {
-        let Some(snapshot) = self.undo_stack.pop() else {
+        let Some(snapshot) = self.undo_stack.pop_back() else {
             return false;
         };
         self.lines = snapshot.lines;
@@ -347,7 +351,10 @@ impl EditorBuffer {
     }
 
     fn push_undo_snapshot(&mut self) {
-        self.undo_stack.push(BufferSnapshot {
+        while self.undo_stack.len() >= MAX_UNDO_ENTRIES {
+            let _ = self.undo_stack.pop_front();
+        }
+        self.undo_stack.push_back(BufferSnapshot {
             lines: self.lines.clone(),
             line_ending: self.line_ending,
             cursor: self.cursor,
@@ -565,6 +572,17 @@ mod tests {
         assert_eq!(buffer.cursor(), CursorPosition::new(0, 5));
         assert!(!buffer.has_selection());
         assert!(!buffer.is_dirty());
+    }
+
+    #[test]
+    fn undo_history_is_bounded() {
+        let mut buffer = EditorBuffer::from_text("");
+
+        for _ in 0..(MAX_UNDO_ENTRIES + 8) {
+            buffer.insert_text("x");
+        }
+
+        assert_eq!(buffer.undo_stack.len(), MAX_UNDO_ENTRIES);
     }
 
     #[test]

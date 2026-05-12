@@ -370,7 +370,7 @@ impl ConWorkspace {
             focused_pane_editor_tabs,
             self.tabs.len(),
         );
-        log::warn!(
+        log::debug!(
             "[editor-close] CloseTab: active_tab={} focused_pane={} pane_count={} keyboard_focused_editor_tabs={:?} focused_pane_editor_tabs={:?} intent={:?}",
             self.active_tab,
             focused_pane_id,
@@ -392,7 +392,7 @@ impl ConWorkspace {
         // If the active tab has multiple panes, close the focused pane first.
         // Only close the entire tab when it's down to a single pane.
         if self.tabs[self.active_tab].pane_tree.pane_count() > 1 {
-            log::warn!(
+            log::debug!(
                 "[editor-close] CloseTab fallback closing pane: active_tab={} focused_pane={}",
                 self.active_tab,
                 self.tabs[self.active_tab].pane_tree.focused_pane_id()

@@ -7,9 +7,10 @@ use gpui::{
     WhiteSpace, Window, div, prelude::*, px, svg,
 };
 use gpui_component::{
-    ActiveTheme,
+    ActiveTheme, Sizable as _,
     input::{Input, InputState},
     scroll::{Scrollbar, ScrollbarShow},
+    switch::Switch,
 };
 use regex::{Regex, RegexBuilder};
 use std::{
@@ -182,13 +183,13 @@ impl SidebarSearchView {
         .detach();
     }
 
-    fn toggle_case_sensitive(&mut self, cx: &mut Context<Self>) {
-        self.options.case_sensitive = !self.options.case_sensitive;
+    fn set_case_sensitive(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.options.case_sensitive = enabled;
         self.request_search(cx);
     }
 
-    fn toggle_regex(&mut self, cx: &mut Context<Self>) {
-        self.options.regex = !self.options.regex;
+    fn set_regex(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        self.options.regex = enabled;
         self.request_search(cx);
     }
 }
@@ -465,8 +466,8 @@ impl Render for SidebarSearchView {
                                         "Aa",
                                         case_sensitive,
                                         theme,
-                                        cx.listener(|this, _: &MouseDownEvent, _window, cx| {
-                                            this.toggle_case_sensitive(cx);
+                                        cx.listener(|this, checked: &bool, _window, cx| {
+                                            this.set_case_sensitive(*checked, cx);
                                         }),
                                     ))
                                     .child(search_option_button(
@@ -474,8 +475,8 @@ impl Render for SidebarSearchView {
                                         ".*",
                                         regex_enabled,
                                         theme,
-                                        cx.listener(|this, _: &MouseDownEvent, _window, cx| {
-                                            this.toggle_regex(cx);
+                                        cx.listener(|this, checked: &bool, _window, cx| {
+                                            this.set_regex(*checked, cx);
                                         }),
                                     )),
                             ),
@@ -593,24 +594,15 @@ fn search_option_button<F>(
     handler: F,
 ) -> impl IntoElement
 where
-    F: Fn(&MouseDownEvent, &mut Window, &mut gpui::App) + 'static,
+    F: Fn(&bool, &mut Window, &mut gpui::App) + 'static,
 {
     div()
         .id(id)
         .h(px(24.0))
-        .min_w(px(28.0))
-        .px(px(6.0))
+        .px(px(4.0))
         .flex()
         .items_center()
-        .justify_center()
-        .rounded(px(5.0))
-        .cursor_pointer()
-        .bg(if active {
-            theme.primary.opacity(0.18)
-        } else {
-            theme.transparent
-        })
-        .hover(|s| s.bg(theme.muted.opacity(0.12)))
+        .gap(px(4.0))
         .text_size(px(11.0))
         .font_family(theme.font_family.clone())
         .text_color(if active {
@@ -619,7 +611,7 @@ where
             theme.muted_foreground.opacity(0.86)
         })
         .child(label)
-        .on_mouse_down(MouseButton::Left, handler)
+        .child(Switch::new(id).checked(active).small().on_click(handler))
 }
 
 fn empty_state(text: &'static str, theme: &gpui_component::Theme) -> Div {
