@@ -921,6 +921,10 @@ impl PaneTree {
         self.focused_pane_id
     }
 
+    pub fn focused_terminal_entity_id(&self) -> Option<EntityId> {
+        Self::find_terminal(&self.root, self.focused_pane_id).map(|terminal| terminal.entity_id())
+    }
+
     /// Find the pane ID for a given terminal by entity ID
     pub fn pane_id_for_entity(&self, entity_id: EntityId) -> Option<PaneId> {
         Self::find_pane_id_by_entity_id(&self.root, entity_id)
@@ -3208,6 +3212,21 @@ mod tests {
             next_split_id: 1,
             dragging: None,
         }
+    }
+
+    #[::core::prelude::v1::test]
+    fn focused_terminal_entity_id_is_none_without_focused_terminal() {
+        let tree = PaneTree {
+            root: empty_leaf(0),
+            focused_pane_id: 0,
+            zoomed_pane_id: None,
+            next_id: 1,
+            next_surface_id: 0,
+            next_split_id: 0,
+            dragging: None,
+        };
+
+        assert_eq!(tree.focused_terminal_entity_id(), None);
     }
 
     #[::core::prelude::v1::test]

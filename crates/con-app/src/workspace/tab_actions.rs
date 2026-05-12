@@ -548,7 +548,7 @@ impl ConWorkspace {
             // Tab summaries and smart_tab_presentation are derived from each
             // tab's focused terminal. A background split or inactive surface can
             // report OSC-7 too, but that should not clear the visible tab label.
-            .find(|tab| tab.pane_tree.focused_terminal().entity_id() == entity_id)
+            .find(|tab| tab.pane_tree.focused_terminal_entity_id() == Some(entity_id))
             .map(|tab| {
                 tab.ai_label = None;
                 tab.ai_icon = None;
