@@ -1,6 +1,56 @@
 use super::super::*;
 use gpui_component::menu::ContextMenuExt;
 
+fn compact_tab_cwd_label(dir: Option<&str>) -> Option<String> {
+    let dir = dir?;
+    let path = std::path::Path::new(dir);
+    let home = std::env::var("HOME").ok();
+    let mut label = if let Some(home) = home.as_deref() {
+        if dir == home {
+            "~".to_string()
+        } else if let Ok(stripped) = path.strip_prefix(home) {
+            format!("~/{}", stripped.to_string_lossy())
+        } else {
+            dir.to_string()
+        }
+    } else {
+        dir.to_string()
+    };
+    if label.len() > 30 {
+        if let Some(name) = path.file_name().map(|name| name.to_string_lossy()) {
+            label = format!("…/{name}");
+        }
+    }
+    (!label.trim().is_empty()).then_some(label)
+}
+
+fn git_dir_for_worktree(worktree: &std::path::Path) -> Option<std::path::PathBuf> {
+    let marker = worktree.join(".git");
+    if marker.is_dir() {
+        return Some(marker);
+    }
+    let contents = std::fs::read_to_string(&marker).ok()?;
+    let gitdir = contents.trim().strip_prefix("gitdir:")?.trim();
+    let path = std::path::PathBuf::from(gitdir);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        worktree.join(path)
+    })
+}
+
+fn tab_git_branch_label(dir: Option<&str>) -> Option<String> {
+    let dir = dir?;
+    let worktree = find_git_worktree_root(std::path::Path::new(dir))?;
+    let git_dir = git_dir_for_worktree(&worktree)?;
+    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+    let head = head.trim();
+    if let Some(branch) = head.strip_prefix("ref: refs/heads/") {
+        return Some(branch.rsplit('/').next().unwrap_or(branch).to_string());
+    }
+    (!head.is_empty()).then(|| head.chars().take(7).collect())
+}
+
 fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
     if alpha.is_finite() {
         alpha.clamp(0.0, 1.0)
@@ -337,6 +387,15 @@ impl ConWorkspace {
                 } else {
                     presentation.name
                 };
+                let tab_primary_title = if is_active {
+                    compact_tab_cwd_label(dir_for_tab.as_deref())
+                        .unwrap_or_else(|| display_title.clone())
+                } else {
+                    display_title.clone()
+                };
+                let tab_branch_label = is_active
+                    .then(|| tab_git_branch_label(dir_for_tab.as_deref()))
+                    .flatten();
 
                 let close_id = ElementId::Name(format!("tab-close-{}", index).into());
 
@@ -417,7 +476,7 @@ impl ConWorkspace {
                     .flex()
                     .flex_1()
                     .min_w_0()
-                    .max_w(px(200.0))
+                    .max_w(px(220.0))
                     .items_center()
                     .px(px(10.0))
                     .h(px(30.0))
@@ -663,24 +722,43 @@ impl ConWorkspace {
                 }
 
                 tab_content = tab_content.child(
-                    svg()
-                        .path("phosphor/terminal.svg")
-                        .size(px(12.0))
-                        .flex_shrink_0()
-                        .text_color(if is_active {
-                            theme.foreground.opacity(0.74)
-                        } else {
-                            theme.muted_foreground.opacity(0.56)
-                        }),
-                );
-
-                tab_content = tab_content.child(
                     div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
                         .flex_1()
                         .min_w_0()
                         .overflow_x_hidden()
                         .whitespace_nowrap()
-                        .child(display_title),
+                        .child(
+                            div()
+                                .min_w_0()
+                                .overflow_x_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .font_family(theme.mono_font_family.clone())
+                                .font_weight(if is_active {
+                                    FontWeight::SEMIBOLD
+                                } else {
+                                    FontWeight::MEDIUM
+                                })
+                                .text_color(if is_active {
+                                    theme.foreground.opacity(0.90)
+                                } else {
+                                    theme.muted_foreground.opacity(0.66)
+                                })
+                                .child(tab_primary_title),
+                        )
+                        .children(tab_branch_label.map(|branch| {
+                            div()
+                                .flex_shrink_0()
+                                .font_family(theme.mono_font_family.clone())
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_size(px(11.0))
+                                .line_height(px(13.0))
+                                .text_color(theme.success.opacity(0.82))
+                                .child(branch)
+                        })),
                 );
 
                 tab_content = tab_content.child(close_button);
