@@ -339,6 +339,8 @@ impl ConWorkspace {
                 } else {
                     presentation.name
                 };
+                let tab_width =
+                    px((display_title.chars().count() as f32 * 8.0 + 84.0).clamp(132.0, 210.0));
 
                 let close_id = ElementId::Name(format!("tab-close-{}", index).into());
 
@@ -449,9 +451,9 @@ impl ConWorkspace {
                     .group("tab")
                     .relative()
                     .flex()
-                    .flex_1()
+                    .flex_none()
+                    .w(tab_width)
                     .min_w_0()
-                    .max_w(px(220.0))
                     .items_center()
                     .h(px(30.0))
                     .text_size(px(11.5))
@@ -773,15 +775,17 @@ impl ConWorkspace {
                         .as_ref()
                         .map(|d| d.title.clone())
                         .unwrap_or_default();
+                    let ghost_width =
+                        px((ghost_title.chars().count() as f32 * 8.0 + 84.0).clamp(132.0, 210.0));
                     let ghost_visual_pos = visual_pos;
                     let tab_strip_tab_bounds_for_ghost = self.tab_strip_tab_bounds.clone();
                     tabs_container = tabs_container.child(
                         div()
                             .id(ElementId::Name(format!("tab-ghost-{render_pos}").into()))
                             .flex()
-                            .flex_1()
+                            .flex_none()
+                            .w(ghost_width)
                             .min_w_0()
-                            .max_w(px(200.0))
                             .items_center()
                             .px(px(10.0))
                             .h(px(30.0))
@@ -977,15 +981,18 @@ impl ConWorkspace {
                             .as_ref()
                             .map(|d| d.title.clone())
                             .unwrap_or_default();
+                        let ghost_width =
+                            px((ghost_title.chars().count() as f32 * 8.0 + 84.0)
+                                .clamp(132.0, 210.0));
                         let ghost_visual_pos = visual_pos;
                         let tab_strip_tab_bounds_for_end_ghost = self.tab_strip_tab_bounds.clone();
                         tabs_container = tabs_container.child(
                             div()
                                 .id(ElementId::Name("tab-ghost-end".into()))
                                 .flex()
-                                .flex_1()
+                                .flex_none()
+                                .w(ghost_width)
                                 .min_w_0()
-                                .max_w(px(200.0))
                                 .items_center()
                                 .px(px(10.0))
                                 .h(px(30.0))
