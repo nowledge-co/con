@@ -422,7 +422,10 @@ impl ConWorkspace {
         let invalidated_summary_id = self
             .tabs
             .iter_mut()
-            .find(|tab| tab.pane_tree.pane_id_for_entity(entity_id).is_some())
+            // Tab summaries and smart_tab_presentation are derived from each
+            // tab's focused terminal. A background split or inactive surface can
+            // report OSC-7 too, but that should not clear the visible tab label.
+            .find(|tab| tab.pane_tree.focused_terminal().entity_id() == entity_id)
             .map(|tab| {
                 tab.ai_label = None;
                 tab.ai_icon = None;
