@@ -10,7 +10,7 @@ use crate::{
 };
 use crossbeam_channel::{Receiver, Sender};
 use gpui::{
-    App, Bounds, Context, CursorStyle, EventEmitter, FocusHandle, Focusable, Hsla,
+    App, Bounds, Context, CursorStyle, EventEmitter, FocusHandle, Focusable, FontWeight, Hsla,
     InteractiveElement, IntoElement, ListHorizontalSizingBehavior, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, Render, ScrollStrategy,
     SharedString, Styled, StyledText, Task, UniformListScrollHandle, Window, div, px, svg,
@@ -1202,6 +1202,11 @@ impl Render for EditorView {
             let tab_active_bg = theme.tab_active;
             let tab_transparent_bg = theme.transparent;
             let hover_fg = fg;
+            let label_color = if is_active {
+                fg.opacity(0.92)
+            } else {
+                theme.muted_foreground.opacity(0.74)
+            };
             let mut tab_el = div()
                 .id(("editor-file-tab", index))
                 .h(px(22.0))
@@ -1239,11 +1244,12 @@ impl Render for EditorView {
                         .text_size(px(12.0))
                         .line_height(px(14.0))
                         .font_family(ui_font.clone())
-                        .text_color(if is_active {
-                            fg.opacity(0.92)
+                        .font_weight(if is_active {
+                            FontWeight::MEDIUM
                         } else {
-                            fg.opacity(0.58)
+                            FontWeight::NORMAL
                         })
+                        .text_color(label_color)
                         .child(SharedString::from(label)),
                 );
 

@@ -70,14 +70,7 @@ impl ConWorkspace {
             } else {
                 0.0
             };
-            let max_width = if self.vertical_tabs_enabled() {
-                max_sidebar_panel_width(
-                    (win_w - self.sidebar.read(cx).rendered_width()).max(0.0),
-                    agent_w,
-                )
-            } else {
-                max_sidebar_panel_width(win_w, agent_w)
-            };
+            let max_width = max_sidebar_panel_width(win_w, agent_w);
             let delta = f32::from(event.position.x) - start_x;
             let new_width = (start_width + delta).clamp(PANEL_MIN_WIDTH, max_width);
             let current_width = self.sidebar.read(cx).panel_width();
@@ -404,6 +397,19 @@ impl Render for ConWorkspace {
         } else {
             0.0
         };
+        let vertical_tabs_enabled = self.vertical_tabs_enabled();
+        let show_left_panel = self.left_panel_open;
+        let show_vertical_tabs = show_left_panel && vertical_tabs_enabled;
+        let show_sidebar_tools =
+            show_left_panel && (!vertical_tabs_enabled || self.sidebar_tools_open);
+        let activity_slot = self.activity_slot;
+        self.sidebar.update(cx, |sidebar, _cx| {
+            sidebar.set_tools_panel_open(
+                show_left_panel && vertical_tabs_enabled && show_sidebar_tools,
+                activity_slot,
+            );
+        });
+
         let theme = cx.theme();
         let ui_surface_opacity = self.ui_surface_opacity();
         let elevated_ui_surface_opacity = self.elevated_ui_surface_opacity();
@@ -444,30 +450,32 @@ impl Render for ConWorkspace {
         let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
         #[cfg(not(target_os = "macos"))]
         let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
-        let vertical_tabs_enabled = self.vertical_tabs_enabled();
-        let show_left_panel = self.left_panel_open;
-        let show_vertical_tabs = show_left_panel && vertical_tabs_enabled;
-        let show_sidebar_tools =
-            show_left_panel && (!vertical_tabs_enabled || self.sidebar_tools_open);
+        let sidebar_seam_color =
+            theme
+                .foreground
+                .opacity(if theme.is_dark() { 0.055 } else { 0.045 });
         let (tab_sidebar_width, sidebar_content_width) = if show_left_panel {
             let sidebar = self.sidebar.read(cx);
-            (
+            let tab_sidebar_width = if vertical_tabs_enabled {
+                sidebar.rendered_width()
+            } else {
+                0.0
+            };
+            let sidebar_content_width = if show_sidebar_tools {
                 if vertical_tabs_enabled {
-                    sidebar.rendered_width()
+                    (sidebar.panel_width() - tab_sidebar_width).max(0.0)
                 } else {
-                    0.0
-                },
-                if show_sidebar_tools {
                     sidebar.panel_width()
-                } else {
-                    0.0
-                },
-            )
+                }
+            } else {
+                0.0
+            };
+            (tab_sidebar_width, sidebar_content_width)
         } else {
             (0.0, 0.0)
         };
         let left_panel_width = if vertical_tabs_enabled {
-            tab_sidebar_width
+            tab_sidebar_width + sidebar_content_width
         } else {
             sidebar_content_width
         };
@@ -767,22 +775,22 @@ impl Render for ConWorkspace {
                         .child(self.sidebar.clone()),
                 );
             }
-            if !vertical_tabs_enabled && show_sidebar_tools {
+            if show_sidebar_tools {
                 let sidebar_content: AnyElement = match self.activity_slot {
                     ActivitySlot::Files => self.file_tree_view.clone().into_any_element(),
                     ActivitySlot::Search => self.search_view.clone().into_any_element(),
                 };
-                left_sidebar = left_sidebar.child(
-                    div()
-                        .w(px(sidebar_content_width))
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .flex_shrink_0()
-                        .overflow_hidden()
-                        .child(self.activity_bar.clone())
-                        .child(sidebar_content),
-                );
+                let mut sidebar_panel = div()
+                    .w(px(sidebar_content_width))
+                    .h_full()
+                    .flex()
+                    .flex_col()
+                    .flex_shrink_0()
+                    .overflow_hidden();
+                if !vertical_tabs_enabled {
+                    sidebar_panel = sidebar_panel.child(self.activity_bar.clone());
+                }
+                left_sidebar = left_sidebar.child(sidebar_panel.child(sidebar_content));
             }
             main_area = main_area.child(left_sidebar);
         }
@@ -797,34 +805,8 @@ impl Render for ConWorkspace {
 
         main_area = main_area.child(main_column);
 
-        if vertical_tabs_enabled && show_sidebar_tools {
-            let sidebar_content: AnyElement = match self.activity_slot {
-                ActivitySlot::Files => self.file_tree_view.clone().into_any_element(),
-                ActivitySlot::Search => self.search_view.clone().into_any_element(),
-            };
-            main_area = main_area.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px(tab_sidebar_width))
-                    .w(px(sidebar_content_width))
-                    .flex()
-                    .flex_col()
-                    .overflow_hidden()
-                    .occlude()
-                    .bg(elevated_panel_surface_color)
-                    .child(self.activity_bar.clone())
-                    .child(sidebar_content),
-            );
-        }
-
         if show_sidebar_tools {
-            let resize_edge = if vertical_tabs_enabled {
-                tab_sidebar_width + sidebar_content_width
-            } else {
-                left_panel_width
-            };
+            let resize_edge = left_panel_width;
             main_area = main_area.child(
                 div()
                     .absolute()
@@ -832,7 +814,7 @@ impl Render for ConWorkspace {
                     .bottom_0()
                     .left(px((resize_edge - 1.0).max(0.0)))
                     .w(px(1.0))
-                    .bg(chrome_static_seam_color),
+                    .bg(sidebar_seam_color),
             );
             main_area = main_area.child(
                 div()
@@ -864,7 +846,7 @@ impl Render for ConWorkspace {
                     .bottom_0()
                     .left(px((left_panel_width - 1.0).max(0.0)))
                     .w(px(1.0))
-                    .bg(chrome_static_seam_color),
+                    .bg(sidebar_seam_color),
             );
         }
 
@@ -1197,6 +1179,8 @@ impl Render for ConWorkspace {
             .on_action(cx.listener(Self::cycle_input_mode))
             .on_action(cx.listener(Self::toggle_pane_scope_picker))
             .on_action(cx.listener(Self::toggle_left_panel))
+            .on_action(cx.listener(Self::focus_files_panel))
+            .on_action(cx.listener(Self::search_files_panel))
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 if this.editor_has_keyboard_focus(window, cx)
                     && this.handle_editor_text_key_down(event, window, cx)

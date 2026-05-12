@@ -35,7 +35,7 @@ pub(super) enum WorkspaceCloseIntent {
 pub(super) enum EditorFileCloseOutcome {
     KeepEditorPane,
     CloseEditorPane,
-    CloseWorkspaceTabOrWindow,
+    ReplaceEditorPaneWithTerminal,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,7 +108,7 @@ pub(super) fn editor_file_close_outcome(
     if pane_count > 1 {
         return EditorFileCloseOutcome::CloseEditorPane;
     }
-    EditorFileCloseOutcome::CloseWorkspaceTabOrWindow
+    EditorFileCloseOutcome::ReplaceEditorPaneWithTerminal
 }
 
 pub(super) fn editor_line_boundary_for_key(

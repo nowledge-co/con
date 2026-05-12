@@ -13,11 +13,34 @@ con is still pre-release, so entries may group related beta work while the produ
 - Restored vertical tabs inside the left sidebar and brought back full sidebar
   hide/unhide behavior. `appearance.tabs_orientation` again controls horizontal
   vs. vertical tabs, and Files/Search now opens as a lightweight drawer instead
-  of a permanent second sidebar beside vertical tabs. A compact in-sidebar
-  launcher keeps Files/Search discoverable when the drawer is closed. _(PR
+  of a permanent second sidebar beside vertical tabs. Follow-up normalization
+  made Files/Search and sessions one left-sidebar system, so the active panel
+  sits beside the tool/session rail instead of overlaying terminal content, uses
+  the same total width as the unfolded session list, and folds cleanly back to
+  the rail from any active panel. _(PR
   [#194](https://github.com/nowledge-co/con-terminal/pull/194) by
   [@wey-gu](https://github.com/wey-gu), PR
   [#200](https://github.com/nowledge-co/con-terminal/pull/200) by
+  [@wey-gu](https://github.com/wey-gu), PR
+  [#201](https://github.com/nowledge-co/con-terminal/pull/201) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Added first-class Files and Search Files commands, menu items, command
+  palette entries, editable keybindings, and defaults (`Cmd+Option+E` for
+  Files on macOS, `Ctrl+Shift+E` for Files on Windows/Linux, and
+  `Cmd/Ctrl+Shift+F` for Search). Search Files focuses the search query
+  immediately. _(PR
+  [#201](https://github.com/nowledge-co/con-terminal/pull/201) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+**Editor**
+
+- Closing the last file in an editor-only pane now returns the tab to a terminal
+  instead of leaving an empty editor surface behind. _(PR
+  [#201](https://github.com/nowledge-co/con-terminal/pull/201) by
+  [@wey-gu](https://github.com/wey-gu))_
+- Softened inactive editor and pane titles so unfocused file/editor chrome no
+  longer renders with a heavy outlined look. _(PR
+  [#201](https://github.com/nowledge-co/con-terminal/pull/201) by
   [@wey-gu](https://github.com/wey-gu))_
 
 **macOS**

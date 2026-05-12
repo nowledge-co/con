@@ -7,7 +7,7 @@ coexist with the code-editor sidebar tools instead of being replaced by them.
 
 ## Model
 
-The left side of the workspace has two independent concepts:
+The left side of the workspace has three independent concepts:
 
 - tab orientation: `appearance.tabs_orientation = "horizontal" | "vertical"`,
 - sidebar visibility: hide/unhide the whole left sidebar for a clean terminal
@@ -17,22 +17,25 @@ The left side of the workspace has two independent concepts:
 The current layout is:
 
 ```text
-[vertical tab rail or panel] [pane tree]
-                            └─ Files/Search drawer overlays when opened
+[tool/session rail] [active sidebar panel] [pane tree]
 ```
 
 ## Folded Mode
 
-Folded mode renders the 44 px vertical tab rail. It keeps session color,
-attention, drag/drop, hover-card, close, and create-tab affordances available in
-the compact state.
+Folded mode renders the 44 px vertical tab rail. Files/Search live at the top of
+the rail, followed by session creation and session icons. Session color,
+attention, drag/drop, hover-card, close, and create-tab affordances remain
+available in the compact state.
 
 ## Unfolded Mode
 
-Unfolded mode renders the pinned vertical tab panel with tab titles, subtitles,
-rename, close, drag/drop, and create-tab controls. File/search remains available
-from a compact launcher on the tab sidebar; unfolding tabs does not replace
-editor navigation and opening the drawer does not widen the permanent sidebar.
+Unfolded mode keeps the rail visible and renders the session list in the
+adjacent panel, with tab titles, subtitles, rename, close, drag/drop, and
+create-tab controls. Opening Files/Search switches only that adjacent panel to
+the selected tool; selecting a session switches the panel back to vertical
+tabs. The collapse control returns any active panel to the thin rail, and the
+rail plus active panel keeps the same total width across Sessions, Files, and
+Search.
 
 ## Compatibility
 

@@ -16,7 +16,19 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let closed_tools_panel = self.vertical_tabs_enabled() && self.sidebar_tools_open;
+        if self.vertical_tabs_enabled() && self.sidebar_tools_open {
+            self.sidebar_tools_open = false;
+            self.activity_bar.update(cx, |bar, cx| {
+                bar.left_panel_open = false;
+                cx.notify();
+            });
+        }
         self.activate_tab(event.index, window, cx);
+        if closed_tools_panel {
+            self.save_session(cx);
+            cx.notify();
+        }
     }
 
     pub(super) fn on_sidebar_new_session(
@@ -525,6 +537,67 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    pub(super) fn focus_files_panel(
+        &mut self,
+        _: &FocusFiles,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_activity_slot(ActivitySlot::Files, false, window, cx);
+    }
+
+    pub(super) fn search_files_panel(
+        &mut self,
+        _: &SearchFiles,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.show_activity_slot(ActivitySlot::Search, true, window, cx);
+    }
+
+    fn show_activity_slot(
+        &mut self,
+        slot: ActivitySlot,
+        focus_search: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.activity_slot = slot;
+        self.left_panel_open = true;
+        self.sidebar_tools_open = true;
+        self.activity_bar.update(cx, |bar, cx| {
+            bar.active_slot = slot;
+            bar.left_panel_open = true;
+            cx.notify();
+        });
+        if focus_search {
+            let search_view = self.search_view.clone();
+            cx.on_next_frame(window, move |_workspace, window, cx| {
+                search_view.update(cx, |search, cx| search.focus_query(window, cx));
+            });
+        } else {
+            self.workspace_focus.clone().focus(window, cx);
+        }
+        self.save_session(cx);
+        cx.notify();
+    }
+
+    pub(super) fn on_sidebar_show_sessions(
+        &mut self,
+        _sidebar: &Entity<SessionSidebar>,
+        _event: &SidebarShowSessions,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.sidebar_tools_open = false;
+        self.activity_bar.update(cx, |bar, cx| {
+            bar.left_panel_open = false;
+            cx.notify();
+        });
+        self.save_session(cx);
+        cx.notify();
+    }
+
     pub(super) fn sync_sidebar(&self, cx: &mut Context<Self>) {
         let sessions: Vec<SessionEntry> = self
             .tabs
@@ -693,6 +766,12 @@ impl ConWorkspace {
             }
             "toggle-left-sidebar" => {
                 self.toggle_left_panel(&ToggleLeftPanel, window, cx);
+            }
+            "focus-files" => {
+                self.show_activity_slot(ActivitySlot::Files, false, window, cx);
+            }
+            "search-files" => {
+                self.show_activity_slot(ActivitySlot::Search, true, window, cx);
             }
             "collapse-sidebar" => {
                 self.collapse_sidebar(&CollapseSidebar, window, cx);

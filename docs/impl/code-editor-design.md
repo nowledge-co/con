@@ -14,9 +14,8 @@ share the existing workspace layout and close/focus machinery.
 The left side of the window has two tab-orientation modes:
 
 - horizontal tabs: file/search is the left sidebar panel,
-- vertical tabs: `SessionSidebar` is the permanent left navigation surface, and
-  a compact in-sidebar launcher opens file/search as an overlay drawer from
-  that sidebar edge.
+- vertical tabs: the left sidebar has one rail and one active panel; Files,
+  Search, and Sessions switch that panel without overlaying terminal content.
 
 Hiding the left sidebar removes all left chrome. Unhiding restores the selected
 tab orientation, the previous vertical-tab folded/unfolded mode, and the active
@@ -27,7 +26,8 @@ file/search slot.
 `crates/con-app/src/activity_bar.rs` owns the compact section switcher.
 `ActivitySlot::Files` shows the file explorer and `ActivitySlot::Search` shows
 workspace search. Clicking a different icon switches content and opens the
-drawer/panel. Clicking the already active icon toggles the drawer/panel.
+panel. In vertical-tabs mode the same section choices are surfaced in
+`SessionSidebar` so the rail remains a single navigation surface.
 
 `Cmd+B` is bound to `ToggleLeftPanel` and the user-facing label is "Toggle Left
 Sidebar". The top bar sidebar button remains a first-class toggle for the same

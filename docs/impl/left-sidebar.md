@@ -9,8 +9,7 @@ rail/panel inside the sidebar.
 ## Layout
 
 ```text
-[optional vertical tabs] [pane tree] [agent panel]
-                       └─ Files/Search drawer overlays from the sidebar edge
+[optional tool/session rail] [active sidebar panel] [pane tree] [agent panel]
 ```
 
 When the left sidebar is hidden, none of the three sidebar columns render. This
@@ -18,12 +17,11 @@ preserves the clean terminal view users expect from the sidebar toggle.
 
 When the left sidebar is visible:
 
-- vertical tabs can stay folded as a 44 px rail or unfold into the pinned tab
-  panel when `appearance.tabs_orientation = "vertical"`,
-- the file/search icon strip stays on the vertical-tabs sidebar surface and
-  opens a lightweight drawer from the sidebar edge,
-- the drawer overlays the workspace instead of permanently consuming layout
-  width beside vertical tabs.
+- vertical tabs keep a 44 px rail for Files/Search, session controls, and
+  session icons when `appearance.tabs_orientation = "vertical"`,
+- the adjacent panel shows either Files, Search, or the unfolded session list,
+- Files/Search and sessions are one sidebar system: opening Files/Search keeps a
+  thin session/tool rail and swaps the adjacent panel to Files or Search.
 
 ## Slots
 
@@ -36,18 +34,26 @@ When the left sidebar is visible:
 - `Cmd+B` dispatches `ToggleLeftPanel`.
 - The top bar sidebar button dispatches the same behavior.
 - The toggle hides or unhides the whole sidebar, including vertical tabs and
-  file/search drawer controls.
-- The vertical tab collapse/expand button only changes folded/unfolded tab
-  mode while the sidebar is visible.
-- Clicking an inactive section icon switches slot and opens the drawer.
-- Clicking the active section icon closes or reopens the drawer.
+  file/search panel controls.
+- The vertical tab collapse/expand button folds any active sidebar panel back to
+  the 44 px rail, or unfolds the session list when already folded.
+- Clicking Files or Search switches the active sidebar panel.
+- Clicking a session switches the active sidebar panel back to tabs/sessions.
+- `FocusFiles` (`Cmd+Option+E` on macOS, `Ctrl+Shift+E` on Windows/Linux)
+  opens the Files panel. `SearchFiles` (`Cmd/Ctrl+Shift+F`) opens Search and
+  focuses its query input. Both actions are also exposed in the command
+  palette.
 
 ## Width Rules
 
-The file/search drawer can resize across the available window width. In
-horizontal-tab mode it participates in layout; in vertical-tab mode it overlays
-the pane tree so opening files/search does not create a heavy double-sidebar or
-shift the terminal/editor. The workspace owns this drag state because it has the
+The sidebar width is one shared budget. In vertical-tab mode, the 44 px rail
+plus whichever panel is active must equal the unfolded session-list width, so
+switching between Sessions, Files, and Search never changes the terminal/editor
+origin. In horizontal-tab mode the file/search panel uses that same saved width.
+
+The file/search panel can resize across the available window width. It
+participates in layout, so the terminal/editor starts after the sidebar instead
+of being covered by it. The workspace owns this drag state because it has the
 full layout budget. A capture overlay is rendered during drag so releasing the
 mouse outside the handle exits resize mode reliably.
 

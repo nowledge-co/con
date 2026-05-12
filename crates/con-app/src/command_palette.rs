@@ -27,6 +27,11 @@ const TOGGLE_LEFT_SIDEBAR_SHORTCUT: &str = "secondary-b";
 #[cfg(not(target_os = "macos"))]
 const TOGGLE_LEFT_SIDEBAR_SHORTCUT: &str = "ctrl-shift-b";
 #[cfg(target_os = "macos")]
+const FOCUS_FILES_SHORTCUT: &str = "secondary-alt-e";
+#[cfg(not(target_os = "macos"))]
+const FOCUS_FILES_SHORTCUT: &str = "secondary-shift-e";
+const SEARCH_FILES_SHORTCUT: &str = "secondary-shift-f";
+#[cfg(target_os = "macos")]
 const NEW_SURFACE_SHORTCUT: &str = "secondary-alt-t";
 #[cfg(not(target_os = "macos"))]
 const NEW_SURFACE_SHORTCUT: &str = "alt-shift-t";
@@ -231,6 +236,18 @@ const PALETTE_ACTIONS: &[PaletteAction] = &[
         label: "Toggle Left Sidebar",
         shortcut: TOGGLE_LEFT_SIDEBAR_SHORTCUT,
         category: "View",
+    },
+    PaletteAction {
+        id: "focus-files",
+        label: "Focus Files",
+        shortcut: FOCUS_FILES_SHORTCUT,
+        category: "Workspace",
+    },
+    PaletteAction {
+        id: "search-files",
+        label: "Search Files",
+        shortcut: SEARCH_FILES_SHORTCUT,
+        category: "Workspace",
     },
     PaletteAction {
         id: "settings",

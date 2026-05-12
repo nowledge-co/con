@@ -140,6 +140,10 @@ impl SidebarSearchView {
         self.request_search(cx);
     }
 
+    pub fn focus_query(&self, window: &mut Window, cx: &mut Context<Self>) {
+        self.query.update(cx, |query, cx| query.focus(window, cx));
+    }
+
     fn request_search(&mut self, cx: &mut Context<Self>) {
         self.search_generation = self.search_generation.wrapping_add(1);
         let generation = self.search_generation;
@@ -332,7 +336,8 @@ impl Render for SidebarSearchView {
                             .flex()
                             .items_center()
                             .gap(px(6.0))
-                            .px(px(10.0))
+                            .mx(px(6.0))
+                            .px(px(6.0))
                             .mt(px(8.0))
                             .child(
                                 svg()
@@ -366,10 +371,12 @@ impl Render for SidebarSearchView {
                         .flex()
                         .items_center()
                         .gap(px(8.0))
-                        .pl(px(30.0))
-                        .pr(px(10.0))
+                        .mx(px(6.0))
+                        .pl(px(24.0))
+                        .pr(px(6.0))
+                        .rounded(px(6.0))
                         .cursor_pointer()
-                        .hover(|s| s.bg(theme.muted.opacity(0.08)))
+                        .hover(|s| s.bg(theme.foreground.opacity(0.055)))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |_this, _: &MouseDownEvent, _window, cx| {
@@ -411,75 +418,63 @@ impl Render for SidebarSearchView {
             .flex_col()
             .child(
                 div()
-                    .px(px(10.0))
-                    .pt(px(10.0))
-                    .pb(px(8.0))
+                    .px(px(8.0))
+                    .pt(px(8.0))
+                    .pb(px(6.0))
                     .flex()
                     .flex_col()
-                    .gap(px(8.0))
+                    .gap(px(6.0))
                     .child(
                         div()
-                            .text_size(px(13.0))
-                            .font_family(theme.font_family.clone())
-                            .text_color(theme.foreground.opacity(0.72))
-                            .child("Search"),
+                            .h(px(32.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(7.0))
+                            .px(px(8.0))
+                            .rounded(px(7.0))
+                            .bg(theme.foreground.opacity(0.045))
+                            .child(
+                                svg()
+                                    .path("phosphor/magnifying-glass.svg")
+                                    .size(px(13.0))
+                                    .flex_shrink_0()
+                                    .text_color(theme.muted_foreground.opacity(0.72)),
+                            )
+                            .child(
+                                div().flex_1().min_w_0().child(
+                                    Input::new(&self.query)
+                                        .appearance(false)
+                                        .text_size(px(12.0))
+                                        .line_height(px(17.0)),
+                                ),
+                            ),
                     )
                     .child(
                         div()
-                            .min_h(px(42.0))
-                            .max_h(px(92.0))
+                            .h(px(22.0))
                             .flex()
-                            .flex_col()
+                            .items_center()
+                            .justify_between()
                             .gap(px(6.0))
-                            .px(px(10.0))
-                            .py(px(7.0))
-                            .rounded(px(6.0))
-                            .bg(theme.foreground.opacity(0.055))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_start()
-                                    .gap(px(8.0))
-                                    .child(
-                                        svg()
-                                            .path("phosphor/magnifying-glass.svg")
-                                            .size(px(14.0))
-                                            .mt(px(3.0))
-                                            .text_color(theme.muted_foreground.opacity(0.72)),
-                                    )
-                                    .child(
-                                        div().flex_1().min_w_0().child(
-                                            Input::new(&self.query)
-                                                .appearance(false)
-                                                .text_size(px(13.0))
-                                                .line_height(px(18.0)),
-                                        ),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .justify_end()
-                                    .gap(px(4.0))
-                                    .child(search_option_button(
-                                        "search-case-sensitive",
-                                        "Aa",
-                                        case_sensitive,
-                                        theme,
-                                        cx.listener(|this, checked: &bool, _window, cx| {
-                                            this.set_case_sensitive(*checked, cx);
-                                        }),
-                                    ))
-                                    .child(search_option_button(
-                                        "search-regex",
-                                        ".*",
-                                        regex_enabled,
-                                        theme,
-                                        cx.listener(|this, checked: &bool, _window, cx| {
-                                            this.set_regex(*checked, cx);
-                                        }),
-                                    )),
-                            ),
+                            .px(px(2.0))
+                            .child(search_option_button(
+                                "search-case-sensitive",
+                                "Aa",
+                                case_sensitive,
+                                theme,
+                                cx.listener(|this, checked: &bool, _window, cx| {
+                                    this.set_case_sensitive(*checked, cx);
+                                }),
+                            ))
+                            .child(search_option_button(
+                                "search-regex",
+                                ".*",
+                                regex_enabled,
+                                theme,
+                                cx.listener(|this, checked: &bool, _window, cx| {
+                                    this.set_regex(*checked, cx);
+                                }),
+                            )),
                     ),
             )
             .child(

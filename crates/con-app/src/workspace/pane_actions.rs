@@ -855,7 +855,27 @@ impl ConWorkspace {
                     cx.notify();
                     return true;
                 }
-                EditorFileCloseOutcome::CloseWorkspaceTabOrWindow => return false,
+                EditorFileCloseOutcome::ReplaceEditorPaneWithTerminal => {
+                    let cwd = self
+                        .file_tree_view
+                        .read(cx)
+                        .root()
+                        .and_then(|root| root.to_str())
+                        .map(str::to_string);
+                    let terminal = self.create_terminal(cwd.as_deref(), window, cx);
+                    self.tabs[tab_idx].pane_tree = PaneTree::new(terminal.clone());
+                    if tab_idx == self.active_tab {
+                        terminal.ensure_surface(window, cx);
+                        terminal.focus(window, cx);
+                        self.sync_active_terminal_focus_states(cx);
+                        #[cfg(target_os = "macos")]
+                        self.mark_active_tab_terminal_native_layout_pending(cx);
+                    }
+                    self.sync_sidebar(cx);
+                    self.save_session(cx);
+                    cx.notify();
+                    return true;
+                }
                 EditorFileCloseOutcome::CloseEditorPane => {}
             }
         }

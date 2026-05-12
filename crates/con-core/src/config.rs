@@ -203,6 +203,22 @@ fn default_command_palette() -> String {
     // Ctrl+Shift+P on Windows / Linux, Cmd+Shift+P on macOS.
     "secondary-shift-p".into()
 }
+#[cfg(target_os = "macos")]
+fn default_focus_files() -> String {
+    // Cmd+Shift+E collides with the embedded terminal/AppKit search-selection
+    // path on macOS, so keep the E mnemonic on an option chord that survives
+    // native terminal focus.
+    "secondary-alt-e".into()
+}
+#[cfg(not(target_os = "macos"))]
+fn default_focus_files() -> String {
+    // Matches the common editor convention: Ctrl+Shift+E.
+    "secondary-shift-e".into()
+}
+fn default_search_files() -> String {
+    // Matches the common editor convention: Cmd/Ctrl+Shift+F.
+    "secondary-shift-f".into()
+}
 
 #[cfg(target_os = "macos")]
 fn default_new_tab() -> String {
@@ -431,6 +447,8 @@ pub struct KeybindingConfig {
     pub toggle_pane_scope: String,
     #[serde(alias = "toggle_vertical_tabs")]
     pub toggle_left_panel: String,
+    pub focus_files: String,
+    pub search_files: String,
     pub collapse_sidebar: String,
     pub new_surface: String,
     pub new_surface_split_right: String,
@@ -471,6 +489,8 @@ impl KeybindingConfig {
             ("Split Down", self.split_down.as_str()),
             ("Toggle Pane Scope", self.toggle_pane_scope.as_str()),
             ("Toggle Left Sidebar", self.toggle_left_panel.as_str()),
+            ("Focus Files", self.focus_files.as_str()),
+            ("Search Files", self.search_files.as_str()),
             ("Collapse/Expand Sidebar", self.collapse_sidebar.as_str()),
             ("New Surface Tab", self.new_surface.as_str()),
             (
@@ -552,6 +572,8 @@ impl Default for KeybindingConfig {
             toggle_input_bar: default_toggle_input_bar(),
             toggle_pane_scope: default_toggle_pane_scope(),
             toggle_left_panel: default_toggle_left_panel(),
+            focus_files: default_focus_files(),
+            search_files: default_search_files(),
             collapse_sidebar: default_collapse_sidebar(),
             new_surface: default_new_surface(),
             new_surface_split_right: default_new_surface_split_right(),
@@ -949,6 +971,23 @@ restore_terminal_text = false
     }
 
     #[test]
+    fn default_keybindings_include_file_sidebar_shortcuts() {
+        let config = Config::default();
+        let expected_focus = if cfg!(target_os = "macos") {
+            "secondary-alt-e"
+        } else {
+            "secondary-shift-e"
+        };
+
+        assert_eq!(config.keybindings.focus_files, expected_focus);
+        assert_eq!(config.keybindings.search_files, "secondary-shift-f");
+
+        let shortcuts = config.keybindings.active_shortcuts();
+        assert!(shortcuts.contains(&("Focus Files", expected_focus)));
+        assert!(shortcuts.contains(&("Search Files", "secondary-shift-f")));
+    }
+
+    #[test]
     fn serialized_config_omits_removed_quick_terminal_always_on_top_field() {
         let config = Config::default();
         let serialized = toml::to_string(&config).unwrap();
@@ -966,6 +1005,40 @@ global_summon = "alt-space"
 
         assert!(!config.keybindings.quick_terminal_enabled);
         assert_eq!(config.keybindings.quick_terminal, "cmd-\\");
+    }
+
+    #[test]
+    fn legacy_configs_receive_file_sidebar_shortcut_defaults() {
+        let content = r#"
+[keybindings]
+command_palette = "secondary-shift-p"
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+        let expected_focus = if cfg!(target_os = "macos") {
+            "secondary-alt-e"
+        } else {
+            "secondary-shift-e"
+        };
+
+        assert_eq!(config.keybindings.focus_files, expected_focus);
+        assert_eq!(config.keybindings.search_files, "secondary-shift-f");
+    }
+
+    #[test]
+    fn loaded_configs_preserve_explicit_file_sidebar_shortcuts() {
+        let content = r#"
+[keybindings]
+focus_files = "alt-e"
+search_files = "alt-f"
+"#;
+        let config: Config = toml::from_str(content).unwrap();
+
+        assert_eq!(config.keybindings.focus_files, "alt-e");
+        assert_eq!(config.keybindings.search_files, "alt-f");
+
+        let shortcuts = config.keybindings.active_shortcuts();
+        assert!(shortcuts.contains(&("Focus Files", "alt-e")));
+        assert!(shortcuts.contains(&("Search Files", "alt-f")));
     }
 
     #[test]

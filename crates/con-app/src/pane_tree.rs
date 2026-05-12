@@ -2204,9 +2204,9 @@ impl PaneTree {
     ) -> AnyElement {
         let theme = cx.theme();
         let title_color = if is_focused {
-            theme.foreground.opacity(0.72)
+            theme.foreground.opacity(0.74)
         } else {
-            theme.foreground.opacity(0.52)
+            theme.muted_foreground.opacity(0.70)
         };
         let btn_color = theme.foreground.opacity(0.52);
         let btn_hover_bg = theme.foreground.opacity(0.08);
@@ -2295,7 +2295,11 @@ impl PaneTree {
             .text_size(px(12.0))
             .line_height(px(16.0))
             .font_family(theme.font_family.clone())
-            .font_weight(FontWeight::MEDIUM)
+            .font_weight(if is_focused {
+                FontWeight::MEDIUM
+            } else {
+                FontWeight::NORMAL
+            })
             .text_color(title_color)
             .text_center()
             .child(SharedString::from(title));

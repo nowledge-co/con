@@ -1403,6 +1403,14 @@ impl GhosttyView {
             event,
             window,
             &crate::TogglePaneZoom,
+        ) || crate::terminal_shortcuts::key_down_starts_action_binding(
+            event,
+            window,
+            &crate::FocusFiles,
+        ) || crate::terminal_shortcuts::key_down_starts_action_binding(
+            event,
+            window,
+            &crate::SearchFiles,
         ) {
             return false;
         }

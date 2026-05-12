@@ -160,7 +160,7 @@ fn editor_file_close_outcome_closes_single_empty_editor_pane_container() {
     );
     assert_eq!(
         editor_file_close_outcome(1, true),
-        EditorFileCloseOutcome::CloseWorkspaceTabOrWindow
+        EditorFileCloseOutcome::ReplaceEditorPaneWithTerminal
     );
 }
 
