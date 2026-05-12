@@ -91,14 +91,10 @@ impl ConWorkspace {
                 });
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
         {
             top_bar = top_bar
                 .window_control_area(WindowControlArea::Drag)
-                .on_mouse_down(MouseButton::Left, |_, _window, _cx| {
-                    #[cfg(target_os = "linux")]
-                    _window.start_window_move();
-                })
                 .on_click(|event, window, _cx| {
                     if event.click_count() == 2 {
                         window.titlebar_double_click();
@@ -1029,7 +1025,30 @@ impl ConWorkspace {
             }
         }
 
-        let mut leading_chrome = div().flex().flex_1().min_w_0().items_end();
+        let mut leading_chrome = div()
+            .id("top-bar-leading-chrome")
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .items_end();
+        #[cfg(target_os = "linux")]
+        {
+            // Keep Linux's client-side titlebar draggable without
+            // putting the right-side controls under a parent drag
+            // handler. GPUI Linux does not dispatch window-control
+            // hit tests like Windows, so the draggable area must stay
+            // clear of normal buttons.
+            leading_chrome = leading_chrome
+                .window_control_area(WindowControlArea::Drag)
+                .on_mouse_down(MouseButton::Left, |_, window, _cx| {
+                    window.start_window_move();
+                })
+                .on_click(|event, window, _cx| {
+                    if event.click_count() == 2 {
+                        window.titlebar_double_click();
+                    }
+                });
+        }
         // Show the tab strip when animating/visible OR when a pane is being
         // dragged to become a new tab (so the ghost tab preview is visible
         // even when there is currently only one tab).
