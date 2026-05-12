@@ -1415,12 +1415,15 @@ impl Render for EditorView {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseUpEvent, window, cx| {
-                    if this.point_hits_scrollbar(event.position)
-                        || !this.point_in_content_bounds(event.position)
-                    {
+                    if this.point_hits_scrollbar(event.position) {
+                        this.mouse_up(event);
                         return;
                     }
+                    let in_content = this.point_in_content_bounds(event.position);
                     this.mouse_up(event);
+                    if !in_content {
+                        return;
+                    }
                     window.prevent_default();
                     cx.stop_propagation();
                     cx.notify();
