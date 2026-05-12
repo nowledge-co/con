@@ -589,17 +589,21 @@ impl ConWorkspace {
             .pane_tree
             .contains_pane(focused_pane_id);
 
+        let valid_pane_id = if contains {
+            focused_pane_id
+        } else {
+            self.tabs[self.active_tab].pane_tree.first_pane_id_pub()
+        };
+
         if pane_count > 1 {
-            let valid_pane_id = if contains {
-                focused_pane_id
-            } else {
-                self.tabs[self.active_tab].pane_tree.first_pane_id_pub()
-            };
             let _ = self.close_pane_in_tab(self.active_tab, valid_pane_id, window, cx);
             return;
         }
 
         if self.tabs.len() > 1 {
+            if self.close_pane_in_tab(self.active_tab, valid_pane_id, window, cx) {
+                return;
+            }
             log::debug!(
                 "[close_pane] single pane, closing tab (tabs={})",
                 self.tabs.len()
@@ -671,7 +675,7 @@ impl ConWorkspace {
             return;
         }
         // Focus the target pane first so toggle_zoom_focused acts on it.
-        self.tabs[self.active_tab].pane_tree.focus(pane_id);
+        self.tabs[self.active_tab].pane_tree.focus_pane(pane_id);
         self.toggle_focused_pane_zoom(window, cx);
     }
 
