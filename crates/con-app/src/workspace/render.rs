@@ -594,10 +594,8 @@ impl Render for ConWorkspace {
             .min_h_0()
             .w_full()
             .overflow_hidden()
-            .bg(if cfg!(target_os = "macos") {
-                terminal_surface_color
-            } else {
-                portable_terminal_backdrop_color
+            .when(cfg!(not(target_os = "macos")), |pane_content| {
+                pane_content.bg(portable_terminal_backdrop_color)
             })
             .child(pane_tree_rendered)
             .on_children_prepainted(move |bounds_list, _, _| {
@@ -735,10 +733,8 @@ impl Render for ConWorkspace {
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .bg(if cfg!(target_os = "macos") {
-                terminal_surface_color
-            } else {
-                portable_terminal_backdrop_color
+            .when(cfg!(not(target_os = "macos")), |terminal_area| {
+                terminal_area.bg(portable_terminal_backdrop_color)
             })
             .child(pane_content);
 
