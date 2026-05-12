@@ -379,7 +379,7 @@ impl ConWorkspace {
                             .child(
                                 preset_segment(
                                     "scope-all",
-                                    "phosphor/columns.svg",
+                                    "phosphor/squares-four.svg",
                                     "All panes",
                                     is_broadcast,
                                 )

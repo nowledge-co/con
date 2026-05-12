@@ -342,6 +342,9 @@ impl ConWorkspace {
 
                 let mut close_el = div()
                     .id(close_id)
+                    .absolute()
+                    .right(px(7.0))
+                    .top(px(7.0))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -632,20 +635,16 @@ impl ConWorkspace {
                     );
                 }
 
-                let mut tab_content = div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(6.0))
-                    .w_full()
-                    .min_w_0();
+                let mut tab_content = div().relative().size_full().min_w_0();
 
                 if needs_attention {
                     tab_content = tab_content.child(
                         div()
+                            .absolute()
+                            .left(px(8.0))
+                            .top(px(12.0))
                             .size(px(5.0))
                             .rounded_full()
-                            .flex_shrink_0()
                             .bg(theme.primary),
                     );
                 }
@@ -658,14 +657,17 @@ impl ConWorkspace {
 
                 tab_content = tab_content.child(
                     div()
+                        .absolute()
+                        .left(px(24.0))
+                        .right(px(28.0))
+                        .top(px(4.0))
                         .flex()
                         .items_center()
                         .justify_center()
                         .gap(px(6.0))
-                        .min_w_0()
-                        .max_w(px(154.0))
+                        .min_w(px(0.0))
                         .h(px(22.0))
-                        .px(px(if is_active { 9.0 } else { 2.0 }))
+                        .px(px(if is_active { 9.0 } else { 4.0 }))
                         .rounded(px(8.0))
                         .bg(if is_active {
                             theme.foreground.opacity(0.045)

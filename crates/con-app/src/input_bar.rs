@@ -230,7 +230,7 @@ impl InputBar {
 
     fn pane_scope_summary(&self) -> (String, &'static str) {
         match self.pane_scope_mode {
-            PaneScopeMode::Broadcast => ("All panes".to_string(), "phosphor/columns.svg"),
+            PaneScopeMode::Broadcast => ("All panes".to_string(), "phosphor/squares-four.svg"),
             PaneScopeMode::Focused => ("Focused".to_string(), "phosphor/target.svg"),
             PaneScopeMode::Custom => {
                 let targets = self.effective_target_ids();
@@ -1179,7 +1179,7 @@ impl Render for InputBar {
         let mono_scale = mono_density_scale(theme);
         let control_size = mono_space_px(theme, 28.0);
         let mode_icon_size = mono_space_px(theme, 15.0);
-        let compact_icon_size = mono_space_px(theme, 13.0);
+        let compact_icon_size = mono_space_px(theme, 14.0);
 
         let mode_tint = self.mode.tint(cx);
 
@@ -1230,14 +1230,14 @@ impl Render for InputBar {
                         div()
                             .id("pane-scope")
                             .h(control_size)
-                            .px(px(10.0 * mono_scale))
+                            .px(px(11.0 * mono_scale))
                             .rounded(px(8.0 * mono_scale))
                             .cursor_pointer()
                             .flex()
                             .items_center()
-                            .gap(px(7.0 * mono_scale))
+                            .gap(px(8.0 * mono_scale))
                             .bg(if scope_is_expanded {
-                                theme.primary.opacity(0.055)
+                                theme.primary.opacity(0.050)
                             } else {
                                 theme.foreground.opacity(0.045)
                             })
@@ -1257,23 +1257,10 @@ impl Render for InputBar {
                                 }),
                             )
                             .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .size(px(20.0 * mono_scale))
-                                    .rounded(px(6.0 * mono_scale))
-                                    .bg(if scope_is_expanded {
-                                        theme.primary.opacity(0.075)
-                                    } else {
-                                        theme.foreground.opacity(0.045)
-                                    })
-                                    .child(
-                                        svg()
-                                            .path(scope_icon)
-                                            .size(compact_icon_size)
-                                            .text_color(scope_tint),
-                                    ),
+                                svg()
+                                    .path(scope_icon)
+                                    .size(compact_icon_size)
+                                    .text_color(scope_tint),
                             )
                             .child(
                                 div()
