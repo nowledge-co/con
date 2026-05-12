@@ -25,8 +25,7 @@ con is still pre-release, so entries may group related beta work while the produ
   shallow git fetches for git-backed Zig packages, so transient Zig package
   fetch failures are less likely to block local or CI builds. _(PR
   [#204](https://github.com/nowledge-co/con-terminal/pull/204) by
-  [@sundy-li](https://github.com/sundy-li), with follow-up by
-  [@wey-gu](https://github.com/wey-gu))_
+  [@sundy-li](https://github.com/sundy-li))_
 
 ## `v0.1.0-beta.71` - 2026-05-12
 
