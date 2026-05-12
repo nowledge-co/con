@@ -252,6 +252,7 @@ pub struct SessionSidebar {
     /// vertical tabs. The sidebar then becomes the single icon rail so
     /// tools and sessions share one left-navigation surface.
     tools_panel_open: bool,
+    active_tool_slot: ActivitySlot,
     tab_accent_inactive_alpha: f32,
     tab_accent_inactive_hover_alpha: f32,
 }
@@ -336,6 +337,7 @@ impl SessionSidebar {
             drag_preview: Rc::new(RefCell::new(None)),
             ui_opacity: 0.92,
             tools_panel_open: false,
+            active_tool_slot: ActivitySlot::Files,
             tab_accent_inactive_alpha: crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA,
             tab_accent_inactive_hover_alpha: crate::tab_colors::TAB_ACCENT_INACTIVE_HOVER_ALPHA,
         }
@@ -401,11 +403,12 @@ impl SessionSidebar {
         }
     }
 
-    pub fn set_tools_panel_open(&mut self, open: bool) {
+    pub fn set_tools_panel_open(&mut self, open: bool, active_slot: ActivitySlot) {
         if self.tools_panel_open != open {
             self.tools_panel_open = open;
             self.hovered_rail = None;
         }
+        self.active_tool_slot = active_slot;
     }
 
     pub fn set_panel_width(&mut self, width: f32, cx: &mut Context<Self>) {
@@ -651,6 +654,17 @@ impl SessionSidebar {
         let theme = cx.theme();
         let rail_bg = sidebar_surface(theme, self.ui_opacity, 0.035);
         let session_count = self.sessions.len();
+        let files_color = if self.tools_panel_open && self.active_tool_slot == ActivitySlot::Files {
+            theme.primary
+        } else {
+            theme.muted_foreground
+        };
+        let search_color = if self.tools_panel_open && self.active_tool_slot == ActivitySlot::Search
+        {
+            theme.primary
+        } else {
+            theme.muted_foreground
+        };
         self.tab_bounds.borrow_mut().clear();
         let mut rail = div()
             .id("tab-sidebar-rail")
@@ -813,7 +827,7 @@ impl SessionSidebar {
             .child(rail_icon_button(
                 "tab-sidebar-rail-files",
                 "phosphor/folders.svg",
-                theme.muted_foreground,
+                files_color,
                 theme,
                 cx.listener(|_, _, _, cx| {
                     cx.emit(SidebarOpenToolSlot {
@@ -824,7 +838,7 @@ impl SessionSidebar {
             .child(rail_icon_button(
                 "tab-sidebar-rail-search",
                 "phosphor/file-magnifying-glass.svg",
-                theme.muted_foreground,
+                search_color,
                 theme,
                 cx.listener(|_, _, _, cx| {
                     cx.emit(SidebarOpenToolSlot {
@@ -1098,58 +1112,18 @@ impl SessionSidebar {
 
     fn render_panel_body(
         &mut self,
-        is_overlay: bool,
+        _is_overlay: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let body_bg;
         let header_color;
         let header_font;
-        let files_btn;
-        let search_btn;
-        let new_btn;
-        let toggle_btn;
         {
             let theme = cx.theme();
             body_bg = sidebar_surface(theme, self.ui_opacity, 0.045);
             header_color = theme.muted_foreground.opacity(0.55);
             header_font = theme.font_family.clone();
-            files_btn = panel_icon_button(
-                "tab-sidebar-panel-files",
-                "phosphor/folders.svg",
-                theme,
-                cx.listener(|_this, _, _, cx| {
-                    cx.emit(SidebarOpenToolSlot {
-                        slot: ActivitySlot::Files,
-                    })
-                }),
-            );
-            search_btn = panel_icon_button(
-                "tab-sidebar-panel-search",
-                "phosphor/file-magnifying-glass.svg",
-                theme,
-                cx.listener(|_this, _, _, cx| {
-                    cx.emit(SidebarOpenToolSlot {
-                        slot: ActivitySlot::Search,
-                    })
-                }),
-            );
-            new_btn = panel_icon_button(
-                "tab-sidebar-panel-new",
-                "phosphor/plus.svg",
-                theme,
-                cx.listener(|_this, _, _, cx| cx.emit(NewSession)),
-            );
-            toggle_btn = panel_icon_button(
-                if is_overlay {
-                    "tab-sidebar-overlay-pin"
-                } else {
-                    "tab-sidebar-panel-collapse"
-                },
-                "phosphor/sidebar-simple.svg",
-                theme,
-                cx.listener(|this, _, _, cx| this.toggle_pinned(cx)),
-            );
         }
 
         let header_top = self.leading_top_pad.max(0.0);
@@ -1172,15 +1146,6 @@ impl SessionSidebar {
                             .text_color(header_color)
                             .font_family(header_font)
                             .child(format!("{} TABS", self.sessions.len())),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(2.0))
-                            .child(files_btn)
-                            .child(search_btn)
-                            .child(new_btn)
-                            .child(toggle_btn),
                     ),
             );
 
@@ -1355,7 +1320,7 @@ impl SessionSidebar {
             .flex()
             .flex_col()
             .h_full()
-            .w(px(self.effective_panel_width()))
+            .w_full()
             .flex_shrink_0()
             .bg(body_bg)
             .child(header)
@@ -1753,13 +1718,22 @@ impl Render for SessionSidebar {
                 let t = self.width_motion.current().clamp(0.0, 1.0);
                 let visible_w = RAIL_WIDTH + (self.effective_panel_width() - RAIL_WIDTH) * t;
                 let panel = self.render_panel_body(false, window, cx);
+                let panel_w = (visible_w - RAIL_WIDTH).max(0.0);
                 div()
                     .flex()
                     .h_full()
                     .w(px(visible_w))
                     .flex_shrink_0()
                     .overflow_hidden()
-                    .child(panel)
+                    .child(self.render_rail(window, cx))
+                    .child(
+                        div()
+                            .h_full()
+                            .w(px(panel_w))
+                            .flex_shrink_0()
+                            .overflow_hidden()
+                            .child(panel),
+                    )
                     .into_any_element()
             }
             PanelMode::Collapsed => {
@@ -1928,34 +1902,6 @@ where
         .cursor_pointer()
         .hover(move |s| s.bg(hover_bg))
         .child(svg().path(icon).size(px(14.0)).text_color(icon_color))
-        .on_mouse_down(MouseButton::Left, handler)
-}
-
-fn panel_icon_button<F>(
-    id: &'static str,
-    icon: &'static str,
-    theme: &gpui_component::Theme,
-    handler: F,
-) -> Stateful<Div>
-where
-    F: Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
-{
-    let hover_bg = surface_tone(theme, 0.065);
-    div()
-        .id(id)
-        .size(px(24.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(5.0))
-        .cursor_pointer()
-        .hover(move |s| s.bg(hover_bg))
-        .child(
-            svg()
-                .path(icon)
-                .size(px(13.0))
-                .text_color(theme.muted_foreground),
-        )
         .on_mouse_down(MouseButton::Left, handler)
 }
 

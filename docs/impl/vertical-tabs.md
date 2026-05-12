@@ -7,7 +7,7 @@ coexist with the code-editor sidebar tools instead of being replaced by them.
 
 ## Model
 
-The left side of the workspace has two independent concepts:
+The left side of the workspace has three independent concepts:
 
 - tab orientation: `appearance.tabs_orientation = "horizontal" | "vertical"`,
 - sidebar visibility: hide/unhide the whole left sidebar for a clean terminal
@@ -29,11 +29,11 @@ available in the compact state.
 
 ## Unfolded Mode
 
-Unfolded mode renders the pinned vertical tab panel with tab titles, subtitles,
-rename, close, drag/drop, and create-tab controls. File/search remains available
-from the same left sidebar rail. Opening Files/Search switches the active
-sidebar panel to that tool and keeps the session rail visible; selecting a
-session switches the panel back to vertical tabs.
+Unfolded mode keeps the rail visible and renders the session list in the
+adjacent panel, with tab titles, subtitles, rename, close, drag/drop, and
+create-tab controls. Opening Files/Search switches only that adjacent panel to
+the selected tool; selecting a session switches the panel back to vertical
+tabs.
 
 ## Compatibility
 

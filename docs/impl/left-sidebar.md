@@ -17,9 +17,9 @@ preserves the clean terminal view users expect from the sidebar toggle.
 
 When the left sidebar is visible:
 
-- vertical tabs can stay folded as a 44 px rail or unfold into the pinned tab
-  panel when `appearance.tabs_orientation = "vertical"`,
-- the folded rail puts Files/Search first, then session controls and sessions,
+- vertical tabs keep a 44 px rail for Files/Search, session controls, and
+  session icons when `appearance.tabs_orientation = "vertical"`,
+- the adjacent panel shows either Files, Search, or the unfolded session list,
 - Files/Search and sessions are one sidebar system: opening Files/Search keeps a
   thin session/tool rail and swaps the adjacent panel to Files or Search.
 
@@ -34,7 +34,7 @@ When the left sidebar is visible:
 - `Cmd+B` dispatches `ToggleLeftPanel`.
 - The top bar sidebar button dispatches the same behavior.
 - The toggle hides or unhides the whole sidebar, including vertical tabs and
-  file/search drawer controls.
+  file/search panel controls.
 - The vertical tab collapse/expand button only changes folded/unfolded tab
   mode while the sidebar is visible.
 - Clicking Files or Search switches the active sidebar panel.

@@ -409,9 +409,11 @@ impl Render for ConWorkspace {
         let show_vertical_tabs = show_left_panel && vertical_tabs_enabled;
         let show_sidebar_tools =
             show_left_panel && (!vertical_tabs_enabled || self.sidebar_tools_open);
+        let activity_slot = self.activity_slot;
         self.sidebar.update(cx, |sidebar, _cx| {
             sidebar.set_tools_panel_open(
                 show_left_panel && vertical_tabs_enabled && show_sidebar_tools,
+                activity_slot,
             );
         });
 
@@ -455,6 +457,10 @@ impl Render for ConWorkspace {
         let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
         #[cfg(not(target_os = "macos"))]
         let elevated_panel_surface_color = theme.background.opacity(elevated_ui_surface_opacity);
+        let sidebar_seam_color =
+            theme
+                .foreground
+                .opacity(if theme.is_dark() { 0.055 } else { 0.045 });
         let (tab_sidebar_width, sidebar_content_width) = if show_left_panel {
             let sidebar = self.sidebar.read(cx);
             (
@@ -812,7 +818,7 @@ impl Render for ConWorkspace {
                     .bottom_0()
                     .left(px((resize_edge - 1.0).max(0.0)))
                     .w(px(1.0))
-                    .bg(chrome_static_seam_color),
+                    .bg(sidebar_seam_color),
             );
             main_area = main_area.child(
                 div()
@@ -844,7 +850,7 @@ impl Render for ConWorkspace {
                     .bottom_0()
                     .left(px((left_panel_width - 1.0).max(0.0)))
                     .w(px(1.0))
-                    .bg(chrome_static_seam_color),
+                    .bg(sidebar_seam_color),
             );
         }
 
