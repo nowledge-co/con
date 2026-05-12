@@ -384,9 +384,11 @@ fn installed_app_ghostty_resources_dir() -> Option<PathBuf> {
 fn installed_app_ghostty_resources_dir_for_exe(exe: &Path) -> Option<PathBuf> {
     for ancestor in exe.ancestors() {
         if ancestor.extension().is_some_and(|ext| ext == "app") {
-            let resources_dir = ancestor.join("Contents/Resources/ghostty");
-            if resources_dir.is_dir() {
-                return Some(resources_dir);
+            let resources_root = ancestor.join("Contents/Resources");
+            let ghostty_dir = resources_root.join("ghostty");
+            let terminfo_sentinel = resources_root.join("terminfo/78/xterm-ghostty");
+            if ghostty_dir.is_dir() && terminfo_sentinel.is_file() {
+                return Some(ghostty_dir);
             }
         }
     }
@@ -1703,11 +1705,43 @@ mod tests {
         let app_root = root.join("con Beta.app");
         let macos_dir = app_root.join("Contents/MacOS");
         let resources_dir = app_root.join("Contents/Resources/ghostty");
+        let terminfo_file = app_root.join("Contents/Resources/terminfo/78/xterm-ghostty");
+        std::fs::create_dir_all(&macos_dir).unwrap();
+        std::fs::create_dir_all(&resources_dir).unwrap();
+        std::fs::create_dir_all(terminfo_file.parent().unwrap()).unwrap();
+        std::fs::write(&terminfo_file, b"terminfo").unwrap();
+
+        let found = installed_app_ghostty_resources_dir_for_exe(&macos_dir.join("con"));
+
+        assert_eq!(found.as_deref(), Some(resources_dir.as_path()));
+    }
+
+    #[test]
+    fn ignores_installed_app_resources_when_bundled_terminfo_is_missing() {
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "con-ghostty-missing-terminfo-test-{}-{unique}",
+            std::process::id()
+        ));
+        let _cleanup = Cleanup(root.clone());
+        let app_root = root.join("con.app");
+        let macos_dir = app_root.join("Contents/MacOS");
+        let resources_dir = app_root.join("Contents/Resources/ghostty");
         std::fs::create_dir_all(&macos_dir).unwrap();
         std::fs::create_dir_all(&resources_dir).unwrap();
 
         let found = installed_app_ghostty_resources_dir_for_exe(&macos_dir.join("con"));
 
-        assert_eq!(found.as_deref(), Some(resources_dir.as_path()));
+        assert_eq!(found, None);
     }
 }
