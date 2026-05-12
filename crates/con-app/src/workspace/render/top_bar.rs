@@ -632,70 +632,65 @@ impl ConWorkspace {
                     );
                 }
 
-                let mut left_reserve = div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .size(px(18.0))
-                    .flex_shrink_0();
-
-                if needs_attention {
-                    left_reserve =
-                        left_reserve.child(div().size(px(5.0)).rounded_full().bg(theme.primary));
-                }
-
                 let mut tab_content = div()
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(px(7.0))
                     .size_full()
-                    .min_w_0()
-                    .child(left_reserve);
+                    .min_w_0();
+
+                if needs_attention {
+                    tab_content = tab_content.child(
+                        div()
+                            .size(px(5.0))
+                            .rounded_full()
+                            .flex_shrink_0()
+                            .bg(theme.primary),
+                    );
+                }
 
                 tab_content = tab_content.child(
                     div()
                         .flex()
                         .items_center()
-                        .justify_center()
+                        .gap(px(7.0))
                         .flex_1()
                         .min_w(px(0.0))
+                        .overflow_x_hidden()
+                        .whitespace_nowrap()
+                        .child(
+                            svg()
+                                .path(tab_icon)
+                                .size(px(13.0))
+                                .flex_shrink_0()
+                                .text_color(if is_active {
+                                    tab_color
+                                        .map(|color| {
+                                            crate::tab_colors::tab_accent_color_hsla(color, cx)
+                                        })
+                                        .unwrap_or_else(|| theme.foreground.opacity(0.72))
+                                } else {
+                                    theme.muted_foreground.opacity(0.42)
+                                }),
+                        )
                         .child(
                             div()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .gap(px(6.0))
                                 .min_w_0()
-                                .max_w(px(168.0))
-                                .h(px(23.0))
-                                .px(px(if is_active { 11.0 } else { 5.0 }))
-                                .rounded(px(8.5))
-                                .bg(if is_active {
-                                    theme.foreground.opacity(0.045)
-                                } else {
-                                    theme.transparent
-                                })
                                 .overflow_x_hidden()
                                 .whitespace_nowrap()
-                                .child(
-                                    div()
-                                        .min_w_0()
-                                        .overflow_x_hidden()
-                                        .whitespace_nowrap()
-                                        .text_ellipsis()
-                                        .font_family(theme.mono_font_family.clone())
-                                        .font_weight(if is_active {
-                                            FontWeight::SEMIBOLD
-                                        } else {
-                                            FontWeight::MEDIUM
-                                        })
-                                        .text_color(if is_active {
-                                            theme.foreground.opacity(0.90)
-                                        } else {
-                                            theme.muted_foreground.opacity(0.66)
-                                        })
-                                        .child(display_title),
-                                ),
+                                .text_ellipsis()
+                                .font_family(theme.mono_font_family.clone())
+                                .font_weight(if is_active {
+                                    FontWeight::SEMIBOLD
+                                } else {
+                                    FontWeight::MEDIUM
+                                })
+                                .text_color(if is_active {
+                                    theme.foreground.opacity(0.90)
+                                } else {
+                                    theme.muted_foreground.opacity(0.66)
+                                })
+                                .child(display_title),
                         ),
                 );
 
