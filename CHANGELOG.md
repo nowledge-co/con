@@ -4,7 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.71` - unreleased
+## `v0.1.0-beta.71` - 2026-05-12
+
+### Added
+
+**Editor**
+
+- Added the first built-in code editor surface, with editable multi-file editor
+  panes, file-tree and search panels in the left sidebar, syntax highlighting,
+  basic diagnostics, save/undo/selection support, and editor panes that
+  participate in the existing split-pane flow. _(PR
+  [#179](https://github.com/nowledge-co/con-terminal/pull/179) by
+  [@sundy-li](https://github.com/sundy-li))_
 
 ### Fixed
 
@@ -60,19 +71,6 @@ con is still pre-release, so entries may group related beta work while the produ
   [#192](https://github.com/nowledge-co/con-terminal/pull/192) by
   [@iknowu10](https://github.com/iknowu10))_
 
-## `v0.1.0-beta.70` - 2026-05-12
-
-### Added
-
-**Editor**
-
-- Added the first built-in code editor surface, with editable multi-file editor
-  panes, file-tree and search panels in the left sidebar, syntax highlighting,
-  basic diagnostics, save/undo/selection support, and editor panes that
-  participate in the existing split-pane flow. _(PR
-  [#179](https://github.com/nowledge-co/con-terminal/pull/179) by
-  [@sundy-li](https://github.com/sundy-li))_
-
 ### Changed
 
 **Workspace**
@@ -91,6 +89,8 @@ con is still pre-release, so entries may group related beta work while the produ
   Ghostty's auto-injection from loading. _(PR
   [#187](https://github.com/nowledge-co/con-terminal/pull/187) by
   [@iknowu10](https://github.com/iknowu10))_
+
+## `v0.1.0-beta.70` - 2026-05-12
 
 ### Fixed
 
