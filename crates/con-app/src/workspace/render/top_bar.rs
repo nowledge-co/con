@@ -1,56 +1,6 @@
 use super::super::*;
 use gpui_component::menu::ContextMenuExt;
 
-fn compact_tab_cwd_label(dir: Option<&str>) -> Option<String> {
-    let dir = dir?;
-    let path = std::path::Path::new(dir);
-    let home = std::env::var("HOME").ok();
-    let mut label = if let Some(home) = home.as_deref() {
-        if dir == home {
-            "~".to_string()
-        } else if let Ok(stripped) = path.strip_prefix(home) {
-            format!("~/{}", stripped.to_string_lossy())
-        } else {
-            dir.to_string()
-        }
-    } else {
-        dir.to_string()
-    };
-    if label.len() > 30 {
-        if let Some(name) = path.file_name().map(|name| name.to_string_lossy()) {
-            label = format!("…/{name}");
-        }
-    }
-    (!label.trim().is_empty()).then_some(label)
-}
-
-fn git_dir_for_worktree(worktree: &std::path::Path) -> Option<std::path::PathBuf> {
-    let marker = worktree.join(".git");
-    if marker.is_dir() {
-        return Some(marker);
-    }
-    let contents = std::fs::read_to_string(&marker).ok()?;
-    let gitdir = contents.trim().strip_prefix("gitdir:")?.trim();
-    let path = std::path::PathBuf::from(gitdir);
-    Some(if path.is_absolute() {
-        path
-    } else {
-        worktree.join(path)
-    })
-}
-
-fn tab_git_branch_label(dir: Option<&str>) -> Option<String> {
-    let dir = dir?;
-    let worktree = find_git_worktree_root(std::path::Path::new(dir))?;
-    let git_dir = git_dir_for_worktree(&worktree)?;
-    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
-    let head = head.trim();
-    if let Some(branch) = head.strip_prefix("ref: refs/heads/") {
-        return Some(branch.rsplit('/').next().unwrap_or(branch).to_string());
-    }
-    (!head.is_empty()).then(|| head.chars().take(7).collect())
-}
-
 fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
     if alpha.is_finite() {
         alpha.clamp(0.0, 1.0)
@@ -387,15 +337,6 @@ impl ConWorkspace {
                 } else {
                     presentation.name
                 };
-                let tab_primary_title = if is_active {
-                    compact_tab_cwd_label(dir_for_tab.as_deref())
-                        .unwrap_or_else(|| display_title.clone())
-                } else {
-                    display_title.clone()
-                };
-                let tab_branch_label = is_active
-                    .then(|| tab_git_branch_label(dir_for_tab.as_deref()))
-                    .flatten();
 
                 let close_id = ElementId::Name(format!("tab-close-{}", index).into());
 
@@ -691,7 +632,13 @@ impl ConWorkspace {
                     );
                 }
 
-                let mut tab_content = div().flex().items_center().gap(px(5.0)).w_full().min_w_0();
+                let mut tab_content = div()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(6.0))
+                    .w_full()
+                    .min_w_0();
 
                 if needs_attention {
                     tab_content = tab_content.child(
@@ -703,33 +650,37 @@ impl ConWorkspace {
                     );
                 }
 
-                // Tab active indicator dot — only shown on the active tab.
-                // Has accent color → use that color; no color → green dot.
-                if is_active {
-                    let dot_color = if let Some(color) = tab_color {
-                        crate::tab_colors::tab_accent_color_hsla(color, cx)
-                    } else {
-                        // Green active indicator
-                        crate::tab_colors::active_tab_indicator_color()
-                    };
-                    tab_content = tab_content.child(
-                        div()
-                            .size(px(7.0))
-                            .rounded_full()
-                            .flex_shrink_0()
-                            .bg(dot_color),
-                    );
-                }
+                let active_dot_color = if let Some(color) = tab_color {
+                    crate::tab_colors::tab_accent_color_hsla(color, cx)
+                } else {
+                    crate::tab_colors::active_tab_indicator_color()
+                };
 
                 tab_content = tab_content.child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(8.0))
-                        .flex_1()
+                        .justify_center()
+                        .gap(px(6.0))
                         .min_w_0()
+                        .max_w(px(154.0))
+                        .h(px(22.0))
+                        .px(px(if is_active { 9.0 } else { 2.0 }))
+                        .rounded(px(8.0))
+                        .bg(if is_active {
+                            theme.foreground.opacity(0.045)
+                        } else {
+                            theme.transparent
+                        })
                         .overflow_x_hidden()
                         .whitespace_nowrap()
+                        .children(is_active.then(|| {
+                            div()
+                                .size(px(6.0))
+                                .rounded_full()
+                                .flex_shrink_0()
+                                .bg(active_dot_color)
+                        }))
                         .child(
                             div()
                                 .min_w_0()
@@ -747,18 +698,8 @@ impl ConWorkspace {
                                 } else {
                                     theme.muted_foreground.opacity(0.66)
                                 })
-                                .child(tab_primary_title),
-                        )
-                        .children(tab_branch_label.map(|branch| {
-                            div()
-                                .flex_shrink_0()
-                                .font_family(theme.mono_font_family.clone())
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_size(px(11.0))
-                                .line_height(px(13.0))
-                                .text_color(theme.success.opacity(0.82))
-                                .child(branch)
-                        })),
+                                .child(display_title),
+                        ),
                 );
 
                 tab_content = tab_content.child(close_button);
