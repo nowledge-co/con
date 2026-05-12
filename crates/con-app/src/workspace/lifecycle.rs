@@ -693,7 +693,6 @@ impl ConWorkspace {
             input_bar_motion: MotionValue::new(if session.input_bar_visible { 1.0 } else { 0.0 }),
             modal_was_open: false,
             ghostty_hidden: false,
-            pending_drag_init: std::sync::Arc::new(std::sync::Mutex::new(None)),
             agent_panel_drag: None,
             sidebar_drag: None,
             terminal_theme,

@@ -287,7 +287,7 @@ impl ConWorkspace {
                                         .line_height(px(13.0))
                                         .font_family(theme.mono_font_family.clone())
                                         .text_color(theme.muted_foreground.opacity(0.58))
-                                        .child("Choose where command-mode input is sent"),
+                                        .child("Choose where input is sent"),
                                 ),
                         ),
                     )

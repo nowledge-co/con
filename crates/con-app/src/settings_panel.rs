@@ -137,6 +137,7 @@ pub struct SettingsPanel {
     save_error: Option<String>,
     save_error_kind: Option<SettingsSaveErrorKind>,
     last_saved_at: Option<std::time::SystemTime>,
+    close_confirmation_visible: bool,
 
     // Theme import
     custom_theme_name_input: Entity<InputState>,
@@ -1547,6 +1548,7 @@ impl SettingsPanel {
             last_saved_at: std::fs::metadata(Config::config_path())
                 .and_then(|m| m.modified())
                 .ok(),
+            close_confirmation_visible: false,
             custom_theme_name_input,
             custom_theme_preview: None,
             custom_theme_status: None,
@@ -1579,6 +1581,7 @@ impl SettingsPanel {
         self.standalone = true;
         self.visible = true;
         self.preview_snapshot = Some(self.config.clone());
+        self.close_confirmation_visible = false;
         self.overlay_motion
             .set_target(1.0, std::time::Duration::ZERO);
         self.refresh_controls_from_config(window, cx);
@@ -1589,6 +1592,7 @@ impl SettingsPanel {
         if !self.standalone {
             return;
         }
+        self.close_confirmation_visible = false;
         self.set_recording_key(None);
         if let Some(snapshot) = self.preview_snapshot.take() {
             self.config = snapshot;
@@ -2266,9 +2270,7 @@ impl SettingsPanel {
         !self.standalone && self.is_visible()
     }
 
-    fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.set_recording_key(None);
-
+    fn sync_config_from_controls(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
         let max_turns_text = self.max_turns_input.read(cx).value().to_string();
         let temperature_text = self.temperature_input.read(cx).value().to_string();
         let suggestion_provider_label = self
@@ -2319,13 +2321,10 @@ impl SettingsPanel {
             ui_font_size_text.parse::<f32>().ok()
         };
         let Some(parsed_ui_font_size) = parsed_ui_font_size else {
-            self.save_error = Some(format!(
+            return Err(format!(
                 "UI Size must be a number between {:.1} and {:.1}.",
                 MIN_UI_FONT_SIZE, MAX_UI_FONT_SIZE
             ));
-            self.save_error_kind = Some(SettingsSaveErrorKind::Other);
-            cx.notify();
-            return;
         };
         self.config.appearance.ui_font_size = Self::clamp_ui_font_size(parsed_ui_font_size);
         self.config.appearance.terminal_opacity =
@@ -2360,14 +2359,6 @@ impl SettingsPanel {
         );
         self.config.appearance.background_image_repeat = self.background_image_repeat;
 
-        // Keybindings are updated directly via record_keystroke — no reading needed
-        if let Some(message) = keybinding_conflict_message(&self.config.keybindings) {
-            self.save_error = Some(message);
-            self.save_error_kind = Some(SettingsSaveErrorKind::KeybindingConflict);
-            cx.notify();
-            return;
-        }
-
         // Network / proxy
         // Blank field → None (leave inherited env untouched).
         // Non-empty   → Some(value) (override or clear on next startup).
@@ -2383,6 +2374,81 @@ impl SettingsPanel {
         } else {
             Some(https_proxy_text)
         };
+
+        Ok(())
+    }
+
+    fn config_matches(a: &Config, b: &Config) -> bool {
+        match (toml::to_string_pretty(a), toml::to_string_pretty(b)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+
+    fn has_unsaved_changes(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(snapshot) = self.preview_snapshot.clone() else {
+            return false;
+        };
+
+        match self.sync_config_from_controls(cx) {
+            Ok(()) => !Self::config_matches(&snapshot, &self.config),
+            Err(_) => true,
+        }
+    }
+
+    pub fn request_standalone_close(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.standalone {
+            return true;
+        }
+
+        if !self.has_unsaved_changes(cx) {
+            self.close_confirmation_visible = false;
+            self.revert_standalone_preview(cx);
+            return true;
+        }
+
+        self.close_confirmation_visible = true;
+        cx.notify();
+        false
+    }
+
+    fn keep_editing_after_close_prompt(&mut self, cx: &mut Context<Self>) {
+        self.close_confirmation_visible = false;
+        cx.notify();
+    }
+
+    fn save_and_close_standalone(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.save(window, cx);
+        if self.save_error.is_none() {
+            self.close_confirmation_visible = false;
+            window.remove_window();
+        } else {
+            self.close_confirmation_visible = true;
+            cx.notify();
+        }
+    }
+
+    fn save(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.set_recording_key(None);
+
+        if let Err(message) = self.sync_config_from_controls(cx) {
+            self.save_error = Some(message);
+            self.save_error_kind = Some(SettingsSaveErrorKind::Other);
+            cx.notify();
+            return;
+        }
+
+        // Keybindings are updated directly via record_keystroke — no reading needed
+        if let Some(message) = keybinding_conflict_message(&self.config.keybindings) {
+            self.save_error = Some(message);
+            self.save_error_kind = Some(SettingsSaveErrorKind::KeybindingConflict);
+            cx.notify();
+            return;
+        }
 
         match self.persist_config() {
             Ok(()) => {
@@ -5221,6 +5287,7 @@ impl Render for SettingsPanel {
             SettingsSection::Keys => self.render_keys(cx),
         };
 
+        let has_unsaved_changes = self.standalone && self.has_unsaved_changes(cx);
         let theme = cx.theme();
         let viewport = window.viewport_size();
         let viewport_w = viewport.width.as_f32();
@@ -5342,14 +5409,16 @@ impl Render for SettingsPanel {
             .overflow_y_scroll()
             .p(content_pad)
             .child(content);
-        let save_button_tint = theme
-            .foreground
-            .opacity(if theme.is_dark() { 0.84 } else { 0.78 });
+        let save_button_tint = theme.foreground.opacity(if has_unsaved_changes {
+            if theme.is_dark() { 0.88 } else { 0.82 }
+        } else {
+            0.48
+        });
         let save_button_style = ButtonCustomVariant::new(cx)
-            .color(save_button_tint.opacity(0.10))
+            .color(save_button_tint.opacity(if has_unsaved_changes { 0.11 } else { 0.04 }))
             .foreground(save_button_tint)
-            .hover(save_button_tint.opacity(0.16))
-            .active(save_button_tint.opacity(0.20));
+            .hover(save_button_tint.opacity(if has_unsaved_changes { 0.16 } else { 0.04 }))
+            .active(save_button_tint.opacity(if has_unsaved_changes { 0.20 } else { 0.04 }));
         let header_density = ui_density_scale(theme);
         let surface_rounding = if self.standalone { px(0.0) } else { px(12.0) };
         let header_left_padding = if self.standalone && cfg!(target_os = "macos") {
@@ -5410,8 +5479,9 @@ impl Render for SettingsPanel {
                 match event.keystroke.key.as_str() {
                     "escape" => {
                         if this.standalone {
-                            this.revert_standalone_preview(cx);
-                            window.remove_window();
+                            if this.request_standalone_close(window, cx) {
+                                window.remove_window();
+                            }
                         } else {
                             this.save(window, cx);
                         }
@@ -5424,8 +5494,9 @@ impl Render for SettingsPanel {
                     }
                     "w" if event.keystroke.modifiers.platform => {
                         if this.standalone {
-                            this.revert_standalone_preview(cx);
-                            window.remove_window();
+                            if this.request_standalone_close(window, cx) {
+                                window.remove_window();
+                            }
                         } else {
                             this.save(window, cx);
                         }
@@ -5450,124 +5521,209 @@ impl Render for SettingsPanel {
                                 div()
                                     .flex()
                                     .items_center()
-                                    .gap(px(8.0))
+                                    .gap(px(10.0))
                                     .flex_shrink_0()
                                     .pr(px(20.0))
-                                    .child(
-                                        div()
-                                            .id("open-config-file")
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(3.0))
-                                            .cursor_pointer()
-                                            .text_size(px(10.5))
-                                            .text_color(theme.muted_foreground.opacity(0.4))
-                                            .hover(|s| {
-                                                s.text_color(theme.muted_foreground.opacity(0.7))
-                                            })
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(|_, _, _, cx| {
-                                                    let path = Config::config_path();
-                                                    // Ensure the file exists so the editor has something to open.
-                                                    if !path.exists() {
-                                                        if let Some(parent) = path.parent() {
-                                                            let _ = std::fs::create_dir_all(parent);
-                                                        }
-                                                        let _ = std::fs::write(&path, "");
-                                                    }
-                                                    match Url::from_file_path(&path) {
-                                                        Ok(url) => cx.open_url(url.as_str()),
-                                                        Err(()) => {
-                                                            log::warn!(
-                                                                "settings: failed to build file URL for {}",
-                                                                path.display()
-                                                            );
-                                                        }
-                                                    }
-                                                }),
+                                    .children(self.standalone.then(|| {
+                                        let (icon, label, tone) = if has_unsaved_changes {
+                                            (
+                                                "phosphor/warning.svg",
+                                                "Unsaved",
+                                                theme.foreground.opacity(0.54),
                                             )
-                                            .child(
-                                                svg()
-                                                    .path("phosphor/file-text.svg")
-                                                    .size(px(12.0))
-                                                    .text_color(
-                                                        theme.muted_foreground.opacity(0.4),
-                                                    ),
-                                            )
-                                            .child("config.toml"),
-                                    )
-                                    .children(self.last_saved_at.map(|saved_at| {
-                                        let elapsed = saved_at
-                                            .elapsed()
-                                            .unwrap_or_default()
-                                            .as_secs();
-                                        let label = if elapsed < 60 {
-                                            "Saved just now".to_string()
-                                        } else if elapsed < 3600 {
-                                            format!("Saved {}m ago", elapsed / 60)
                                         } else {
-                                            format!("Saved {}h ago", elapsed / 3600)
+                                            (
+                                                "phosphor/check-circle-fill.svg",
+                                                "Saved",
+                                                theme.muted_foreground.opacity(0.46),
+                                            )
                                         };
                                         div()
                                             .flex()
                                             .items_center()
-                                            .gap(px(4.0))
+                                            .gap(px(5.0))
+                                            .min_w(px(64.0))
+                                            .justify_end()
                                             .child(
                                                 svg()
-                                                    .path("phosphor/check-circle-fill.svg")
-                                                    .size(px(11.0))
-                                                    .text_color(theme.muted_foreground.opacity(0.45)),
+                                                    .path(icon)
+                                                    .size(px(12.0))
+                                                    .text_color(tone),
                                             )
                                             .child(
                                                 div()
-                                                    .text_size(px(10.5))
-                                                    .text_color(theme.muted_foreground.opacity(0.45))
+                                                    .text_size(px(11.0))
+                                                    .line_height(px(14.0))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(tone)
+                                                    .whitespace_nowrap()
                                                     .child(label),
                                             )
                                     }))
+                                    .child(
+                                        Button::new("settings-open-config")
+                                            .ghost()
+                                            .small()
+                                            .compact()
+                                            .h(px(28.0 * header_density))
+                                            .w(px(28.0 * header_density))
+                                            .rounded(px(7.0 * header_density))
+                                            .tooltip("Open config.toml")
+                                            .child(
+                                                svg()
+                                                    .path("phosphor/file-text.svg")
+                                                    .size(px(15.0 * header_density))
+                                                    .text_color(
+                                                        theme.muted_foreground.opacity(0.68),
+                                                    ),
+                                            )
+                                            .on_click(|_, _, cx| {
+                                                let path = Config::config_path();
+                                                // Ensure the file exists so the editor has something to open.
+                                                if !path.exists() {
+                                                    if let Some(parent) = path.parent() {
+                                                        let _ = std::fs::create_dir_all(parent);
+                                                    }
+                                                    let _ = std::fs::write(&path, "");
+                                                }
+                                                match Url::from_file_path(&path) {
+                                                    Ok(url) => cx.open_url(url.as_str()),
+                                                    Err(()) => {
+                                                        log::warn!(
+                                                            "settings: failed to build file URL for {}",
+                                                            path.display()
+                                                        );
+                                                    }
+                                                }
+                                            }),
+                                    )
                                     .children(self.standalone.then(|| {
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(6.0))
+                                        Button::new("settings-apply")
+                                            .small()
+                                            .compact()
+                                            .custom(save_button_style)
+                                            .disabled(!has_unsaved_changes)
+                                            .h(px(28.0 * header_density))
+                                            .px(px(10.0 * header_density))
+                                            .rounded(px(8.0 * header_density))
+                                            .gap(px(5.0 * header_density))
+                                            .tooltip("Save settings")
                                             .child(
-                                                crate::keycaps::keycaps_for_binding("cmd-s", theme),
+                                                svg()
+                                                    .path("phosphor/check.svg")
+                                                    .size(px(12.0 * header_density))
+                                                    .text_color(save_button_tint),
                                             )
                                             .child(
-                                                Button::new("settings-apply")
-                                                    .small()
-                                                    .compact()
-                                                    .custom(save_button_style)
-                                                    .h(px(30.0 * header_density))
-                                                    .px(px(11.0 * header_density))
-                                                    .rounded(px(9.0 * header_density))
-                                                    .gap(px(6.0 * header_density))
-                                                    .child(
-                                                        svg()
-                                                            .path("phosphor/check.svg")
-                                                            .size(px(13.0 * header_density))
-                                                            .text_color(save_button_tint),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .text_size(px(13.0 * header_density))
-                                                            .line_height(px(
-                                                                16.0 * header_density,
-                                                            ))
-                                                            .font_weight(FontWeight::MEDIUM)
-                                                            .text_color(save_button_tint)
-                                                            .whitespace_nowrap()
-                                                            .child("Save Changes"),
-                                                    )
-                                                    .on_click(cx.listener(|this, _, window, cx| {
-                                                        this.save(window, cx);
-                                                    })),
+                                                div()
+                                                    .text_size(px(12.0 * header_density))
+                                                    .line_height(px(15.0 * header_density))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(save_button_tint)
+                                                    .whitespace_nowrap()
+                                                    .child("Save"),
                                             )
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.save(window, cx);
+                                            }))
                                     })),
                             ),
                     )
                     .child(div().h(px(1.0)).bg(theme.muted.opacity(0.10))),
+            )
+            .children(
+                (self.standalone && self.close_confirmation_visible && has_unsaved_changes).then(
+                    || {
+                        div()
+                            .id("settings-close-confirmation")
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(12.0))
+                            .min_h(px(42.0))
+                            .px(px(20.0))
+                            .bg(theme.foreground.opacity(0.048))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .min_w_0()
+                                    .child(
+                                        svg()
+                                            .path("phosphor/warning.svg")
+                                            .size(px(14.0))
+                                            .text_color(theme.foreground.opacity(0.64)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(12.0))
+                                            .line_height(px(16.0))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.foreground.opacity(0.72))
+                                            .whitespace_nowrap()
+                                            .child("Save changes before closing?"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.0))
+                                    .child(
+                                        Button::new("settings-close-prompt-keep-editing")
+                                            .ghost()
+                                            .small()
+                                            .compact()
+                                            .h(px(26.0 * header_density))
+                                            .px(px(8.0 * header_density))
+                                            .rounded(px(7.0 * header_density))
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.0 * header_density))
+                                                    .line_height(px(15.0 * header_density))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(
+                                                        theme.muted_foreground.opacity(0.74),
+                                                    )
+                                                    .whitespace_nowrap()
+                                                    .child("Keep Editing"),
+                                            )
+                                            .on_click(cx.listener(|this, _, _window, cx| {
+                                                this.keep_editing_after_close_prompt(cx);
+                                            })),
+                                    )
+                                    .child(
+                                        Button::new("settings-close-prompt-save")
+                                            .small()
+                                            .compact()
+                                            .custom(save_button_style)
+                                            .h(px(26.0 * header_density))
+                                            .px(px(9.0 * header_density))
+                                            .rounded(px(7.0 * header_density))
+                                            .gap(px(5.0 * header_density))
+                                            .child(
+                                                svg()
+                                                    .path("phosphor/check.svg")
+                                                    .size(px(12.0 * header_density))
+                                                    .text_color(save_button_tint),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.0 * header_density))
+                                                    .line_height(px(15.0 * header_density))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(save_button_tint)
+                                                    .whitespace_nowrap()
+                                                    .child("Save and Close"),
+                                            )
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.save_and_close_standalone(window, cx);
+                                            })),
+                                    ),
+                            )
+                    },
+                ),
             )
             // Error banner
             .children(self.save_error.as_ref().map(|err| {

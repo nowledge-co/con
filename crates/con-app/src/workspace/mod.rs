@@ -182,9 +182,6 @@ pub struct ConWorkspace {
     /// restore terminal focus when a modal dismisses itself internally.
     modal_was_open: bool,
     ghostty_hidden: bool,
-    /// Shared bridge between divider on_mouse_down (plain Fn closure) and
-    /// workspace's entity-level drag handler. Persists across render cycles.
-    pending_drag_init: std::sync::Arc<std::sync::Mutex<Option<(usize, f32)>>>,
     /// Agent panel drag state: start X position and start width when drag began.
     agent_panel_drag: Option<(f32, f32)>,
     /// Vertical tabs panel drag state: start X position and start width when drag began.

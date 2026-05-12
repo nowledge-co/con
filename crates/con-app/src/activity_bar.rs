@@ -5,7 +5,7 @@
 //!
 //! Visual rules
 //! ---
-//! - Fixed height: 36 px while the left sidebar is visible.
+//! - Fixed height: 32 px while the left sidebar is visible.
 //! - Active slot: accent-colored icon.
 //! - Inactive slots: muted_foreground icon.
 //! - No text labels — icons only.
@@ -15,11 +15,11 @@ use gpui::{
     Context, EventEmitter, IntoElement, ParentElement, Render, Styled, Window, div, prelude::*, px,
 };
 use gpui_component::{
-    ActiveTheme, Icon, Sizable as _,
+    ActiveTheme, Icon, Selectable, Sizable as _,
     button::{Button, ButtonVariants as _},
 };
 
-pub const ACTIVITY_BAR_HEADER_HEIGHT: f32 = 36.0;
+pub const ACTIVITY_BAR_HEADER_HEIGHT: f32 = 32.0;
 
 /// The content slot currently shown in the left panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,14 +72,21 @@ impl ActivityBar {
 
     pub fn set_slot(&mut self, slot: ActivitySlot, cx: &mut Context<Self>) {
         if self.active_slot == slot {
-            self.left_panel_open = !self.left_panel_open;
-            cx.emit(ActivityTogglePanel);
+            self.close_panel(cx);
         } else {
             self.active_slot = slot;
             self.left_panel_open = true;
             cx.emit(ActivitySlotChanged { slot });
+            cx.notify();
         }
-        cx.notify();
+    }
+
+    pub fn close_panel(&mut self, cx: &mut Context<Self>) {
+        if self.left_panel_open {
+            self.left_panel_open = false;
+            cx.emit(ActivityTogglePanel);
+            cx.notify();
+        }
     }
 }
 
@@ -95,34 +102,57 @@ impl Render for ActivityBar {
             .flex()
             .flex_row()
             .items_center()
-            .justify_center()
-            .gap(px(4.0))
-            .px(px(8.0))
+            .justify_between()
+            .px(px(10.0))
             .flex_shrink_0()
-            .child(activity_slot_button(
-                "activity-files",
-                "phosphor/folders.svg",
-                active_slot == ActivitySlot::Files,
-                theme,
-                cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
-                    this.set_slot(ActivitySlot::Files, cx);
-                }),
-            ))
-            .child(activity_slot_button(
-                "activity-search",
-                "phosphor/file-magnifying-glass.svg",
-                active_slot == ActivitySlot::Search,
-                theme,
-                cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
-                    this.set_slot(ActivitySlot::Search, cx);
-                }),
-            ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(3.0))
+                    .p(px(1.0))
+                    .rounded(px(6.0))
+                    .bg(theme.foreground.opacity(0.038))
+                    .child(activity_slot_button(
+                        "activity-files",
+                        "phosphor/folder.svg",
+                        "Files",
+                        active_slot == ActivitySlot::Files,
+                        theme,
+                        cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
+                            this.set_slot(ActivitySlot::Files, cx);
+                        }),
+                    ))
+                    .child(activity_slot_button(
+                        "activity-search",
+                        "phosphor/magnifying-glass.svg",
+                        "Search",
+                        active_slot == ActivitySlot::Search,
+                        theme,
+                        cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
+                            this.set_slot(ActivitySlot::Search, cx);
+                        }),
+                    )),
+            )
+            .child(
+                Button::new("activity-close")
+                    .icon(Icon::default().path("phosphor/x.svg"))
+                    .ghost()
+                    .text_color(theme.muted_foreground)
+                    .rounded(px(5.0))
+                    .with_size(px(22.0))
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
+                        this.close_panel(cx);
+                    })),
+            )
     }
 }
 
 fn activity_slot_button<F>(
     id: &'static str,
     icon: &'static str,
+    tooltip: &'static str,
     active: bool,
     theme: &gpui_component::Theme,
     handler: F,
@@ -138,9 +168,11 @@ where
     Button::new(id)
         .icon(Icon::default().path(icon))
         .ghost()
+        .selected(active)
         .text_color(icon_color)
-        .rounded(px(6.0))
-        .with_size(px(28.0))
+        .rounded(px(5.0))
+        .with_size(px(24.0))
+        .tooltip(tooltip)
         .cursor_pointer()
         .on_click(handler)
 }
