@@ -9,7 +9,8 @@ coexist with the code-editor sidebar tools instead of being replaced by them.
 
 The left side of the workspace has three independent concepts:
 
-- tab orientation: `appearance.tabs_orientation = "horizontal" | "vertical"`,
+- tab orientation: `appearance.tabs_orientation = "horizontal" | "vertical"`;
+  omitted configs default to `vertical`,
 - sidebar visibility: hide/unhide the whole left sidebar for a clean terminal
   view,
 - vertical tab mode: fold/unfold the tab surface while the sidebar is visible.

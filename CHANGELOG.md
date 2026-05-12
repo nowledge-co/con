@@ -4,6 +4,16 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.72` - Unreleased
+
+### Changed
+
+**Sidebar**
+
+- New installs and configs that omit `appearance.tabs_orientation` now default
+  to vertical tabs. Explicit `tabs_orientation = "horizontal"` configs still
+  keep the horizontal top tab strip.
+
 ## `v0.1.0-beta.71` - 2026-05-12
 
 ### Added
