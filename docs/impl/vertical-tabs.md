@@ -31,8 +31,8 @@ the compact state.
 
 Unfolded mode renders the pinned vertical tab panel with tab titles, subtitles,
 rename, close, drag/drop, and create-tab controls. File/search remains available
-as an auxiliary drawer; unfolding tabs does not replace editor navigation and
-opening the drawer does not widen the permanent sidebar.
+from a compact launcher on the tab sidebar; unfolding tabs does not replace
+editor navigation and opening the drawer does not widen the permanent sidebar.
 
 ## Compatibility
 

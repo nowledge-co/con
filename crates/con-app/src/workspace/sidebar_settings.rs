@@ -824,11 +824,6 @@ impl ConWorkspace {
         let term_config = settings.read(cx).terminal_config().clone();
         let appearance_config = settings.read(cx).appearance_config().clone();
         self.apply_terminal_and_ui_appearance(&term_config, &appearance_config, window, cx);
-        self.config.appearance.tabs_orientation = appearance_config.tabs_orientation;
-        if !self.vertical_tabs_enabled() {
-            self.sidebar_tools_open = self.left_panel_open;
-        }
-        self.sync_tab_strip_motion();
         cx.notify();
     }
 
