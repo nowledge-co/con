@@ -139,7 +139,14 @@ impl ConWorkspace {
             .flex()
             .flex_1()
             .min_w_0()
-            .items_end()
+            .h(px(30.0))
+            .items_center()
+            .gap(px(1.0))
+            .p(px(2.0))
+            .rounded(px(11.0))
+            .bg(theme
+                .foreground
+                .opacity(if theme.is_dark() { 0.045 } else { 0.032 }))
             // Container-level drag-move: position-based slot calculation.
             // This is the authoritative handler for HorizontalTabStrip drags.
             // It uses the full tab_strip_tab_bounds array to compute the drop
@@ -345,7 +352,7 @@ impl ConWorkspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .size(px(18.0))
+                    .size(px(17.0))
                     .flex_shrink_0()
                     .rounded(px(5.0))
                     .cursor_pointer()
@@ -410,6 +417,47 @@ impl ConWorkspace {
                         .position(|tab| tab.summary_id == dragged_id)
                 });
 
+                let inactive_alpha = sanitize_tab_accent_alpha(self.tab_accent_inactive_alpha);
+                let inactive_hover_alpha =
+                    sanitize_tab_accent_alpha(self.tab_accent_inactive_hover_alpha)
+                        .max(inactive_alpha);
+                let inactive_surface = tab_color
+                    .map(|color| {
+                        crate::tab_colors::tab_accent_surface_hsla(color, inactive_alpha * 0.35, cx)
+                    })
+                    .unwrap_or(theme.transparent);
+                let inactive_hover_surface = tab_color
+                    .map(|color| {
+                        crate::tab_colors::tab_accent_surface_hsla(
+                            color,
+                            inactive_hover_alpha * 0.55,
+                            cx,
+                        )
+                    })
+                    .unwrap_or(theme.foreground.opacity(0.030));
+                let active_surface = tab_color
+                    .map(|color| {
+                        crate::tab_colors::tab_accent_surface_hsla(
+                            color,
+                            crate::tab_colors::TAB_ACCENT_ACTIVE_ALPHA,
+                            cx,
+                        )
+                    })
+                    .unwrap_or(theme.background.opacity(elevated_ui_surface_opacity));
+                let active_hover_surface = tab_color
+                    .map(|color| crate::tab_colors::tab_accent_surface_hsla(color, 0.18, cx))
+                    .unwrap_or(theme.background.opacity(elevated_ui_surface_opacity));
+                let tab_surface = if is_active {
+                    active_surface
+                } else {
+                    inactive_surface
+                };
+                let tab_surface_hover = if is_active {
+                    active_hover_surface
+                } else {
+                    inactive_hover_surface
+                };
+
                 let mut tab_el = div()
                     .id(ElementId::Name(format!("tab-{}", index).into()))
                     .group("tab")
@@ -419,8 +467,7 @@ impl ConWorkspace {
                     .min_w_0()
                     .max_w(px(220.0))
                     .items_center()
-                    .px(px(10.0))
-                    .h(px(30.0))
+                    .h(px(26.0))
                     .text_size(px(11.5))
                     .cursor_pointer()
                     // Windows: without `.occlude()` the parent top_bar's
@@ -565,43 +612,13 @@ impl ConWorkspace {
 
                 if is_active {
                     tab_el = tab_el
-                        .rounded_t(px(7.0))
-                        .map(|el| match tab_color {
-                            Some(color) => el.bg(crate::tab_colors::tab_accent_surface_hsla(
-                                color,
-                                crate::tab_colors::TAB_ACCENT_ACTIVE_ALPHA,
-                                cx,
-                            )),
-                            None => el.bg(theme.background.opacity(elevated_ui_surface_opacity)),
-                        })
                         .text_color(theme.foreground)
                         .font_weight(FontWeight::MEDIUM);
                 } else {
-                    let inactive_alpha = sanitize_tab_accent_alpha(self.tab_accent_inactive_alpha);
-                    let inactive_hover_alpha =
-                        sanitize_tab_accent_alpha(self.tab_accent_inactive_hover_alpha)
-                            .max(inactive_alpha);
-                    let inactive_bg = tab_color
-                        .map(|color| {
-                            crate::tab_colors::tab_accent_surface_hsla(color, inactive_alpha, cx)
-                        })
-                        .unwrap_or(theme.background.opacity(0.14));
-                    let inactive_hover_bg = tab_color
-                        .map(|color| {
-                            crate::tab_colors::tab_accent_surface_hsla(
-                                color,
-                                inactive_hover_alpha,
-                                cx,
-                            )
-                        })
-                        .unwrap_or(theme.background.opacity(0.20));
                     tab_el = tab_el
-                        .rounded_t(px(6.0))
-                        .bg(inactive_bg)
                         .text_color(theme.muted_foreground.opacity(0.72))
                         .hover(move |s: gpui::StyleRefinement| {
-                            s.bg(inactive_hover_bg)
-                                .text_color(theme.foreground.opacity(0.82))
+                            s.text_color(theme.foreground.opacity(0.82))
                         });
                 }
 
@@ -636,7 +653,7 @@ impl ConWorkspace {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .size(px(18.0))
+                    .size(px(16.0))
                     .flex_shrink_0();
 
                 if needs_attention {
@@ -647,9 +664,14 @@ impl ConWorkspace {
                 let mut tab_content = div()
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
-                    .size_full()
+                    .gap(px(5.0))
+                    .w_full()
+                    .h(px(26.0))
                     .min_w_0()
+                    .rounded(px(9.0))
+                    .px(px(6.0))
+                    .bg(tab_surface)
+                    .hover(move |s: gpui::StyleRefinement| s.bg(tab_surface_hover))
                     .child(left_reserve);
 
                 tab_content = tab_content.child(
@@ -666,15 +688,7 @@ impl ConWorkspace {
                                 .justify_center()
                                 .gap(px(6.0))
                                 .min_w_0()
-                                .max_w(px(168.0))
-                                .h(px(23.0))
-                                .px(px(if is_active { 11.0 } else { 5.0 }))
-                                .rounded(px(8.5))
-                                .bg(if is_active {
-                                    theme.foreground.opacity(0.045)
-                                } else {
-                                    theme.transparent
-                                })
+                                .px(px(5.0))
                                 .overflow_x_hidden()
                                 .whitespace_nowrap()
                                 .child(

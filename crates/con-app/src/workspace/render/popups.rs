@@ -316,9 +316,12 @@ impl ConWorkspace {
                             .child(trigger_hint)
                             .child(
                                 div()
-                                    .w(px(1.0))
-                                    .h(px(13.0))
-                                    .bg(theme.foreground.opacity(0.070)),
+                                    .text_size(px(9.0))
+                                    .line_height(px(11.0))
+                                    .font_family(theme.mono_font_family.clone())
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.muted_foreground.opacity(0.42))
+                                    .child("then"),
                             )
                             .child(
                                 div()
