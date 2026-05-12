@@ -17,6 +17,15 @@ if [[ ! -x "$cli_binary" ]]; then
   fail "con-cli missing from app bundle: $cli_binary"
 fi
 
+terminfo_dir="$CON_APP_BUNDLE_PATH/Contents/Resources/terminfo"
+if [[ ! -d "$terminfo_dir" ]]; then
+  fail "Ghostty terminfo directory missing from app bundle: $terminfo_dir"
+fi
+terminfo_entry="$(find "$terminfo_dir" -type f -name xterm-ghostty -print -quit)"
+if [[ -z "$terminfo_entry" || ! -r "$terminfo_entry" ]]; then
+  fail "Ghostty xterm-ghostty terminfo entry missing from app bundle: $terminfo_dir"
+fi
+
 log "Verifying code signature for $CON_APP_BUNDLE_PATH"
 codesign --verify --deep --strict --verbose=2 "$CON_APP_BUNDLE_PATH"
 

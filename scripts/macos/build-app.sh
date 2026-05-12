@@ -47,6 +47,18 @@ fi
 rsync -a "$ghostty_resources_dir/" "$resources_dir/ghostty/"
 log "Embedded Ghostty resources from $ghostty_resources_dir"
 
+ghostty_share_dir="$(dirname "$ghostty_resources_dir")"
+ghostty_terminfo_dir="$ghostty_share_dir/terminfo"
+if [[ ! -d "$ghostty_terminfo_dir" ]]; then
+  fail "Ghostty terminfo directory not found in cargo build output: $ghostty_terminfo_dir"
+fi
+ghostty_terminfo_entry="$(find "$ghostty_terminfo_dir" -type f -name xterm-ghostty -print -quit)"
+if [[ -z "$ghostty_terminfo_entry" || ! -r "$ghostty_terminfo_entry" ]]; then
+  fail "Ghostty xterm-ghostty terminfo entry not found under cargo build output: $ghostty_terminfo_dir"
+fi
+rsync -a "$ghostty_terminfo_dir/" "$resources_dir/terminfo/"
+log "Embedded Ghostty terminfo from $ghostty_terminfo_dir"
+
 iconset_parent="$(mktemp -d "$CON_DIST_ROOT/iconset.XXXXXX")"
 iconset_dir="$iconset_parent/con.iconset"
 mkdir -p "$iconset_dir"
