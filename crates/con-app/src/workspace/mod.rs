@@ -56,8 +56,8 @@ use crate::pane_tree::{
 };
 use crate::settings_panel::{self, AppearancePreview, SaveSettings, SettingsPanel, ThemePreview};
 use crate::sidebar::{
-    DraggedTab, DraggedTabOrigin, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, RAIL_WIDTH,
-    SessionEntry, SessionSidebar, SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate,
+    DraggedTab, DraggedTabOrigin, NewSession, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH, SessionEntry,
+    SessionSidebar, SidebarCloseOthers, SidebarCloseTab, SidebarDuplicate, SidebarOpenToolSlot,
     SidebarPaneToTab, SidebarRename, SidebarReorder, SidebarSelect, SidebarSetColor,
 };
 use crate::sidebar_search_view::SidebarSearchView;

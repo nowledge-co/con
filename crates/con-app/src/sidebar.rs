@@ -14,6 +14,7 @@
 //! - Surface separation comes from `surface_tone()` (foreground
 //!   blended into background at small intensities), not borders.
 
+use crate::activity_bar::ActivitySlot;
 use crate::motion::MotionValue;
 use gpui::{
     AnyElement, App, Bounds, Context, Div, Entity, EventEmitter, FontWeight, Hsla,
@@ -291,6 +292,10 @@ pub struct SidebarSetColor {
     pub color: Option<con_core::session::TabAccentColor>,
 }
 
+pub struct SidebarOpenToolSlot {
+    pub slot: ActivitySlot,
+}
+
 impl EventEmitter<SidebarSelect> for SessionSidebar {}
 impl EventEmitter<NewSession> for SessionSidebar {}
 impl EventEmitter<SidebarCloseTab> for SessionSidebar {}
@@ -300,6 +305,7 @@ impl EventEmitter<SidebarReorder> for SessionSidebar {}
 impl EventEmitter<SidebarPaneToTab> for SessionSidebar {}
 impl EventEmitter<SidebarCloseOthers> for SessionSidebar {}
 impl EventEmitter<SidebarSetColor> for SessionSidebar {}
+impl EventEmitter<SidebarOpenToolSlot> for SessionSidebar {}
 
 impl SessionSidebar {
     pub fn new(_cx: &mut Context<Self>) -> Self {
@@ -795,6 +801,35 @@ impl SessionSidebar {
                     .w(px(20.0))
                     .my(px(2.0))
                     .bg(theme.muted_foreground.opacity(0.18)),
+            )
+            .child(rail_icon_button(
+                "tab-sidebar-rail-files",
+                "phosphor/folders.svg",
+                theme.muted_foreground,
+                theme,
+                cx.listener(|_, _, _, cx| {
+                    cx.emit(SidebarOpenToolSlot {
+                        slot: ActivitySlot::Files,
+                    })
+                }),
+            ))
+            .child(rail_icon_button(
+                "tab-sidebar-rail-search",
+                "phosphor/file-magnifying-glass.svg",
+                theme.muted_foreground,
+                theme,
+                cx.listener(|_, _, _, cx| {
+                    cx.emit(SidebarOpenToolSlot {
+                        slot: ActivitySlot::Search,
+                    })
+                }),
+            ))
+            .child(
+                div()
+                    .h(px(1.0))
+                    .w(px(20.0))
+                    .my(px(2.0))
+                    .bg(theme.muted_foreground.opacity(0.18)),
             );
 
         for (i, session) in self.sessions.iter().enumerate() {
@@ -1055,6 +1090,8 @@ impl SessionSidebar {
         let body_bg;
         let header_color;
         let header_font;
+        let files_btn;
+        let search_btn;
         let new_btn;
         let toggle_btn;
         {
@@ -1062,6 +1099,26 @@ impl SessionSidebar {
             body_bg = sidebar_surface(theme, self.ui_opacity, 0.045);
             header_color = theme.muted_foreground.opacity(0.55);
             header_font = theme.font_family.clone();
+            files_btn = panel_icon_button(
+                "tab-sidebar-panel-files",
+                "phosphor/folders.svg",
+                theme,
+                cx.listener(|_this, _, _, cx| {
+                    cx.emit(SidebarOpenToolSlot {
+                        slot: ActivitySlot::Files,
+                    })
+                }),
+            );
+            search_btn = panel_icon_button(
+                "tab-sidebar-panel-search",
+                "phosphor/file-magnifying-glass.svg",
+                theme,
+                cx.listener(|_this, _, _, cx| {
+                    cx.emit(SidebarOpenToolSlot {
+                        slot: ActivitySlot::Search,
+                    })
+                }),
+            );
             new_btn = panel_icon_button(
                 "tab-sidebar-panel-new",
                 "phosphor/plus.svg",
@@ -1101,7 +1158,15 @@ impl SessionSidebar {
                             .font_family(header_font)
                             .child(format!("{} TABS", self.sessions.len())),
                     )
-                    .child(div().flex().gap(px(2.0)).child(new_btn).child(toggle_btn)),
+                    .child(
+                        div()
+                            .flex()
+                            .gap(px(2.0))
+                            .child(files_btn)
+                            .child(search_btn)
+                            .child(new_btn)
+                            .child(toggle_btn),
+                    ),
             );
 
         let total = self.sessions.len();

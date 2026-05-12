@@ -15,7 +15,8 @@ The left side of the window has two tab-orientation modes:
 
 - horizontal tabs: file/search is the left sidebar panel,
 - vertical tabs: `SessionSidebar` is the permanent left navigation surface, and
-  file/search opens as an overlay drawer from that sidebar edge.
+  a compact in-sidebar launcher opens file/search as an overlay drawer from
+  that sidebar edge.
 
 Hiding the left sidebar removes all left chrome. Unhiding restores the selected
 tab orientation, the previous vertical-tab folded/unfolded mode, and the active

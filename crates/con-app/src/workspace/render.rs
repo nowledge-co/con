@@ -71,7 +71,10 @@ impl ConWorkspace {
                 0.0
             };
             let max_width = if self.vertical_tabs_enabled() {
-                PANEL_MAX_WIDTH
+                max_sidebar_panel_width(
+                    (win_w - self.sidebar.read(cx).rendered_width()).max(0.0),
+                    agent_w,
+                )
             } else {
                 max_sidebar_panel_width(win_w, agent_w)
             };
@@ -793,21 +796,6 @@ impl Render for ConWorkspace {
             .child(terminal_area);
 
         main_area = main_area.child(main_column);
-
-        if vertical_tabs_enabled && show_left_panel && !show_sidebar_tools {
-            main_area = main_area.child(
-                div()
-                    .absolute()
-                    .top(px(6.0))
-                    .left(px(tab_sidebar_width + 6.0))
-                    .w(px(72.0))
-                    .h(px(36.0))
-                    .overflow_hidden()
-                    .occlude()
-                    .bg(elevated_panel_surface_color)
-                    .child(self.activity_bar.clone()),
-            );
-        }
 
         if vertical_tabs_enabled && show_sidebar_tools {
             let sidebar_content: AnyElement = match self.activity_slot {

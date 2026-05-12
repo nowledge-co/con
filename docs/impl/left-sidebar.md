@@ -20,7 +20,8 @@ When the left sidebar is visible:
 
 - vertical tabs can stay folded as a 44 px rail or unfold into the pinned tab
   panel when `appearance.tabs_orientation = "vertical"`,
-- the file/search icon strip opens a lightweight drawer from the sidebar edge,
+- the file/search icon strip stays on the vertical-tabs sidebar surface and
+  opens a lightweight drawer from the sidebar edge,
 - the drawer overlays the workspace instead of permanently consuming layout
   width beside vertical tabs.
 
