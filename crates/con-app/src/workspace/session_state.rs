@@ -109,6 +109,7 @@ impl ConWorkspace {
             input_history: self.global_input_history.iter().cloned().collect(),
             conversation_id: None, // deprecated — per-tab now
             left_panel_width: Some(self.sidebar.read(cx).panel_width()),
+            vertical_tabs_pinned: Some(self.sidebar.read(cx).is_pinned()),
             activity_slot: Some(self.activity_slot.as_str().to_string()),
             left_panel_open: Some(self.left_panel_open),
             editor_area_height: None,

@@ -1,7 +1,7 @@
-//! Activity bar — the file/search section switcher inside the left sidebar.
+//! Activity bar — the file/search section switcher inside the sidebar drawer.
 //!
 //! Clicking a slot icon switches the sidebar section. Clicking the
-//! already-active slot toggles the left sidebar closed.
+//! already-active slot toggles the drawer/panel closed.
 //!
 //! Visual rules
 //! ---
@@ -12,8 +12,7 @@
 //! - Surface separation via bg opacity, no borders.
 
 use gpui::{
-    Context, EventEmitter, FontWeight, IntoElement, ParentElement, Render, Styled, Window, div,
-    prelude::*, px,
+    Context, EventEmitter, IntoElement, ParentElement, Render, Styled, Window, div, prelude::*, px,
 };
 use gpui_component::{
     ActiveTheme, Icon, Sizable as _,
@@ -96,45 +95,28 @@ impl Render for ActivityBar {
             .flex()
             .flex_row()
             .items_center()
-            .justify_between()
-            .gap(px(6.0))
+            .justify_center()
+            .gap(px(4.0))
             .px(px(8.0))
             .flex_shrink_0()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(3.0))
-                    .child(activity_slot_button(
-                        "activity-files",
-                        "phosphor/folder-open.svg",
-                        active_slot == ActivitySlot::Files,
-                        theme,
-                        cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
-                            this.set_slot(ActivitySlot::Files, cx);
-                        }),
-                    ))
-                    .child(activity_slot_button(
-                        "activity-search",
-                        "phosphor/magnifying-glass.svg",
-                        active_slot == ActivitySlot::Search,
-                        theme,
-                        cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
-                            this.set_slot(ActivitySlot::Search, cx);
-                        }),
-                    )),
-            )
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .font_family(theme.font_family.clone())
-                    .text_color(theme.muted_foreground.opacity(0.62))
-                    .child(match active_slot {
-                        ActivitySlot::Files => "FILES",
-                        ActivitySlot::Search => "SEARCH",
-                    }),
-            )
+            .child(activity_slot_button(
+                "activity-files",
+                "phosphor/folders.svg",
+                active_slot == ActivitySlot::Files,
+                theme,
+                cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
+                    this.set_slot(ActivitySlot::Files, cx);
+                }),
+            ))
+            .child(activity_slot_button(
+                "activity-search",
+                "phosphor/file-magnifying-glass.svg",
+                active_slot == ActivitySlot::Search,
+                theme,
+                cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
+                    this.set_slot(ActivitySlot::Search, cx);
+                }),
+            ))
     }
 }
 

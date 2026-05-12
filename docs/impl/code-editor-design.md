@@ -11,22 +11,22 @@ not a separate top-level editor area and there is no standalone `con-editor`
 crate. Terminal panes, editor panes, the input bar, and the agent panel all
 share the existing workspace layout and close/focus machinery.
 
-The left side of the window is split into three layers when the sidebar is
-visible:
+The left side of the window has two tab-orientation modes:
 
-- `SessionSidebar`: folded vertical-tab rail or unfolded vertical-tab panel.
-- `ActivityBar`: a compact file/search section switcher.
-- Left panel content: user-resizable file/search content below the switcher.
+- horizontal tabs: file/search is the left sidebar panel,
+- vertical tabs: `SessionSidebar` is the permanent left navigation surface, and
+  file/search opens as an overlay drawer from that sidebar edge.
 
-Hiding the left sidebar removes all three layers. Unhiding restores the previous
-vertical-tab folded/unfolded mode and the active file/search slot.
+Hiding the left sidebar removes all left chrome. Unhiding restores the selected
+tab orientation, the previous vertical-tab folded/unfolded mode, and the active
+file/search slot.
 
 ## Left Sidebar
 
 `crates/con-app/src/activity_bar.rs` owns the compact section switcher.
 `ActivitySlot::Files` shows the file explorer and `ActivitySlot::Search` shows
 workspace search. Clicking a different icon switches content and opens the
-panel. Clicking the already active icon toggles the sidebar open or closed.
+drawer/panel. Clicking the already active icon toggles the drawer/panel.
 
 `Cmd+B` is bound to `ToggleLeftPanel` and the user-facing label is "Toggle Left
 Sidebar". The top bar sidebar button remains a first-class toggle for the same
@@ -34,11 +34,12 @@ left panel. The toggle hides or unhides the whole sidebar so terminal-only
 workflows can keep a clean pane area.
 
 The panel width is stored as `left_panel_width` in session state; old
-`vertical_tabs_width` session files load through a serde alias. The active
-resize gesture is owned by the workspace because it needs the full window
-width, agent panel width, and pane layout constraints. While resizing,
-`render.rs` installs a capture overlay so mouse movement and mouse-up events
-end the drag even if the cursor leaves the handle.
+`vertical_tabs_width` session files load through a serde alias. The vertical tab
+folded/unfolded state persists as `vertical_tabs_pinned`. The active resize
+gesture is owned by the workspace because it needs the full window width, agent
+panel width, and pane layout constraints. While resizing, `render.rs` installs a
+capture overlay so mouse movement and mouse-up events end the drag even if the
+cursor leaves the handle.
 
 ## File Explorer
 

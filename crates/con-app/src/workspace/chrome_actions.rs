@@ -83,8 +83,16 @@ impl ConWorkspace {
         cx: &mut Context<Self>,
     ) {
         self.left_panel_open = !self.left_panel_open;
-        self.activity_bar.update(cx, |bar, _cx| {
-            bar.left_panel_open = self.left_panel_open;
+        if !self.vertical_tabs_enabled() {
+            self.sidebar_tools_open = self.left_panel_open;
+        }
+        self.activity_bar.update(cx, |bar, cx| {
+            bar.left_panel_open = if self.vertical_tabs_enabled() {
+                self.sidebar_tools_open
+            } else {
+                self.left_panel_open
+            };
+            cx.notify();
         });
         self.save_session(cx);
         cx.notify();
@@ -100,8 +108,9 @@ impl ConWorkspace {
             return;
         }
         self.left_panel_open = false;
-        self.activity_bar.update(cx, |bar, _cx| {
+        self.activity_bar.update(cx, |bar, cx| {
             bar.left_panel_open = false;
+            cx.notify();
         });
         self.save_session(cx);
         cx.notify();

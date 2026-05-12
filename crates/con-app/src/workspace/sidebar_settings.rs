@@ -726,6 +726,9 @@ impl ConWorkspace {
         let restore_terminal_text_was_enabled = self.config.appearance.restore_terminal_text;
         let old_keybindings = self.config.keybindings.clone();
         self.config = full_config.clone();
+        if !self.vertical_tabs_enabled() {
+            self.sidebar_tools_open = self.left_panel_open;
+        }
         let new_agent_config = full_config.agent.clone();
         let auto_approve = new_agent_config.auto_approve_tools;
         self.harness.update_config(new_agent_config);
@@ -786,6 +789,7 @@ impl ConWorkspace {
         let term_config = full_config.terminal.clone();
         let appearance_config = full_config.appearance.clone();
         self.apply_terminal_and_ui_appearance(&term_config, &appearance_config, window, cx);
+        self.sync_tab_strip_motion();
         if restore_terminal_text_was_enabled && !appearance_config.restore_terminal_text {
             self.save_session(cx);
         }
@@ -820,6 +824,11 @@ impl ConWorkspace {
         let term_config = settings.read(cx).terminal_config().clone();
         let appearance_config = settings.read(cx).appearance_config().clone();
         self.apply_terminal_and_ui_appearance(&term_config, &appearance_config, window, cx);
+        self.config.appearance.tabs_orientation = appearance_config.tabs_orientation;
+        if !self.vertical_tabs_enabled() {
+            self.sidebar_tools_open = self.left_panel_open;
+        }
+        self.sync_tab_strip_motion();
         cx.notify();
     }
 
@@ -868,6 +877,7 @@ impl ConWorkspace {
         let next_background_image_position = appearance_config.background_image_position.clone();
         let next_background_image_fit = appearance_config.background_image_fit.clone();
         let next_background_image_repeat = appearance_config.background_image_repeat;
+        let next_tabs_orientation = appearance_config.tabs_orientation;
 
         let font_changed = self.terminal_font_family != next_terminal_font_family
             || (self.font_size - next_font_size).abs() > f32::EPSILON;
@@ -888,6 +898,19 @@ impl ConWorkspace {
         self.ui_font_family = next_ui_font_family;
         self.ui_font_size = next_ui_font_size;
         self.font_size = next_font_size;
+        self.config.appearance.tabs_orientation = next_tabs_orientation;
+        if !self.vertical_tabs_enabled() {
+            self.sidebar_tools_open = self.left_panel_open;
+        }
+        self.activity_bar.update(cx, |bar, cx| {
+            bar.left_panel_open = if self.vertical_tabs_enabled() {
+                self.sidebar_tools_open
+            } else {
+                self.left_panel_open
+            };
+            cx.notify();
+        });
+        self.sync_tab_strip_motion();
         if font_changed {
             let editor_views = self
                 .tabs

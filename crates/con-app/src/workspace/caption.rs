@@ -23,20 +23,6 @@ mod tests {
         let tiny_width = RAIL_WIDTH + TERMINAL_MIN_CONTENT_WIDTH - 20.0;
         assert_eq!(max_sidebar_panel_width(tiny_width, 0.0), PANEL_MIN_WIDTH);
     }
-
-    #[::core::prelude::v1::test]
-    fn sidebar_max_width_splits_budget_when_vertical_tabs_are_pinned() {
-        let window_width = TERMINAL_MIN_CONTENT_WIDTH + 560.0;
-
-        assert_eq!(
-            max_sidebar_panel_width_for_tab_mode(window_width, 0.0, false),
-            PANEL_MAX_WIDTH
-        );
-        assert_eq!(
-            max_sidebar_panel_width_for_tab_mode(window_width, 0.0, true),
-            280.0
-        );
-    }
 }
 
 pub(super) fn perf_trace_enabled() -> bool {
@@ -79,20 +65,6 @@ pub(super) fn max_agent_panel_width(window_width: f32) -> f32 {
 pub(super) fn max_sidebar_panel_width(window_width: f32, agent_panel_outer_width: f32) -> f32 {
     (window_width - agent_panel_outer_width - RAIL_WIDTH - TERMINAL_MIN_CONTENT_WIDTH)
         .clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
-}
-
-pub(super) fn max_sidebar_panel_width_for_tab_mode(
-    window_width: f32,
-    agent_panel_outer_width: f32,
-    vertical_tabs_pinned: bool,
-) -> f32 {
-    let available = window_width - agent_panel_outer_width - TERMINAL_MIN_CONTENT_WIDTH;
-    let panel_budget = if vertical_tabs_pinned {
-        available / 2.0
-    } else {
-        available - RAIL_WIDTH
-    };
-    panel_budget.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
 }
 
 /// Windows / Linux caption buttons (Min / Max+Restore / Close).

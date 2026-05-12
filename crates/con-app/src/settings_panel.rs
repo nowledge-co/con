@@ -7,7 +7,7 @@ use con_core::{
     Config,
     config::{
         AppearanceConfig, DEFAULT_TERMINAL_FONT_FAMILY, MAX_UI_FONT_SIZE, MIN_UI_FONT_SIZE,
-        is_gpui_pseudo_font_family, sanitize_terminal_font_family,
+        TabsOrientation, is_gpui_pseudo_font_family, sanitize_terminal_font_family,
     },
 };
 use futures::{FutureExt, StreamExt};
@@ -3525,6 +3525,27 @@ impl SettingsPanel {
                 .child(group_label("Pane", &theme))
                 .child(
                     card(theme, card_opacity)
+                        .child(toggle_row(
+                            "Vertical Tabs",
+                            "Use the left sidebar for workspace tabs.",
+                            Switch::new("vertical-tabs-toggle")
+                                .checked(
+                                    self.config.appearance.tabs_orientation
+                                        == TabsOrientation::Vertical,
+                                )
+                                .small()
+                                .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                    this.config.appearance.tabs_orientation = if *checked {
+                                        TabsOrientation::Vertical
+                                    } else {
+                                        TabsOrientation::Horizontal
+                                    };
+                                    cx.emit(AppearancePreview);
+                                    cx.notify();
+                                })),
+                            theme,
+                        ))
+                        .child(row_separator(theme))
                         .child(toggle_row(
                             "Hide Pane Title Bar",
                             "Hide the title bar on split panes.",

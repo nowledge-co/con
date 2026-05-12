@@ -84,7 +84,9 @@ use crate::{
 use con_agent::{
     AgentConfig, Conversation, ProviderKind, TerminalExecRequest, TerminalExecResponse,
 };
-use con_core::config::{AppearanceConfig, Config, TerminalConfig, sanitize_terminal_font_family};
+use con_core::config::{
+    AppearanceConfig, Config, TabsOrientation, TerminalConfig, sanitize_terminal_font_family,
+};
 use con_core::control::{
     AgentAskResult, ControlCommand, ControlError, ControlRequestEnvelope, ControlResult,
     SystemIdentifyResult, TabInfo,
@@ -297,6 +299,8 @@ pub struct ConWorkspace {
     activity_slot: ActivitySlot,
     /// Whether the whole left sidebar is visible.
     left_panel_open: bool,
+    /// Whether the file/search drawer is visible when vertical tabs are enabled.
+    sidebar_tools_open: bool,
     /// File tree view — global singleton, root follows active tab cwd.
     file_tree_view: Entity<FileTreeView>,
     /// Search view — global singleton, root follows the same sidebar root.

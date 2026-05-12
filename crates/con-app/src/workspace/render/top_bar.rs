@@ -1112,7 +1112,7 @@ impl ConWorkspace {
                 }))
                 .child(
                     svg()
-                        .path("phosphor/sidebar-fill.svg")
+                        .path("phosphor/sidebar.svg")
                         .size(px(12.0))
                         .text_color(if self.left_panel_open {
                             theme.primary

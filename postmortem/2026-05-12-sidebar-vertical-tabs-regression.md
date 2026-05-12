@@ -19,12 +19,11 @@ rail independently, so vertical tabs were no longer part of the active layout.
 The follow-up restores the sidebar as one system:
 
 - `ToggleLeftPanel` hides or unhides the whole sidebar.
+- `appearance.tabs_orientation` again controls horizontal vs. vertical tabs.
 - `SessionSidebar` renders the folded vertical-tab rail again and keeps the
   unfolded vertical-tab panel available.
-- File/search tools render as compact sections beside vertical tabs, not as a
-  replacement for them.
-- Sidebar resize budgeting accounts for the vertical-tab surface so the terminal
-  pane keeps usable width.
+- File/search tools open as a compact auxiliary drawer from the sidebar edge,
+  not as a permanent second sidebar beside vertical tabs.
 
 ## What we learned
 
