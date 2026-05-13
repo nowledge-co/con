@@ -643,8 +643,10 @@ impl AgentHarness {
         }
 
         if !self.in_flight_skill_scans.insert(request.clone()) {
-            self.pending_skill_rescans.insert(request.clone());
-            self.latest_requested_skill_scan = Some(request);
+            if self.latest_requested_skill_scan.as_ref() != Some(&request) {
+                self.pending_skill_rescans.insert(request.clone());
+                self.latest_requested_skill_scan = Some(request);
+            }
             return None;
         }
         self.latest_requested_skill_scan = Some(request.clone());
@@ -953,6 +955,26 @@ mod tests {
         assert!(names.contains(&"a-skill".to_string()));
         assert!(names.contains(&"new-a-skill".to_string()));
         assert!(!names.contains(&"b-skill".to_string()));
+    }
+
+    #[test]
+    fn exact_duplicate_in_flight_scan_stays_noop() {
+        let root = TempDir::new("skill-scan-exact-duplicate-in-flight");
+        let global = root.path().join("global");
+        let cwd = root.path().join("cwd");
+        fs::create_dir_all(&cwd).unwrap();
+        write_skill(&global, "global-skill");
+
+        let mut harness = harness_with_skill_paths(&global);
+
+        let scan = harness.request_skill_scan(cwd.to_str().unwrap()).unwrap();
+        assert!(harness.request_skill_scan(cwd.to_str().unwrap()).is_none());
+
+        let completion = harness.complete_skill_scan(scan.scan());
+        assert!(completion.applied());
+        assert!(completion.follow_up_job().is_none());
+
+        assert_eq!(harness.skill_names(), vec!["global-skill".to_string()]);
     }
 
     #[test]
