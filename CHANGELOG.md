@@ -16,6 +16,14 @@ con is still pre-release, so entries may group related beta work while the produ
   [#212](https://github.com/nowledge-co/con-terminal/pull/212) by
   [@wey-gu](https://github.com/wey-gu))_
 
+**Terminal**
+
+- Hardened startup environment handling so terminals launched from wrapper
+  shells do not inherit Conductor's temporary zsh integration directory as
+  their own `ZDOTDIR`, preserving the user's normal prompt and shell rc loading.
+  _(PR [#212](https://github.com/nowledge-co/con-terminal/pull/212) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 ---
 
 ## `v0.1.0-beta.73` - 2026-05-13

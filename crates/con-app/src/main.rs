@@ -69,6 +69,7 @@ mod sidebar_search_view;
 mod tab_colors;
 mod tab_context_menu;
 mod terminal_context_menu;
+mod terminal_env;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 mod terminal_ime;
 mod terminal_keys;
@@ -2176,6 +2177,7 @@ fn main() {
     // Critical on Windows where double-clicking the exe detaches
     // stderr and a panic produces a silent exit.
     install_panic_hook();
+    terminal_env::sanitize_inherited_terminal_environment();
 
     // Catch C-level access violations / stack overflows / etc. from
     // FFI libraries (libghostty-vt, GPU driver shims) that bypass
@@ -2220,6 +2222,7 @@ fn main() {
     // get PATH, GOPATH, HTTP_PROXY, etc. from shell rc files.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     inherit_shell_env();
+    terminal_env::sanitize_inherited_terminal_environment();
 
     log::info!("con starting (pid {})", std::process::id());
     if let Some(path) = log_file_path.as_ref() {
