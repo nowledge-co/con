@@ -129,7 +129,7 @@ pub(super) fn caption_buttons(
         // a `group(id)` so the svg's `.group_hover(id, ...)` fires when
         // the 36px hit-target is hovered, not just the 10px icon ink.
         let hover_fg = if close { gpui::white() } else { hover_fg };
-        let el = div()
+        let mut el = div()
             .id(id)
             .group(id)
             .flex()
@@ -153,6 +153,10 @@ pub(super) fn caption_buttons(
                     .text_color(fg)
                     .group_hover(id, move |s| s.text_color(hover_fg)),
             );
+        #[cfg(target_os = "linux")]
+        if close {
+            el = el.rounded_tr(px(12.0));
+        }
 
         // Linux: GPUI's X11 hit-test doesn't fire `WindowControlArea`
         // dispatchers, so wire each button to its `Window` action by
