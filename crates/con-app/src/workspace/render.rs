@@ -4,7 +4,11 @@ mod top_bar;
 use super::*;
 
 #[cfg(target_os = "linux")]
+<<<<<<< HEAD
 const LINUX_WINDOW_CORNER_RADIUS: Pixels = px(14.0);
+=======
+const LINUX_WINDOW_CORNER_RADIUS: Pixels = px(18.0);
+>>>>>>> parent of a397d82 (Adopt Zed-style Linux client decorations)
 
 impl ConWorkspace {
     fn has_active_resize_drag(&self) -> bool {
@@ -1582,13 +1586,11 @@ impl Render for ConWorkspace {
             let decorations = window.window_decorations();
             let is_maximized = window.is_maximized();
             let is_fullscreen = window.is_fullscreen();
-            let tiling = match decorations {
-                Decorations::Client { tiling } => tiling,
-                Decorations::Server => Tiling::default(),
-            };
             let mut x11_shape_round = false;
 
-            if matches!(decorations, Decorations::Client { .. }) && !is_maximized && !is_fullscreen
+            if let Decorations::Client { tiling } = decorations
+                && !is_maximized
+                && !is_fullscreen
             {
                 x11_shape_round = !(tiling.top || tiling.left || tiling.right || tiling.bottom);
                 if !(tiling.top || tiling.left) {
