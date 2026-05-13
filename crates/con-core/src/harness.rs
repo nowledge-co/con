@@ -176,13 +176,13 @@ pub struct AgentHarness {
     config: con_agent::AgentConfig,
     skills_config: crate::config::SkillsConfig,
     skills: SkillRegistry,
-    /// Last candidate skill roots successfully scanned. Repeating the same cwd
-    /// is skipped, but cwd/config changes rebuild the registry off the UI thread
-    /// so skill edits are still picked up at the same points as the old
-    /// synchronous scanner.
-    last_skill_scan_candidates: Option<SkillScanCandidateDirs>,
-    latest_requested_skill_scan: Option<SkillScanCandidateDirs>,
-    in_flight_skill_scans: HashSet<SkillScanCandidateDirs>,
+    /// Last skill scan request successfully applied. Repeating the exact same
+    /// cwd and resolved roots is skipped, but cwd/config changes rebuild the
+    /// registry off the UI thread so skill edits are still picked up at the
+    /// same points as the old synchronous scanner.
+    last_skill_scan_request: Option<SkillScanRequest>,
+    latest_requested_skill_scan: Option<SkillScanRequest>,
+    in_flight_skill_scans: HashSet<SkillScanRequest>,
     runtime: Arc<Runtime>,
 }
 
@@ -192,15 +192,19 @@ struct SkillScanCandidateDirs {
     project: Vec<PathBuf>,
 }
 
-#[must_use = "skill scan jobs must be scanned or completed with failed_result to clear in-flight state"]
-pub struct SkillScanJob {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SkillScanRequest {
     cwd: String,
     candidates: SkillScanCandidateDirs,
 }
 
+#[must_use = "skill scan job results must be delivered to AgentHarness::complete_skill_scan, including failed_result, to clear in-flight state"]
+pub struct SkillScanJob {
+    request: SkillScanRequest,
+}
+
 pub struct SkillScanResult {
-    cwd: String,
-    candidates: SkillScanCandidateDirs,
+    request: SkillScanRequest,
     registry: Option<SkillRegistry>,
     count: usize,
 }
@@ -208,22 +212,20 @@ pub struct SkillScanResult {
 impl SkillScanJob {
     pub fn failed_result(&self) -> SkillScanResult {
         SkillScanResult {
-            cwd: self.cwd.clone(),
-            candidates: self.candidates.clone(),
+            request: self.request.clone(),
             registry: None,
             count: 0,
         }
     }
 
     pub fn scan(self) -> SkillScanResult {
-        let global_dirs = existing_skill_dirs(&self.candidates.global);
-        let project_dirs = existing_skill_dirs(&self.candidates.project);
+        let global_dirs = existing_skill_dirs(&self.request.candidates.global);
+        let project_dirs = existing_skill_dirs(&self.request.candidates.project);
 
         let mut registry = SkillRegistry::new();
         let count = registry.scan(&global_dirs, &project_dirs);
         SkillScanResult {
-            cwd: self.cwd,
-            candidates: self.candidates,
+            request: self.request,
             registry: Some(registry),
             count,
         }
@@ -243,7 +245,7 @@ impl AgentHarness {
             config: config.agent.clone(),
             skills_config: config.skills.clone(),
             skills: SkillRegistry::new(),
-            last_skill_scan_candidates: None,
+            last_skill_scan_request: None,
             latest_requested_skill_scan: None,
             in_flight_skill_scans: HashSet::new(),
             runtime,
@@ -614,30 +616,36 @@ impl AgentHarness {
             project: self.skills_config.resolved_project_paths(cwd_path),
         };
 
-        if self.last_skill_scan_candidates.as_ref() == Some(&candidates) {
-            return None;
-        }
-
-        if !self.in_flight_skill_scans.insert(candidates.clone()) {
-            return None;
-        }
-        self.latest_requested_skill_scan = Some(candidates.clone());
-
-        Some(SkillScanJob {
+        let request = SkillScanRequest {
             cwd: cwd.to_string(),
             candidates,
-        })
+        };
+
+        if self.last_skill_scan_request.as_ref() == Some(&request) {
+            return None;
+        }
+
+        if !self.in_flight_skill_scans.insert(request.clone()) {
+            self.latest_requested_skill_scan = Some(request);
+            return None;
+        }
+        self.latest_requested_skill_scan = Some(request.clone());
+
+        Some(SkillScanJob { request })
     }
 
     pub fn complete_skill_scan(&mut self, result: SkillScanResult) -> bool {
-        self.in_flight_skill_scans.remove(&result.candidates);
-        if self.latest_requested_skill_scan.as_ref() != Some(&result.candidates) {
+        self.in_flight_skill_scans.remove(&result.request);
+        if self.latest_requested_skill_scan.as_ref() != Some(&result.request) {
             return false;
         }
         self.latest_requested_skill_scan = None;
 
         if result.registry.is_none() {
-            log::warn!("Skill scan for {} failed before completion", result.cwd);
+            log::warn!(
+                "Skill scan for {} failed before completion",
+                result.request.cwd
+            );
             return false;
         }
 
@@ -645,7 +653,7 @@ impl AgentHarness {
     }
 
     fn apply_skill_scan_result(&mut self, result: SkillScanResult) -> bool {
-        self.last_skill_scan_candidates = Some(result.candidates);
+        self.last_skill_scan_request = Some(result.request.clone());
 
         let Some(registry) = result.registry else {
             return false;
@@ -654,7 +662,7 @@ impl AgentHarness {
         self.skills = registry;
         log::info!(
             "Skill scan for {}: {} skill(s) found",
-            result.cwd,
+            result.request.cwd,
             result.count
         );
         true
@@ -664,7 +672,7 @@ impl AgentHarness {
     pub fn update_skills_config(&mut self, config: crate::config::SkillsConfig) {
         self.skills_config = config;
         // Force rescan on next cwd check
-        self.last_skill_scan_candidates = None;
+        self.last_skill_scan_request = None;
         self.latest_requested_skill_scan = None;
         self.in_flight_skill_scans.clear();
     }
@@ -753,6 +761,15 @@ mod tests {
         AgentHarness::new(&config).unwrap()
     }
 
+    fn harness_with_global_skill_paths_only(global: &Path) -> AgentHarness {
+        let mut config = Config::default();
+        config.skills = SkillsConfig {
+            project_paths: Vec::new(),
+            global_paths: vec![global.display().to_string()],
+        };
+        AgentHarness::new(&config).unwrap()
+    }
+
     #[test]
     fn async_skill_scan_reloads_when_candidates_change_even_if_existing_roots_do_not() {
         let root = TempDir::new("skill-scan-candidate-change");
@@ -777,6 +794,30 @@ mod tests {
         let second_result = second.scan();
         assert!(second_result.registry.is_some());
         assert!(harness.complete_skill_scan(second_result));
+
+        let names = harness.skill_names();
+        assert!(names.contains(&"global-skill".to_string()));
+        assert!(names.contains(&"new-global-skill".to_string()));
+    }
+
+    #[test]
+    fn async_skill_scan_reloads_when_cwd_changes_even_if_candidate_roots_do_not() {
+        let root = TempDir::new("skill-scan-cwd-change");
+        let global = root.path().join("global");
+        let cwd_a = root.path().join("a");
+        let cwd_b = root.path().join("b");
+        fs::create_dir_all(&cwd_a).unwrap();
+        fs::create_dir_all(&cwd_b).unwrap();
+        write_skill(&global, "global-skill");
+
+        let mut harness = harness_with_global_skill_paths_only(&global);
+        let first = harness.request_skill_scan(cwd_a.to_str().unwrap()).unwrap();
+        assert!(harness.complete_skill_scan(first.scan()));
+
+        write_skill(&global, "new-global-skill");
+
+        let second = harness.request_skill_scan(cwd_b.to_str().unwrap()).unwrap();
+        assert!(harness.complete_skill_scan(second.scan()));
 
         let names = harness.skill_names();
         assert!(names.contains(&"global-skill".to_string()));
@@ -838,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_in_flight_scan_does_not_replace_latest_request() {
+    fn duplicate_in_flight_scan_can_become_latest_request_again() {
         let root = TempDir::new("skill-scan-duplicate-in-flight");
         let global = root.path().join("global");
         let cwd_a = root.path().join("a");
@@ -859,13 +900,13 @@ mod tests {
                 .is_none()
         );
 
-        assert!(harness.complete_skill_scan(scan_b.scan()));
-        assert!(!harness.complete_skill_scan(scan_a.scan()));
+        assert!(!harness.complete_skill_scan(scan_b.scan()));
+        assert!(harness.complete_skill_scan(scan_a.scan()));
 
         let names = harness.skill_names();
         assert!(names.contains(&"global-skill".to_string()));
-        assert!(names.contains(&"b-skill".to_string()));
-        assert!(!names.contains(&"a-skill".to_string()));
+        assert!(names.contains(&"a-skill".to_string()));
+        assert!(!names.contains(&"b-skill".to_string()));
     }
 
     #[test]

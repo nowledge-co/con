@@ -139,15 +139,20 @@ impl SkillRegistry {
     }
 
     pub fn names(&self) -> Vec<String> {
-        self.skills.keys().cloned().collect()
+        let mut names: Vec<_> = self.skills.keys().cloned().collect();
+        names.sort();
+        names
     }
 
     /// Return (name, description) pairs for all registered skills.
     pub fn summaries(&self) -> Vec<(String, String)> {
-        self.skills
+        let mut summaries: Vec<_> = self
+            .skills
             .values()
             .map(|s| (s.name.clone(), s.description.clone()))
-            .collect()
+            .collect();
+        summaries.sort_by(|a, b| a.0.cmp(&b.0));
+        summaries
     }
 
     pub fn is_empty(&self) -> bool {
@@ -270,6 +275,36 @@ mod tests {
         let (fm, body) = parse_frontmatter(content).unwrap();
         assert_eq!(fm["name"], "empty");
         assert!(body.trim().is_empty());
+    }
+
+    #[test]
+    fn registry_names_and_summaries_are_sorted_by_name() {
+        let mut registry = SkillRegistry::new();
+        for name in ["zeta", "alpha", "middle"] {
+            registry.register(Skill {
+                name: name.to_string(),
+                description: format!("{name} description"),
+                prompt_template: format!("{name} prompt"),
+                source: SkillSource::Global(PathBuf::from("/tmp")),
+            });
+        }
+
+        assert_eq!(
+            registry.names(),
+            vec![
+                "alpha".to_string(),
+                "middle".to_string(),
+                "zeta".to_string()
+            ]
+        );
+        assert_eq!(
+            registry.summaries(),
+            vec![
+                ("alpha".to_string(), "alpha description".to_string()),
+                ("middle".to_string(), "middle description".to_string()),
+                ("zeta".to_string(), "zeta description".to_string())
+            ]
+        );
     }
 
     #[test]
