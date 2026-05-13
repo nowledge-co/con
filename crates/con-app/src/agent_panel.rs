@@ -4472,9 +4472,9 @@ impl Render for AgentPanel {
         let model_label = if self.model_name.is_empty() {
             SharedString::from("Model")
         } else {
-            SharedString::from(self.model_name.clone())
+            SharedString::from(humanize_model_name(&self.model_name))
         };
-        let model_picker = div().w(px(156.0)).child(
+        let model_picker = div().w(px(156.0)).flex_shrink_0().overflow_hidden().child(
             Button::new("agent-model-picker")
                 .ghost()
                 .xsmall()
@@ -5020,14 +5020,20 @@ impl Render for AgentPanel {
 
 /// Convert model ID to a human-readable short name.
 fn humanize_model_name(model: &str) -> String {
-    // Common patterns: "claude-sonnet-4-6" → "Sonnet 4.6"
+    // Common patterns: "claude-sonnet-4-6" → "Sonnet 4.6",
+    // "claude-sonnet-4-5-20250929" → "Sonnet 4.5"
     if model.contains("claude") {
         if let Some(rest) = model.strip_prefix("claude-") {
-            // "sonnet-4-6" → "Sonnet 4.6", "opus-4-6" → "Opus 4.6"
-            let parts: Vec<&str> = rest.splitn(2, '-').collect();
-            if parts.len() >= 2 {
-                let family = parts[0];
-                let version = parts[1].replace('-', ".");
+            let mut segments: Vec<&str> = rest.split('-').collect();
+            // Strip trailing date stamp (8+ contiguous digits, e.g. 20250929).
+            if let Some(last) = segments.last() {
+                if last.len() >= 8 && last.chars().all(|c| c.is_ascii_digit()) {
+                    segments.pop();
+                }
+            }
+            if segments.len() >= 2 {
+                let family = segments[0];
+                let version = segments[1..].join(".");
                 let family_cap = if let Some(first) = family.chars().next() {
                     format!("{}{}", first.to_uppercase(), &family[first.len_utf8()..])
                 } else {
@@ -5044,12 +5050,34 @@ fn humanize_model_name(model: &str) -> String {
         return "No model".to_string();
     }
     // Fallback: show as-is but truncated
-    truncate_str(model, 24)
+    truncate_str(model, 18)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentPanel, PanelState, StepStatus};
+    use super::{AgentPanel, PanelState, StepStatus, humanize_model_name};
+
+    #[test]
+    fn humanize_strips_date_suffix() {
+        assert_eq!(humanize_model_name("claude-sonnet-4-5-20250929"), "Sonnet 4.5");
+        assert_eq!(humanize_model_name("claude-opus-4-1-20250805"), "Opus 4.1");
+        assert_eq!(humanize_model_name("claude-sonnet-4-6"), "Sonnet 4.6");
+        assert_eq!(humanize_model_name(""), "No model");
+    }
+
+    #[test]
+    fn humanize_unknown_model_truncates_at_eighteen_chars() {
+        // Unknown provider/family hits the fallback `truncate_str(model, 18)` branch.
+        let short = "kimi-k2-0905";
+        assert_eq!(humanize_model_name(short), short);
+
+        let long = "some-unknown-model-name-2026";
+        let result = humanize_model_name(long);
+        assert!(result.ends_with('…'), "expected ellipsis, got {result:?}");
+        // 18-char prefix + the ellipsis character.
+        assert_eq!(result.chars().count(), 19);
+        assert!(result.starts_with(&long[..18]));
+    }
 
     #[test]
     fn multiline_drafts_disable_inline_history_navigation() {
