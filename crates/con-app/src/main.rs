@@ -203,7 +203,7 @@ fn set_dock_icon() {}
 
 #[cfg(target_os = "linux")]
 fn linux_uses_client_side_decorations() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_some_and(|display| !display.is_empty())
+    true
 }
 
 #[cfg(target_os = "macos")]
@@ -236,11 +236,9 @@ fn supports_transparent_main_window() -> bool {
 
 #[cfg(target_os = "linux")]
 fn supports_transparent_main_window() -> bool {
-    // Wayland has no universal server-side frame, so keep the client
-    // surface transparent and let Con's rounded workspace clip define
-    // the silhouette. On X11/Xfce, rounded outer corners are owned by
-    // the window manager's server-side frame; keeping Con opaque there
-    // avoids full-window alpha compositing and preserves native corners.
+    // Linux uses client-side decorations so Con's top bar stays
+    // consistent with macOS/Windows. Wayland gets the rounded shape from
+    // the transparent GPUI surface; X11 gets an explicit SHAPE mask.
     linux_uses_client_side_decorations()
 }
 
@@ -282,18 +280,159 @@ pub fn set_windows_backdrop_blur(window: &mut Window, blur: bool) {
 /// can toggle "background blur" in settings without restarting the
 /// window.
 ///
-/// Wayland keeps the native surface transparent so Con's rounded
-/// workspace clip can define the outer shape. X11 uses an opaque
-/// server-decorated window so the window manager owns rounded corners
-/// without paying for full-window alpha compositing.
+/// Linux keeps the top-level surface transparent so Con's rounded
+/// workspace clip can define the visible shape. On X11 we additionally
+/// apply a cheap server-side SHAPE mask so the top-level window hit box
+/// and outer silhouette match the clip without adding native chrome.
 #[cfg(target_os = "linux")]
 pub fn set_linux_window_blur(window: &mut Window, _blur: bool) {
     use gpui::WindowBackgroundAppearance;
-    window.set_background_appearance(if linux_uses_client_side_decorations() {
-        WindowBackgroundAppearance::Transparent
-    } else {
-        WindowBackgroundAppearance::Opaque
-    });
+    window.set_background_appearance(WindowBackgroundAppearance::Transparent);
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn sync_linux_x11_window_shape(
+    window: &mut Window,
+    width_px: u32,
+    height_px: u32,
+    radius_px: Option<u32>,
+) {
+    let Some(window_id) = linux_x11_window_id(window) else {
+        return;
+    };
+    let Some(rectangles) = linux_window_shape_rectangles(width_px, height_px, radius_px) else {
+        return;
+    };
+
+    if let Err(err) = apply_linux_x11_shape(window_id, &rectangles) {
+        log::debug!("failed to apply Linux X11 window shape: {err}");
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_x11_window_id(window: &Window) -> Option<u32> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let handle = HasWindowHandle::window_handle(window).ok()?;
+    match handle.as_raw() {
+        RawWindowHandle::Xlib(handle) => u32::try_from(handle.window).ok().filter(|id| *id != 0),
+        RawWindowHandle::Xcb(handle) => Some(handle.window.get()),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_window_shape_rectangles(
+    width_px: u32,
+    height_px: u32,
+    radius_px: Option<u32>,
+) -> Option<Vec<x11rb::protocol::xproto::Rectangle>> {
+    use x11rb::protocol::xproto::Rectangle;
+
+    let width = u16::try_from(width_px).ok()?;
+    let height = u16::try_from(height_px).ok()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let Some(radius) = radius_px.filter(|radius| *radius > 0) else {
+        return Some(vec![Rectangle {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }]);
+    };
+
+    let radius = radius.min(u32::from(width / 2)).min(u32::from(height / 2));
+    if radius == 0 {
+        return Some(vec![Rectangle {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }]);
+    }
+
+    let radius_f = radius as f32;
+    let mut rows: Vec<(u16, u16, u16)> = Vec::with_capacity(usize::from(height));
+    for y in 0..height {
+        let y_u32 = u32::from(y);
+        let inset = if y_u32 < radius {
+            rounded_corner_inset(radius_f, radius_f - y_u32 as f32 - 0.5)
+        } else if y_u32 >= u32::from(height) - radius {
+            rounded_corner_inset(
+                radius_f,
+                y_u32 as f32 - (u32::from(height) - radius) as f32 + 0.5,
+            )
+        } else {
+            0
+        };
+        let inset = inset.min(width / 2);
+        let row_width = width.saturating_sub(inset.saturating_mul(2));
+        if row_width > 0 {
+            rows.push((y, inset, row_width));
+        }
+    }
+
+    let mut rectangles: Vec<Rectangle> = Vec::with_capacity(rows.len());
+    for (y, inset, row_width) in rows {
+        if let Some(last) = rectangles.last_mut() {
+            let same_x = last.x == inset as i16;
+            let same_width = last.width == row_width;
+            let contiguous = last.y as u16 + last.height == y;
+            if same_x && same_width && contiguous {
+                last.height = last.height.saturating_add(1);
+                continue;
+            }
+        }
+        rectangles.push(Rectangle {
+            x: inset as i16,
+            y: y as i16,
+            width: row_width,
+            height: 1,
+        });
+    }
+
+    Some(rectangles)
+}
+
+#[cfg(target_os = "linux")]
+fn rounded_corner_inset(radius: f32, distance_from_center: f32) -> u16 {
+    let inside = (radius * radius - distance_from_center * distance_from_center).max(0.0);
+    (radius - inside.sqrt()).ceil().max(0.0) as u16
+}
+
+#[cfg(target_os = "linux")]
+fn apply_linux_x11_shape(
+    window_id: u32,
+    rectangles: &[x11rb::protocol::xproto::Rectangle],
+) -> Result<(), Box<dyn std::error::Error>> {
+    use x11rb::connection::Connection;
+    use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
+    use x11rb::protocol::xproto::ClipOrdering;
+
+    let (conn, _) = x11rb::connect(None)?;
+    conn.shape_rectangles(
+        SO::SET,
+        SK::BOUNDING,
+        ClipOrdering::UNSORTED,
+        window_id,
+        0,
+        0,
+        rectangles,
+    )?;
+    conn.shape_rectangles(
+        SO::SET,
+        SK::CLIP,
+        ClipOrdering::UNSORTED,
+        window_id,
+        0,
+        0,
+        rectangles,
+    )?;
+    conn.flush()?;
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -538,11 +677,7 @@ fn default_titlebar_options(transparent: bool) -> Option<TitlebarOptions> {
 fn default_window_decorations() -> Option<WindowDecorations> {
     #[cfg(target_os = "linux")]
     {
-        if linux_uses_client_side_decorations() {
-            Some(WindowDecorations::Client)
-        } else {
-            Some(WindowDecorations::Server)
-        }
+        Some(WindowDecorations::Client)
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -1692,6 +1827,38 @@ mod tests {
 
     fn default_specs() -> Vec<BindingSpec> {
         binding_specs(&KeybindingConfig::default())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_window_shape_uses_compact_rounded_rectangles() {
+        let rectangles = super::linux_window_shape_rectangles(120, 80, Some(14)).unwrap();
+
+        assert!(rectangles.len() > 1);
+        assert!(rectangles.first().unwrap().x > 0);
+        assert!(rectangles.first().unwrap().width < 120);
+        assert_eq!(rectangles.first().unwrap().x, rectangles.last().unwrap().x);
+        assert_eq!(
+            rectangles.first().unwrap().width,
+            rectangles.last().unwrap().width
+        );
+        assert!(
+            rectangles
+                .iter()
+                .any(|rect| rect.x == 0 && rect.width == 120)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_window_shape_can_reset_to_full_rectangle() {
+        let rectangles = super::linux_window_shape_rectangles(120, 80, None).unwrap();
+
+        assert_eq!(rectangles.len(), 1);
+        assert_eq!(rectangles[0].x, 0);
+        assert_eq!(rectangles[0].y, 0);
+        assert_eq!(rectangles[0].width, 120);
+        assert_eq!(rectangles[0].height, 80);
     }
 
     fn specs_for_action<A: 'static>(specs: &[BindingSpec]) -> Vec<&BindingSpec> {

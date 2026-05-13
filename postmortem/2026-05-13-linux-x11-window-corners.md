@@ -10,18 +10,20 @@ Terminal on the same display had rounded window-manager corners.
 Con requested GPUI client-side decorations on Linux and rendered rounded
 workspace content into a transparent top-level surface. Runtime logs confirmed
 the rounded GPUI branch was active, but on X11/Xfce the visible outer silhouette
-is owned by the window manager's server-side frame. Removing that frame meant
-there was no native rounded shape left for the compositor to show.
+is the top-level X window shape, not the inner GPUI clip. Removing the native
+frame meant there was no window-manager rounded shape left for the compositor to
+show.
 
 ## Fix applied
 
-Linux now chooses decorations by compositor: Wayland keeps client-side
-transparent rendering, while X11 uses server-side decorations and an opaque
-window/root. The Linux in-app caption buttons and drag titlebar behavior are
-rendered only when GPUI reports client-side decorations.
+Linux keeps Con's client-side chrome. Wayland still uses the transparent GPUI
+surface and rounded workspace clip; X11 additionally applies a server-side
+SHAPE mask matching the rounded workspace, updating only when window
+size/maximize/tiling state changes. This keeps the modern in-app titlebar
+without adding a second native titlebar.
 
 ## What we learned
 
 Rounded GPUI content is not the same as a rounded top-level X11 window. On X11,
-native server decorations are the performance-safe path for matching the desktop
-environment's window shape.
+an explicit shape mask is the performance-safe path for matching the desktop
+environment's rounded windows while preserving client-side chrome.

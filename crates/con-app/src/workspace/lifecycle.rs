@@ -712,6 +712,8 @@ impl ConWorkspace {
             input_bar_release_cover_until: None,
             #[cfg(target_os = "macos")]
             top_chrome_release_cover_until: None,
+            #[cfg(target_os = "linux")]
+            linux_window_shape_signature: None,
             pending_create_pane_requests: Vec::new(),
             pending_window_control_requests: Vec::new(),
             pending_surface_control_requests: Vec::new(),

@@ -1582,11 +1582,13 @@ impl Render for ConWorkspace {
             let decorations = window.window_decorations();
             let is_maximized = window.is_maximized();
             let is_fullscreen = window.is_fullscreen();
+            let mut x11_shape_round = false;
 
             if let Decorations::Client { tiling } = decorations
                 && !is_maximized
                 && !is_fullscreen
             {
+                x11_shape_round = !(tiling.top || tiling.left || tiling.right || tiling.bottom);
                 if !(tiling.top || tiling.left) {
                     workspace_frame = workspace_frame.rounded_tl(LINUX_WINDOW_CORNER_RADIUS);
                 }
@@ -1600,6 +1602,26 @@ impl Render for ConWorkspace {
                     workspace_frame = workspace_frame.rounded_br(LINUX_WINDOW_CORNER_RADIUS);
                 }
                 workspace_frame = workspace_frame.overflow_hidden();
+            }
+
+            let scale = window.scale_factor().max(f32::EPSILON);
+            let size = window.bounds().size;
+            let width_px = (size.width.as_f32() * scale).round().max(1.0) as u32;
+            let height_px = (size.height.as_f32() * scale).round().max(1.0) as u32;
+            let radius_px = if x11_shape_round {
+                LINUX_WINDOW_CORNER_RADIUS.as_f32().round().max(0.0) as u32
+            } else {
+                0
+            };
+            let shape_signature = (width_px, height_px, radius_px, x11_shape_round);
+            if self.linux_window_shape_signature != Some(shape_signature) {
+                crate::sync_linux_x11_window_shape(
+                    window,
+                    width_px,
+                    height_px,
+                    x11_shape_round.then_some(radius_px),
+                );
+                self.linux_window_shape_signature = Some(shape_signature);
             }
 
             root = div()
