@@ -201,6 +201,11 @@ fn set_dock_icon() {
 #[cfg(not(target_os = "macos"))]
 fn set_dock_icon() {}
 
+#[cfg(target_os = "linux")]
+fn linux_uses_client_side_decorations() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some_and(|display| !display.is_empty())
+}
+
 #[cfg(target_os = "macos")]
 fn supports_transparent_main_window() -> bool {
     use cocoa::base::nil;
@@ -231,15 +236,12 @@ fn supports_transparent_main_window() -> bool {
 
 #[cfg(target_os = "linux")]
 fn supports_transparent_main_window() -> bool {
-    // GPUI's X11 backend already creates the window against an ARGB
-    // (depth-32) visual when transparency is requested, and the
-    // Wayland backend drops the opaque-region hint so the compositor
-    // honors per-pixel alpha. Both xfwm4 / mutter / kwin composite
-    // through it, so an always-on transparent root is safe on every
-    // Linux session that has any compositor at all. Headless / minimal
-    // sessions still render correctly because the workspace itself
-    // paints `theme.background.opacity(...)` on its surfaces.
-    true
+    // Wayland has no universal server-side frame, so keep the client
+    // surface transparent and let Con's rounded workspace clip define
+    // the silhouette. On X11/Xfce, rounded outer corners are owned by
+    // the window manager's server-side frame; keeping Con opaque there
+    // avoids full-window alpha compositing and preserves native corners.
+    linux_uses_client_side_decorations()
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -280,16 +282,18 @@ pub fn set_windows_backdrop_blur(window: &mut Window, blur: bool) {
 /// can toggle "background blur" in settings without restarting the
 /// window.
 ///
-/// Linux keeps the native surface transparent even when the user
-/// has background blur enabled. GPUI's current KWin blur integration
-/// commits blur for the whole Wayland surface instead of a rounded
-/// region, which makes the transparent corners read as a rectangular
-/// blur block. Until the platform layer can expose a rounded blur
-/// region, alpha shape correctness wins over blur.
+/// Wayland keeps the native surface transparent so Con's rounded
+/// workspace clip can define the outer shape. X11 uses an opaque
+/// server-decorated window so the window manager owns rounded corners
+/// without paying for full-window alpha compositing.
 #[cfg(target_os = "linux")]
 pub fn set_linux_window_blur(window: &mut Window, _blur: bool) {
     use gpui::WindowBackgroundAppearance;
-    window.set_background_appearance(WindowBackgroundAppearance::Transparent);
+    window.set_background_appearance(if linux_uses_client_side_decorations() {
+        WindowBackgroundAppearance::Transparent
+    } else {
+        WindowBackgroundAppearance::Opaque
+    });
 }
 
 #[cfg(target_os = "macos")]
@@ -380,11 +384,14 @@ fn set_windows_backdrop(window: &mut Window, blur: bool) -> Option<()> {
 
 fn default_window_options(config: &con_core::Config, cx: &mut App) -> WindowOptions {
     let transparent = supports_transparent_main_window();
+    let window_decorations = default_window_decorations();
+    let window_background = default_window_background(config, transparent);
+
     WindowOptions {
         window_bounds: Some(default_workspace_window_bounds(cx)),
         titlebar: default_titlebar_options(transparent),
-        window_decorations: default_window_decorations(),
-        window_background: default_window_background(config, transparent),
+        window_decorations,
+        window_background,
         // macOS: disable NSWindow's native `isMovable` drag so that
         // GPUI elements (tabs, sidebar) can start their own drags
         // without the window also moving. The top_bar renders an
@@ -529,18 +536,13 @@ fn default_titlebar_options(transparent: bool) -> Option<TitlebarOptions> {
 }
 
 fn default_window_decorations() -> Option<WindowDecorations> {
-    // Linux now ships a client-side titlebar drawn in
-    // `workspace::ConWorkspace::draw_top_bar` (the same top bar Windows uses),
-    // so the GPUI app shell paints its own brand chrome instead of
-    // stacking the xfwm4 / mutter / kwin frame on top of it. The
-    // gpui_linux X11 backend gracefully falls back to server-side
-    // decorations when no compositor is present, so this is safe on
-    // headless / minimal sessions too. macOS continues to use the
-    // default (system traffic-light cluster over an in-app top bar
-    // with `leading_pad = 78px`).
     #[cfg(target_os = "linux")]
     {
-        Some(WindowDecorations::Client)
+        if linux_uses_client_side_decorations() {
+            Some(WindowDecorations::Client)
+        } else {
+            Some(WindowDecorations::Server)
+        }
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -563,50 +565,28 @@ pub(crate) fn open_con_window(
                 .new(|cx| ConWorkspace::from_session(config.clone(), restored_session, window, cx));
             #[cfg(target_os = "windows")]
             let mica_applied = apply_windows_backdrop(window, config.appearance.terminal_blur);
-            #[cfg(not(target_os = "windows"))]
-            let mica_applied = false;
 
             #[cfg(target_os = "linux")]
             set_linux_window_blur(window, config.appearance.terminal_blur);
             cx.new(|cx| {
-                // On Windows we want the DWM-provided backdrop (Mica)
-                // to shine through wherever the app isn't painting —
-                // most importantly, the terminal area when the child
-                // pane HWND is hidden behind a modal. That requires a
-                // transparent Root. If Mica isn't available (Win10,
-                // RDP, older Win11), fall back to an opaque theme fill
-                // so the window doesn't look "see-through to desktop".
-                //
-                // On macOS 12 and older we still need the window itself
-                // to be opaque, but the GPUI root above the embedded
-                // Ghostty NSView must stay transparent. Making both the
-                // window and the root opaque fixed the desktop leak but
-                // painted the fallback theme background over the terminal
-                // surface, leaving Monterey users with a blank beige pane.
-                let background = if cfg!(target_os = "windows") {
-                    if mica_applied {
-                        cx.theme().transparent
-                    } else {
-                        cx.theme().background
-                    }
-                } else if cfg!(target_os = "macos") {
-                    // The window background policy decides whether the
-                    // desktop can bleed through. On macOS the root
-                    // itself must remain transparent so the embedded
-                    // Ghostty NSView below GPUI stays visible, even on
-                    // Monterey where the top-level window falls back to
-                    // opaque.
-                    cx.theme().transparent
-                } else if cfg!(target_os = "linux") {
-                    // Linux relies on a transparent top-level Root so
-                    // the workspace's rounded `overflow_hidden` clip
-                    // exposes the compositor at the outer corners.
-                    // Painting the Root with the theme background here
-                    // makes the clipped workspace look square again.
+                #[cfg(target_os = "windows")]
+                let background = if mica_applied {
                     cx.theme().transparent
                 } else {
                     cx.theme().background
                 };
+                #[cfg(target_os = "macos")]
+                let background = cx.theme().transparent;
+                #[cfg(target_os = "linux")]
+                let background = {
+                    if matches!(window.window_decorations(), Decorations::Client { .. }) {
+                        cx.theme().transparent
+                    } else {
+                        cx.theme().background
+                    }
+                };
+                #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+                let background = cx.theme().background;
                 gpui_component::Root::new(view, window, cx).bg(background)
             })
         }) {

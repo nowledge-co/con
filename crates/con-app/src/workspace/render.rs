@@ -1579,10 +1579,13 @@ impl Render for ConWorkspace {
         #[cfg(target_os = "linux")]
         {
             let mut workspace_frame = root;
+            let decorations = window.window_decorations();
+            let is_maximized = window.is_maximized();
+            let is_fullscreen = window.is_fullscreen();
 
-            if let Decorations::Client { tiling } = window.window_decorations()
-                && !window.is_maximized()
-                && !window.is_fullscreen()
+            if let Decorations::Client { tiling } = decorations
+                && !is_maximized
+                && !is_fullscreen
             {
                 if !(tiling.top || tiling.left) {
                     workspace_frame = workspace_frame.rounded_tl(LINUX_WINDOW_CORNER_RADIUS);

@@ -22,6 +22,9 @@ impl ConWorkspace {
         top_bar_surface_color: Hsla,
     ) -> impl IntoElement + use<> {
         let theme = cx.theme();
+        #[cfg(target_os = "linux")]
+        let linux_client_decorated =
+            matches!(window.window_decorations(), Decorations::Client { .. });
         // macOS: leave 78px for the system traffic-light cluster that
         // the OS paints over our content. Windows / Linux: start flush
         // at the left; the Min/Max/Close cluster gets appended at the
@@ -30,20 +33,18 @@ impl ConWorkspace {
         // (GPUI's hit-test walks buttons first so child clickables
         // still work) and still lets macOS react to
         // `titlebar_double_click`.
-        let leading_pad = if cfg!(target_os = "macos") {
-            78.0
-        } else if cfg!(target_os = "linux") {
-            10.0
-        } else {
-            8.0
-        };
-        let trailing_pad = if cfg!(target_os = "windows") {
-            0.0
-        } else if cfg!(target_os = "linux") {
-            8.0
-        } else {
-            6.0
-        };
+        #[cfg(target_os = "macos")]
+        let leading_pad = 78.0;
+        #[cfg(target_os = "linux")]
+        let leading_pad = if linux_client_decorated { 10.0 } else { 8.0 };
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        let leading_pad = 8.0;
+        #[cfg(target_os = "windows")]
+        let trailing_pad = 0.0;
+        #[cfg(target_os = "linux")]
+        let trailing_pad = if linux_client_decorated { 8.0 } else { 6.0 };
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        let trailing_pad = 6.0;
         let mut top_bar = div()
             .id("tab-bar")
             .flex()
@@ -1038,16 +1039,18 @@ impl ConWorkspace {
             // handler. GPUI Linux does not dispatch window-control
             // hit tests like Windows, so the draggable area must stay
             // clear of normal buttons.
-            leading_chrome = leading_chrome
-                .window_control_area(WindowControlArea::Drag)
-                .on_mouse_down(MouseButton::Left, |_, window, _cx| {
-                    window.start_window_move();
-                })
-                .on_click(|event, window, _cx| {
-                    if event.click_count() == 2 {
-                        window.titlebar_double_click();
-                    }
-                });
+            if linux_client_decorated {
+                leading_chrome = leading_chrome
+                    .window_control_area(WindowControlArea::Drag)
+                    .on_mouse_down(MouseButton::Left, |_, window, _cx| {
+                        window.start_window_move();
+                    })
+                    .on_click(|event, window, _cx| {
+                        if event.click_count() == 2 {
+                            window.titlebar_double_click();
+                        }
+                    });
+            }
         }
         // Show the tab strip when animating/visible OR when a pane is being
         // dragged to become a new tab (so the ghost tab preview is visible
@@ -1081,7 +1084,9 @@ impl ConWorkspace {
             .flex_shrink_0();
         #[cfg(target_os = "linux")]
         {
-            tab_controls = tab_controls.mr(px(4.0));
+            if linux_client_decorated {
+                tab_controls = tab_controls.mr(px(4.0));
+            }
         }
 
         let new_tab_icon_color = theme
@@ -1323,13 +1328,19 @@ impl ConWorkspace {
         {
             #[cfg(target_os = "linux")]
             let workspace_handle = cx.weak_entity();
-            top_bar = top_bar.child(caption_buttons(
-                window,
-                theme,
-                top_bar_height,
-                #[cfg(target_os = "linux")]
-                workspace_handle,
-            ));
+            #[cfg(target_os = "linux")]
+            if linux_client_decorated {
+                top_bar = top_bar.child(caption_buttons(
+                    window,
+                    theme,
+                    top_bar_height,
+                    workspace_handle,
+                ));
+            }
+            #[cfg(target_os = "windows")]
+            {
+                top_bar = top_bar.child(caption_buttons(window, theme, top_bar_height));
+            }
         }
 
         top_bar
