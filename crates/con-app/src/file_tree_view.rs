@@ -254,8 +254,12 @@ impl Render for FileTreeView {
         }
 
         let active_path = self.active_path.clone();
-        let accent_bg = theme.primary.opacity(0.10);
-        let hover_bg = theme.foreground.opacity(0.055);
+        let accent_bg = theme
+            .primary
+            .opacity(if theme.is_dark() { 0.12 } else { 0.075 });
+        let hover_bg = theme
+            .foreground
+            .opacity(if theme.is_dark() { 0.046 } else { 0.026 });
 
         let entries = self.entries.clone();
         let entry_count = entries.len();
@@ -316,11 +320,11 @@ impl Render for FileTreeView {
                     div()
                         .id(("file-row", idx))
                         .h(px(ROW_HEIGHT))
+                        .w_full()
                         .flex()
                         .items_center()
-                        .mx(px(6.0))
-                        .rounded(px(6.0))
                         .pl(px(indent))
+                        .pr(px(8.0))
                         .gap(px(5.0))
                         .bg(row_bg)
                         .cursor_pointer()
@@ -380,6 +384,7 @@ impl Render for FileTreeView {
             .size_full()
             .flex()
             .flex_col()
+            .occlude()
             .child(list)
             .into_any_element()
     }

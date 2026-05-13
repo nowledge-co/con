@@ -56,6 +56,37 @@ fn top_bar_trailing_pad(window: &Window) -> f32 {
     }
 }
 
+fn chrome_icon_tone(theme: &gpui_component::Theme, compact_titlebar_progress: f32) -> Hsla {
+    let base = if theme.is_dark() { 0.62 } else { 0.52 };
+    theme
+        .foreground
+        .opacity(base + (0.08 * compact_titlebar_progress))
+}
+
+fn chrome_toggle_tone(
+    theme: &gpui_component::Theme,
+    active: bool,
+    compact_titlebar_progress: f32,
+) -> Hsla {
+    if active {
+        theme.primary
+    } else {
+        chrome_icon_tone(theme, compact_titlebar_progress)
+    }
+}
+
+fn chrome_control_hover_bg(theme: &gpui_component::Theme) -> Hsla {
+    theme
+        .foreground
+        .opacity(if theme.is_dark() { 0.12 } else { 0.075 })
+}
+
+fn chrome_control_active_bg(theme: &gpui_component::Theme) -> Hsla {
+    theme
+        .primary
+        .opacity(if theme.is_dark() { 0.14 } else { 0.09 })
+}
+
 impl ConWorkspace {
     pub(super) fn render_top_bar(
         &mut self,
@@ -1123,9 +1154,9 @@ impl ConWorkspace {
             }
         }
 
-        let new_tab_icon_color = theme
-            .muted_foreground
-            .opacity(0.45 + (0.08 * compact_titlebar_progress));
+        let new_tab_icon_color = chrome_icon_tone(theme, compact_titlebar_progress);
+        let chrome_hover_bg = chrome_control_hover_bg(theme);
+        let chrome_active_bg = chrome_control_active_bg(theme);
         let new_tab_button = div()
             .id("tab-new")
             .flex()
@@ -1141,7 +1172,7 @@ impl ConWorkspace {
             // click listener). Same treatment as the Min/Max/Close
             // caption buttons at the top of this file.
             .occlude()
-            .hover(|s| s.bg(theme.muted.opacity(0.12)))
+            .hover(move |s| s.bg(chrome_hover_bg))
             .tooltip(|window, cx| {
                 chrome_tooltip(
                     "New tab",
@@ -1181,7 +1212,12 @@ impl ConWorkspace {
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .occlude()
-                .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                .bg(if self.left_panel_open {
+                    chrome_active_bg
+                } else {
+                    theme.transparent
+                })
+                .hover(move |s| s.bg(chrome_hover_bg))
                 .tooltip(move |window, cx| {
                     chrome_tooltip(
                         left_sidebar_tooltip,
@@ -1200,11 +1236,11 @@ impl ConWorkspace {
                     svg()
                         .path("phosphor/sidebar.svg")
                         .size(px(12.0))
-                        .text_color(if self.left_panel_open {
-                            theme.primary
-                        } else {
-                            theme.muted_foreground.opacity(0.4)
-                        }),
+                        .text_color(chrome_toggle_tone(
+                            theme,
+                            self.left_panel_open,
+                            compact_titlebar_progress,
+                        )),
                 ),
         );
 
@@ -1224,7 +1260,12 @@ impl ConWorkspace {
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .occlude()
-                .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                .bg(if self.input_bar_visible {
+                    chrome_active_bg
+                } else {
+                    theme.transparent
+                })
+                .hover(move |s| s.bg(chrome_hover_bg))
                 .tooltip(move |window, cx| {
                     chrome_tooltip(
                         input_bar_tooltip,
@@ -1243,11 +1284,11 @@ impl ConWorkspace {
                     svg()
                         .path("phosphor/square-half-bottom-fill.svg")
                         .size(px(12.0))
-                        .text_color(if self.input_bar_visible {
-                            theme.primary
-                        } else {
-                            theme.muted_foreground.opacity(0.4)
-                        }),
+                        .text_color(chrome_toggle_tone(
+                            theme,
+                            self.input_bar_visible,
+                            compact_titlebar_progress,
+                        )),
                 ),
         );
 
@@ -1267,7 +1308,12 @@ impl ConWorkspace {
                 .rounded(px(5.0))
                 .cursor_pointer()
                 .occlude()
-                .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                .bg(if self.agent_panel_open {
+                    chrome_active_bg
+                } else {
+                    theme.transparent
+                })
+                .hover(move |s| s.bg(chrome_hover_bg))
                 .tooltip(move |window, cx| {
                     chrome_tooltip(
                         agent_panel_tooltip,
@@ -1286,11 +1332,11 @@ impl ConWorkspace {
                     svg()
                         .path("phosphor/square-half-fill.svg")
                         .size(px(12.0))
-                        .text_color(if self.agent_panel_open {
-                            theme.primary
-                        } else {
-                            theme.muted_foreground.opacity(0.4)
-                        }),
+                        .text_color(chrome_toggle_tone(
+                            theme,
+                            self.agent_panel_open,
+                            compact_titlebar_progress,
+                        )),
                 ),
         );
 
@@ -1311,7 +1357,7 @@ impl ConWorkspace {
                     .rounded(px(5.0))
                     .cursor_pointer()
                     .occlude()
-                    .hover(|s| s.bg(theme.muted.opacity(0.10)))
+                    .hover(move |s| s.bg(chrome_hover_bg))
                     .tooltip(|window, cx| {
                         chrome_tooltip(
                             "Settings",
@@ -1330,11 +1376,10 @@ impl ConWorkspace {
                         this.toggle_settings(&settings_panel::ToggleSettings, window, cx);
                     }))
                     .child(
-                        svg().path("phosphor/gear.svg").size(px(12.0)).text_color(
-                            theme
-                                .muted_foreground
-                                .opacity(0.45 + (0.08 * compact_titlebar_progress)),
-                        ),
+                        svg()
+                            .path("phosphor/gear.svg")
+                            .size(px(12.0))
+                            .text_color(chrome_icon_tone(theme, compact_titlebar_progress)),
                     ),
             );
         }

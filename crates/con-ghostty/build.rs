@@ -301,12 +301,10 @@ fn build_vt_backend(target_os: &str) {
     let optimize = ghostty_optimize();
     let zig_target = ghostty_vt_zig_target();
 
-    let mut cmd = Command::new(&zig_bin);
-    cmd.current_dir(&ghostty_dir);
-    configure_zig_command(&mut cmd, zig_global_cache_dir.as_deref());
-    cmd.arg("build");
+    let mut build_args = Vec::new();
+    build_args.push("build".to_string());
     for arg in &invocation {
-        cmd.arg(arg);
+        build_args.push(arg.clone());
     }
     if let Some(zig_target) = &zig_target {
         // Do not let Zig default to the build machine's native CPU for
@@ -314,27 +312,47 @@ fn build_vt_backend(target_os: &str) {
         // that WSL / older x86_64 hosts do not support, and a native-built
         // static lib can SIGILL even when the Rust binary itself is generic.
         println!("cargo:warning=building libghostty-vt for Zig target {zig_target}");
-        cmd.arg(format!("-Dtarget={zig_target}"));
+        build_args.push(format!("-Dtarget={zig_target}"));
     } else {
         println!(
             "cargo:warning=building libghostty-vt without explicit Zig target; \
              set {GHOSTTY_VT_TARGET_ENV} to avoid native CPU codegen"
         );
     }
-    cmd.args([&format!("-Doptimize={optimize}"), simd_flag]);
+    build_args.push(format!("-Doptimize={optimize}"));
+    build_args.push(simd_flag.to_string());
 
-    let status = cmd
-        .status()
-        .expect("failed to run zig build for libghostty-vt");
+    let status = run_zig_command_status(
+        &zig_bin,
+        &ghostty_dir,
+        zig_global_cache_dir.as_deref(),
+        &build_args,
+    )
+    .expect("failed to run zig build for libghostty-vt");
 
     if !status.success() {
-        panic!(
-            "zig build {:?} failed; see output above.\n\
-             If this Ghostty revision doesn't expose libghostty-vt,\n\
-             bump GHOSTTY_REV in crates/con-ghostty/build.rs or set\n\
-             CON_GHOSTTY_VT_STEP to the correct step name.",
-            invocation
+        println!(
+            "cargo:warning=zig build failed for libghostty-vt; prefetching Zig package cache and retrying"
         );
+        prefetch_zig_dependencies(&zig_bin, &ghostty_dir, zig_global_cache_dir.as_deref());
+
+        let retry_status = run_zig_command_status(
+            &zig_bin,
+            &ghostty_dir,
+            zig_global_cache_dir.as_deref(),
+            &build_args,
+        )
+        .expect("failed to retry zig build for libghostty-vt");
+
+        if !retry_status.success() {
+            panic!(
+                "zig build {:?} failed after package-cache prefetch; see output above.\n\
+                 If this Ghostty revision doesn't expose libghostty-vt,\n\
+                 bump GHOSTTY_REV in crates/con-ghostty/build.rs or set\n\
+                 CON_GHOSTTY_VT_STEP to the correct step name.",
+                invocation
+            );
+        }
     }
 
     // Zig produces both a shared library (`ghostty-vt.dll` +
@@ -422,22 +440,7 @@ fn pick_vt_invocation(
         }
     }
 
-    let mut cmd = Command::new(zig_bin);
-    cmd.args(["build", "-h"]).current_dir(ghostty_dir);
-    configure_zig_command(&mut cmd, zig_global_cache_dir);
-    let output = cmd.output();
-
-    let help_text = match output {
-        Ok(out) => {
-            let mut text = String::new();
-            text.push_str(&String::from_utf8_lossy(&out.stdout));
-            text.push_str(&String::from_utf8_lossy(&out.stderr));
-            text
-        }
-        Err(err) => {
-            panic!("failed to run `zig build -h` in Ghostty checkout: {err}");
-        }
-    };
+    let help_text = zig_build_help_text(zig_bin, ghostty_dir, zig_global_cache_dir);
 
     // Preferred: current Ghostty exposes `-Demit-lib-vt=[bool]` which
     // configures the default `install` step to produce only
@@ -479,6 +482,68 @@ fn pick_vt_invocation(
 }
 
 // ── Shared helpers ─────────────────────────────────────────────────────
+
+fn run_zig_command_status(
+    zig_bin: &OsStr,
+    dir: &Path,
+    zig_global_cache_dir: Option<&Path>,
+    args: &[String],
+) -> std::io::Result<std::process::ExitStatus> {
+    let mut cmd = Command::new(zig_bin);
+    configure_zig_command(&mut cmd, zig_global_cache_dir);
+    cmd.args(args).current_dir(dir).status()
+}
+
+fn zig_build_help_text(
+    zig_bin: &OsStr,
+    ghostty_dir: &Path,
+    zig_global_cache_dir: Option<&Path>,
+) -> String {
+    let args = vec!["build".to_string(), "-h".to_string()];
+
+    for attempt in 0..2 {
+        let mut cmd = Command::new(zig_bin);
+        configure_zig_command(&mut cmd, zig_global_cache_dir);
+        let output = cmd.args(&args).current_dir(ghostty_dir).output();
+
+        let out = match output {
+            Ok(out) => out,
+            Err(err) => {
+                panic!("failed to run `zig build -h` in Ghostty checkout: {err}");
+            }
+        };
+
+        let mut text = String::new();
+        text.push_str(&String::from_utf8_lossy(&out.stdout));
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+
+        if out.status.success() {
+            return text;
+        }
+
+        if attempt == 0 {
+            println!(
+                "cargo:warning=`zig build -h` failed while probing libghostty-vt; prefetching Zig package cache and retrying"
+            );
+            prefetch_zig_dependencies(zig_bin, ghostty_dir, zig_global_cache_dir);
+            continue;
+        }
+
+        panic!(
+            "\n========================================================\n\
+             con-ghostty: `zig build -h` failed while probing the\n\
+             libghostty-vt build surface, even after Zig package-cache\n\
+             prefetch. This usually means Zig could not resolve an\n\
+             upstream package dependency, not that libghostty-vt is\n\
+             missing from the pinned Ghostty checkout.\n\n\
+             `zig build -h` output:\n{help}\n\
+             ========================================================\n",
+            help = text,
+        );
+    }
+
+    unreachable!("two-attempt zig build help loop must return or panic")
+}
 
 fn ghostty_vt_zig_target() -> Option<String> {
     if let Some(target) = env::var_os(GHOSTTY_VT_TARGET_ENV) {
