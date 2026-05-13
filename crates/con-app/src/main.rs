@@ -203,7 +203,7 @@ fn set_dock_icon() {}
 
 #[cfg(target_os = "linux")]
 fn linux_uses_client_side_decorations() -> bool {
-    std::env::var_os("WAYLAND_DISPLAY").is_some_and(|display| !display.is_empty())
+    true
 }
 
 #[cfg(target_os = "macos")]
@@ -236,10 +236,9 @@ fn supports_transparent_main_window() -> bool {
 
 #[cfg(target_os = "linux")]
 fn supports_transparent_main_window() -> bool {
-    // Wayland has no universal server-side frame, so Con's client-side
-    // chrome owns the rounded transparent shape. X11 desktop
-    // environments like Xfce already provide the native rounded frame,
-    // titlebar buttons, and shadow; use that instead of custom masking.
+    // Linux keeps Con's integrated client-side chrome so titlebar
+    // actions match macOS/Windows. Wayland uses the transparent GPUI
+    // surface directly; X11 additionally receives a SHAPE mask.
     linux_uses_client_side_decorations()
 }
 
@@ -281,17 +280,12 @@ pub fn set_windows_backdrop_blur(window: &mut Window, blur: bool) {
 /// can toggle "background blur" in settings without restarting the
 /// window.
 ///
-/// Linux uses a transparent top-level surface only for client-side
-/// decorated Wayland windows. X11 uses the compositor/window manager's
-/// native server-side frame, so keep the GPUI surface opaque there.
+/// Linux uses a transparent top-level surface so Con's integrated
+/// client-side chrome can define the visible rounded shape.
 #[cfg(target_os = "linux")]
 pub fn set_linux_window_blur(window: &mut Window, _blur: bool) {
     use gpui::WindowBackgroundAppearance;
-    window.set_background_appearance(if linux_uses_client_side_decorations() {
-        WindowBackgroundAppearance::Transparent
-    } else {
-        WindowBackgroundAppearance::Opaque
-    });
+    window.set_background_appearance(WindowBackgroundAppearance::Transparent);
 }
 
 #[cfg(target_os = "linux")]

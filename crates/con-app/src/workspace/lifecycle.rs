@@ -864,14 +864,6 @@ impl ConWorkspace {
     }
 
     pub(super) fn current_top_bar_height(&self) -> f32 {
-        #[cfg(target_os = "linux")]
-        if std::env::var_os("DISPLAY").is_some() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
-            if self.tab_strip_motion.is_animating() || self.horizontal_tabs_visible() {
-                return TOP_BAR_TABS_HEIGHT;
-            }
-            return 0.0;
-        }
-
         if self.tab_strip_motion.is_animating() || self.horizontal_tabs_visible() {
             TOP_BAR_TABS_HEIGHT
         } else {
