@@ -1633,11 +1633,13 @@ impl Render for ConWorkspace {
                 let outline_opacity = if linux_theme.is_dark() { 0.18 } else { 0.10 };
                 let frame_color = linux_theme.title_bar.opacity(0.98);
                 let outline_color = linux_theme.foreground.opacity(outline_opacity);
-                root = div()
-                    .relative()
-                    .size_full()
-                    .rounded(LINUX_WINDOW_OUTER_RADIUS)
-                    .bg(frame_color)
+                let linux_x11 = std::env::var_os("DISPLAY").is_some()
+                    && std::env::var_os("WAYLAND_DISPLAY").is_none();
+                let mut frame = div().relative().size_full().bg(frame_color);
+                if !linux_x11 {
+                    frame = frame.rounded(LINUX_WINDOW_OUTER_RADIUS);
+                }
+                root = frame
                     .child(
                         div()
                             .absolute()
