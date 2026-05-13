@@ -3,6 +3,9 @@ mod top_bar;
 
 use super::*;
 
+#[cfg(target_os = "linux")]
+const LINUX_WINDOW_CORNER_RADIUS: Pixels = px(14.0);
+
 impl ConWorkspace {
     fn has_active_resize_drag(&self) -> bool {
         self.sidebar_drag.is_some()
@@ -959,6 +962,8 @@ impl Render for ConWorkspace {
             elevated_ui_surface_opacity,
             top_bar_surface_color,
         );
+        let show_compact_top_bar_separator =
+            cfg!(not(target_os = "macos")) && top_bar_height > 0.5 && tab_strip_progress <= 0.01;
 
         let theme = cx.theme();
         let mut root = div()
@@ -969,19 +974,6 @@ impl Render for ConWorkspace {
             .bg(theme.transparent)
             .font_family(theme.mono_font_family.clone())
             .track_focus(&self.workspace_focus);
-
-        // Linux: con paints its own client-side decorations, so we
-        // also have to clip the window to a rounded rectangle the
-        // same way macOS gets from NSWindow + transparent backdrop
-        // and Windows 11 gets from DWM. Wrap with `overflow_hidden`
-        // so child surfaces (top bar, terminal pane, modals) all
-        // respect the corner radius. 14px matches Mica's perceived
-        // radius on Win11 and reads as "windowed" rather than
-        // "phone-app sheet".
-        #[cfg(target_os = "linux")]
-        {
-            root = root.rounded(px(14.0)).overflow_hidden();
-        }
 
         root = root
             .key_context("ConWorkspace")
@@ -1000,7 +992,7 @@ impl Render for ConWorkspace {
                         .and_then(|guard| guard.clone())
                     {
                         let preview_size = tab_like_drag_preview_size();
-                        let leading_pad = if cfg!(target_os = "macos") { 78.0 } else { 8.0 };
+                        let leading_pad = top_bar::top_bar_leading_pad(win);
                         let min_left = px(leading_pad);
                         let max_left =
                             (win.viewport_size().width - preview_size.width).max(min_left);
@@ -1274,8 +1266,16 @@ impl Render for ConWorkspace {
                     cx.stop_propagation();
                 }
             }))
-            .child(top_bar)
-            .child(main_area);
+            .child(top_bar);
+        if show_compact_top_bar_separator {
+            root = root.child(
+                div()
+                    .h(px(1.0))
+                    .flex_shrink_0()
+                    .bg(chrome_static_seam_color),
+            );
+        }
+        root = root.child(main_area);
 
         if let Some(preview) = self
             .tab_drag_preview
@@ -1284,7 +1284,7 @@ impl Render for ConWorkspace {
             .and_then(|guard| guard.clone())
         {
             let preview_size = tab_like_drag_preview_size();
-            let leading_pad = if cfg!(target_os = "macos") { 78.0 } else { 8.0 };
+            let leading_pad = top_bar::top_bar_leading_pad(window);
             let min_left = px(leading_pad);
             let max_left = (window.viewport_size().width - preview_size.width).max(min_left);
             let left =
@@ -1561,6 +1561,65 @@ impl Render for ConWorkspace {
         let palette_visible = self.command_palette.read(cx).is_visible();
         if palette_visible {
             root = root.child(self.command_palette.clone());
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let mut workspace_frame = root;
+            let decorations = window.window_decorations();
+            let is_maximized = window.is_maximized();
+            let is_fullscreen = window.is_fullscreen();
+            let mut shape_radii = crate::LinuxWindowShapeRadii::default();
+
+            if let Decorations::Client { tiling } = decorations
+                && !is_maximized
+                && !is_fullscreen
+            {
+                let radius_px = (LINUX_WINDOW_CORNER_RADIUS.as_f32()
+                    * window.scale_factor().max(f32::EPSILON))
+                .round()
+                .max(0.0) as u32;
+                if !(tiling.top || tiling.left) {
+                    workspace_frame = workspace_frame.rounded_tl(LINUX_WINDOW_CORNER_RADIUS);
+                    shape_radii.top_left = radius_px;
+                }
+                if !(tiling.top || tiling.right) {
+                    workspace_frame = workspace_frame.rounded_tr(LINUX_WINDOW_CORNER_RADIUS);
+                    shape_radii.top_right = radius_px;
+                }
+                if !(tiling.bottom || tiling.left) {
+                    workspace_frame = workspace_frame.rounded_bl(LINUX_WINDOW_CORNER_RADIUS);
+                    shape_radii.bottom_left = radius_px;
+                }
+                if !(tiling.bottom || tiling.right) {
+                    workspace_frame = workspace_frame.rounded_br(LINUX_WINDOW_CORNER_RADIUS);
+                    shape_radii.bottom_right = radius_px;
+                }
+                workspace_frame = workspace_frame.overflow_hidden();
+            }
+
+            window.set_client_inset(px(0.0));
+
+            let scale = window.scale_factor().max(f32::EPSILON);
+            let size = window.bounds().size;
+            let width_px = (size.width.as_f32() * scale).round().max(1.0) as u32;
+            let height_px = (size.height.as_f32() * scale).round().max(1.0) as u32;
+            let shape_signature = (width_px, height_px, shape_radii);
+            if self.linux_window_shape_signature != Some(shape_signature) {
+                let linux_x11 = std::env::var_os("DISPLAY").is_some()
+                    && std::env::var_os("WAYLAND_DISPLAY").is_none();
+                if !linux_x11
+                    || crate::sync_linux_x11_window_shape(window, width_px, height_px, shape_radii)
+                {
+                    self.linux_window_shape_signature = Some(shape_signature);
+                }
+            }
+
+            root = div()
+                .relative()
+                .size_full()
+                .bg(transparent_black())
+                .child(workspace_frame);
         }
 
         root.into_any_element()

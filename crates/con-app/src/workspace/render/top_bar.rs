@@ -9,6 +9,53 @@ fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
     }
 }
 
+pub(super) fn top_bar_leading_pad(window: &Window) -> f32 {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window;
+        78.0
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if linux_client_decorated(window) {
+            10.0
+        } else {
+            8.0
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = window;
+        8.0
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_client_decorated(window: &Window) -> bool {
+    matches!(window.window_decorations(), Decorations::Client { .. })
+}
+
+fn top_bar_trailing_pad(window: &Window) -> f32 {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = window;
+        0.0
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if linux_client_decorated(window) {
+            8.0
+        } else {
+            6.0
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        let _ = window;
+        6.0
+    }
+}
+
 impl ConWorkspace {
     pub(super) fn render_top_bar(
         &mut self,
@@ -30,12 +77,8 @@ impl ConWorkspace {
         // (GPUI's hit-test walks buttons first so child clickables
         // still work) and still lets macOS react to
         // `titlebar_double_click`.
-        let leading_pad = if cfg!(target_os = "macos") { 78.0 } else { 8.0 };
-        let trailing_pad = if cfg!(target_os = "windows") {
-            0.0
-        } else {
-            6.0
-        };
+        let leading_pad = top_bar_leading_pad(window);
+        let trailing_pad = top_bar_trailing_pad(window);
         let mut top_bar = div()
             .id("tab-bar")
             .flex()
@@ -83,14 +126,10 @@ impl ConWorkspace {
                 });
         }
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
         {
             top_bar = top_bar
                 .window_control_area(WindowControlArea::Drag)
-                .on_mouse_down(MouseButton::Left, |_, _window, _cx| {
-                    #[cfg(target_os = "linux")]
-                    _window.start_window_move();
-                })
                 .on_click(|event, window, _cx| {
                     if event.click_count() == 2 {
                         window.titlebar_double_click();
@@ -1021,7 +1060,32 @@ impl ConWorkspace {
             }
         }
 
-        let mut leading_chrome = div().flex().flex_1().min_w_0().items_end();
+        let mut leading_chrome = div()
+            .id("top-bar-leading-chrome")
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .items_end();
+        #[cfg(target_os = "linux")]
+        {
+            // Keep Linux's client-side titlebar draggable without
+            // putting the right-side controls under a parent drag
+            // handler. GPUI Linux does not dispatch window-control
+            // hit tests like Windows, so the draggable area must stay
+            // clear of normal buttons.
+            if linux_client_decorated(window) {
+                leading_chrome = leading_chrome
+                    .window_control_area(WindowControlArea::Drag)
+                    .on_mouse_down(MouseButton::Left, |_, window, _cx| {
+                        window.start_window_move();
+                    })
+                    .on_click(|event, window, _cx| {
+                        if event.click_count() == 2 {
+                            window.titlebar_double_click();
+                        }
+                    });
+            }
+        }
         // Show the tab strip when animating/visible OR when a pane is being
         // dragged to become a new tab (so the ghost tab preview is visible
         // even when there is currently only one tab).
@@ -1048,48 +1112,58 @@ impl ConWorkspace {
         let mut tab_controls = div()
             .flex()
             .items_center()
-            .gap(px(2.0))
+            .gap(px(3.0))
             .mb(px(top_bar_controls_offset))
+            .ml(px(if show_horizontal_tabs { 8.0 } else { 0.0 }))
             .flex_shrink_0();
+        #[cfg(target_os = "linux")]
+        {
+            if linux_client_decorated(window) {
+                tab_controls = tab_controls.mr(px(4.0));
+            }
+        }
 
+        let new_tab_icon_color = theme
+            .muted_foreground
+            .opacity(0.45 + (0.08 * compact_titlebar_progress));
+        let new_tab_button = div()
+            .id("tab-new")
+            .flex()
+            .items_center()
+            .justify_center()
+            .size(px(24.0))
+            .rounded(px(6.0))
+            .cursor_pointer()
+            // `.occlude()` is required on Windows so the parent
+            // top_bar's `WindowControlArea::Drag` hit-test doesn't
+            // swallow this button (the OS would return HTCAPTION and
+            // start a window-drag on click instead of firing the
+            // click listener). Same treatment as the Min/Max/Close
+            // caption buttons at the top of this file.
+            .occlude()
+            .hover(|s| s.bg(theme.muted.opacity(0.12)))
+            .tooltip(|window, cx| {
+                chrome_tooltip(
+                    "New tab",
+                    crate::keycaps::first_action_keystroke(&NewTab, window),
+                    window,
+                    cx,
+                )
+            });
+        let new_tab_button = new_tab_button
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.new_tab(&NewTab, window, cx);
+            }));
         tab_controls = tab_controls.child(
-            div()
-                .id("tab-new")
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(px(22.0))
-                .rounded(px(5.0))
-                .cursor_pointer()
-                // `.occlude()` is required on Windows so the parent
-                // top_bar's `WindowControlArea::Drag` hit-test doesn't
-                // swallow this button (the OS would return HTCAPTION and
-                // start a window-drag on click instead of firing the
-                // click listener). Same treatment as the Min/Max/Close
-                // caption buttons at the top of this file.
-                .occlude()
-                .hover(|s| s.bg(theme.muted.opacity(0.10)))
-                .tooltip(|window, cx| {
-                    chrome_tooltip(
-                        "New tab",
-                        crate::keycaps::first_action_keystroke(&NewTab, window),
-                        window,
-                        cx,
-                    )
-                })
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.new_tab(&NewTab, window, cx);
-                }))
-                .child(
-                    svg().path("phosphor/plus.svg").size(px(12.0)).text_color(
-                        theme
-                            .muted_foreground
-                            .opacity(0.45 + (0.08 * compact_titlebar_progress)),
-                    ),
-                ),
+            new_tab_button.child(
+                svg()
+                    .path("phosphor/plus.svg")
+                    .size(px(12.0))
+                    .text_color(new_tab_icon_color),
+            ),
         );
 
         let left_sidebar_tooltip = if self.left_panel_open {
@@ -1275,13 +1349,19 @@ impl ConWorkspace {
         {
             #[cfg(target_os = "linux")]
             let workspace_handle = cx.weak_entity();
-            top_bar = top_bar.child(caption_buttons(
-                window,
-                theme,
-                top_bar_height,
-                #[cfg(target_os = "linux")]
-                workspace_handle,
-            ));
+            #[cfg(target_os = "linux")]
+            if linux_client_decorated(window) {
+                top_bar = top_bar.child(caption_buttons(
+                    window,
+                    theme,
+                    top_bar_height,
+                    workspace_handle,
+                ));
+            }
+            #[cfg(target_os = "windows")]
+            {
+                top_bar = top_bar.child(caption_buttons(window, theme, top_bar_height));
+            }
         }
 
         top_bar

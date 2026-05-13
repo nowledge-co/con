@@ -56,6 +56,14 @@ fn effective_font_size(configured: f32) -> f32 {
     base.max(MIN_FONT_SIZE_PX)
 }
 
+fn cell_width_px(font_size_px: f32) -> f32 {
+    (font_size_px * DEFAULT_CELL_WIDTH_RATIO).round().max(7.0)
+}
+
+fn cell_height_px(font_size_px: f32) -> f32 {
+    (font_size_px * DEFAULT_CELL_HEIGHT_RATIO).round().max(14.0)
+}
+
 actions!(ghostty, [ConsumeTab, ConsumeTabPrev]);
 
 #[allow(dead_code)]
@@ -508,12 +516,12 @@ impl GhosttyView {
         // make text overrun the estimated column count and lines
         // wrap unexpectedly on the alternate screen.
         let font_size_px = effective_font_size(self.initial_font_size) * scale_factor;
-        let cell_width_px = (font_size_px * DEFAULT_CELL_WIDTH_RATIO).round().max(7.0) as u32;
-        let cell_height_px = (font_size_px * DEFAULT_CELL_HEIGHT_RATIO).round().max(14.0) as u32;
-        let columns = (width_px / cell_width_px.max(1))
+        let cell_width = cell_width_px(font_size_px) as u32;
+        let cell_height = cell_height_px(font_size_px) as u32;
+        let columns = (width_px / cell_width.max(1))
             .max(1)
             .min(u32::from(u16::MAX)) as u16;
-        let rows = (height_px / cell_height_px.max(1))
+        let rows = (height_px / cell_height.max(1))
             .max(1)
             .min(u32::from(u16::MAX)) as u16;
 
@@ -522,8 +530,8 @@ impl GhosttyView {
             rows,
             width_px,
             height_px,
-            cell_width_px,
-            cell_height_px,
+            cell_width_px: cell_width,
+            cell_height_px: cell_height,
         }
     }
 
@@ -543,8 +551,8 @@ impl GhosttyView {
         let bounds = self.pane_bounds?;
         let snapshot = self.snapshot.as_ref()?;
         let font_size_px = effective_font_size(self.initial_font_size);
-        let cell_width_px = (font_size_px * DEFAULT_CELL_WIDTH_RATIO).round().max(7.0);
-        let cell_height_px = (font_size_px * DEFAULT_CELL_HEIGHT_RATIO).round().max(14.0);
+        let cell_width_px = cell_width_px(font_size_px);
+        let cell_height_px = cell_height_px(font_size_px);
 
         let mut local_x = f32::from(pos.x) - f32::from(bounds.origin.x) - TERMINAL_PADDING_X_PX;
         let mut local_y = f32::from(pos.y) - f32::from(bounds.origin.y) - TERMINAL_PADDING_Y_PX;
@@ -836,8 +844,8 @@ impl GhosttyView {
         let bounds = self.pane_bounds?;
         let snapshot = self.snapshot.as_ref()?;
         let font_size_px = effective_font_size(self.initial_font_size);
-        let cell_width = (font_size_px * DEFAULT_CELL_WIDTH_RATIO).round().max(7.0);
-        let cell_height = (font_size_px * DEFAULT_CELL_HEIGHT_RATIO).round().max(14.0);
+        let cell_width = cell_width_px(font_size_px);
+        let cell_height = cell_height_px(font_size_px);
         let col = snapshot.cursor.col.min(snapshot.cols.saturating_sub(1)) as f32;
         let row = snapshot.cursor.row.min(snapshot.rows.saturating_sub(1)) as f32;
 
@@ -1020,8 +1028,8 @@ impl Render for GhosttyView {
         let entity = cx.entity().downgrade();
         let input_entity = entity.clone();
         let font_size_px = effective_font_size(self.initial_font_size);
-        let line_height_px = (font_size_px * 1.45).round();
-        let cell_width_px = (font_size_px * DEFAULT_CELL_WIDTH_RATIO).round().max(7.0);
+        let line_height_px = cell_height_px(font_size_px);
+        let cell_width_px = cell_width_px(font_size_px);
         let mono_font = Font {
             family: theme.mono_font_family.clone(),
             features: FontFeatures::default(),
@@ -1058,6 +1066,7 @@ impl Render for GhosttyView {
         } else {
             configured_pane_opacity
         };
+        let pane_background = theme.background.opacity(pane_opacity);
         let selection = self.selection;
         let selection_bg = theme.selection.opacity(0.42);
         self.sync_row_cache(
@@ -1106,7 +1115,6 @@ impl Render for GhosttyView {
                             &row,
                             px(font_size_px),
                             px(line_height_px),
-                            theme.background.opacity(pane_opacity),
                         ));
                     }
                 } else if let Some(row) = self.row_cache.get(row_idx) {
@@ -1114,7 +1122,6 @@ impl Render for GhosttyView {
                         row,
                         px(font_size_px),
                         px(line_height_px),
-                        theme.background.opacity(pane_opacity),
                     ));
                 }
             }
@@ -1139,7 +1146,7 @@ impl Render for GhosttyView {
             .min_w_0()
             .min_h_0()
             .overflow_hidden()
-            .bg(theme.background.opacity(pane_opacity))
+            .bg(pane_background)
             .px(px(TERMINAL_PADDING_X_PX))
             .py(px(TERMINAL_PADDING_Y_PX))
             .text_color(foreground)
@@ -1168,7 +1175,7 @@ impl Render for GhosttyView {
             .key_context("GhosttyTerminal")
             .track_focus(&self.focus_handle)
             .id(&self.focus_handle)
-            .bg(theme.background.opacity(pane_opacity))
+            .bg(theme.transparent)
             .on_action(cx.listener(|this, _: &ConsumeTab, window, cx| {
                 if !this.focus_handle.is_focused(window) {
                     return;
@@ -1555,7 +1562,6 @@ fn render_cached_terminal_row(
     row: &CachedTerminalRow,
     font_size: Pixels,
     line_height: Pixels,
-    clear_bg: Hsla,
 ) -> AnyElement {
     div()
         .w_full()
@@ -1568,7 +1574,6 @@ fn render_cached_terminal_row(
         // word-wrap breaks continuous runs at word boundaries and pushes
         // them down, making TUI layouts look garbled in narrow panes.
         .whitespace_nowrap()
-        .bg(clear_bg)
         .text_size(font_size)
         .line_height(line_height)
         .child(StyledText::new(row.text.clone()).with_runs(row.runs.clone()))
@@ -1859,7 +1864,8 @@ fn encode_special_key(key: &str, modifiers: &Modifiers, decckm: bool) -> Option<
 #[cfg(test)]
 mod tests {
     use super::{
-        TerminalSelection, build_terminal_row, extract_selection_text, rows_needing_refresh,
+        DEFAULT_FONT_SIZE, MIN_FONT_SIZE_PX, TerminalSelection, build_terminal_row, cell_height_px,
+        cell_width_px, effective_font_size, extract_selection_text, rows_needing_refresh,
         vt_color_to_hsla,
     };
     use con_ghostty::{ATTR_BOLD, ATTR_INVERSE, ATTR_UNDERLINE, ScreenSnapshot, VtCell, VtCursor};
@@ -1909,6 +1915,14 @@ mod tests {
     fn vt_color_zero_alpha_means_default() {
         assert_eq!(vt_color_to_hsla(0x000000_00), None);
         assert!(vt_color_to_hsla(0x112233_FF).is_some());
+    }
+
+    #[test]
+    fn cell_metrics_match_font_size_clamping() {
+        assert_eq!(effective_font_size(0.0), DEFAULT_FONT_SIZE);
+        assert_eq!(effective_font_size(8.0), MIN_FONT_SIZE_PX);
+        assert_eq!(cell_width_px(14.0), 9.0);
+        assert_eq!(cell_height_px(14.0), 20.0);
     }
 
     #[test]

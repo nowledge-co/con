@@ -27,7 +27,7 @@ mod quick_terminal;
 // The terminal-view module is selected per platform:
 //   macOS   -> ghostty_view.rs (libghostty + child NSView)
 //   Windows -> windows_view.rs (libghostty-vt + ConPTY + D3D11 child HWND)
-//   Linux   -> linux_view.rs (Linux-specific placeholder until backend lands)
+//   Linux   -> linux_view.rs (Unix PTY + libghostty-vt + GPUI paint path)
 //   other   -> stub_view.rs
 //
 // All three expose the same public type names (`GhosttyView`,
@@ -202,6 +202,11 @@ fn set_dock_icon() {
 #[cfg(not(target_os = "macos"))]
 fn set_dock_icon() {}
 
+#[cfg(target_os = "linux")]
+fn linux_uses_client_side_decorations() -> bool {
+    true
+}
+
 #[cfg(target_os = "macos")]
 fn supports_transparent_main_window() -> bool {
     use cocoa::base::nil;
@@ -232,15 +237,10 @@ fn supports_transparent_main_window() -> bool {
 
 #[cfg(target_os = "linux")]
 fn supports_transparent_main_window() -> bool {
-    // GPUI's X11 backend already creates the window against an ARGB
-    // (depth-32) visual when transparency is requested, and the
-    // Wayland backend drops the opaque-region hint so the compositor
-    // honors per-pixel alpha. Both xfwm4 / mutter / kwin composite
-    // through it, so an always-on transparent root is safe on every
-    // Linux session that has any compositor at all. Headless / minimal
-    // sessions still render correctly because the workspace itself
-    // paints `theme.background.opacity(...)` on its surfaces.
-    true
+    // Linux keeps Con's integrated client-side chrome so titlebar
+    // actions match macOS/Windows. Wayland uses the transparent GPUI
+    // surface directly; X11 additionally receives a SHAPE mask.
+    linux_uses_client_side_decorations()
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
@@ -281,24 +281,201 @@ pub fn set_windows_backdrop_blur(window: &mut Window, blur: bool) {
 /// can toggle "background blur" in settings without restarting the
 /// window.
 ///
-/// `blur=true` requests `WindowBackgroundAppearance::Blurred`. The
-/// gpui_linux Wayland backend honors that via the
-/// `org_kde_kwin_blur` protocol (real Gaussian blur of what's
-/// behind the window — works on KDE Plasma Wayland). On X11 and on
-/// Wayland compositors that don't expose the blur protocol
-/// (mutter / GNOME, sway by default), the renderer keeps the
-/// window transparent but does NOT draw a blur — there's no
-/// equivalent of DWM's Acrylic API there. We still flip to
-/// `Transparent` in that case so per-pane opacity has a desktop
-/// to composite over.
+/// Linux uses a transparent top-level surface so Con's integrated
+/// client-side chrome can define the visible rounded shape.
 #[cfg(target_os = "linux")]
-pub fn set_linux_window_blur(window: &mut Window, blur: bool) {
+pub fn set_linux_window_blur(window: &mut Window, _blur: bool) {
     use gpui::WindowBackgroundAppearance;
-    window.set_background_appearance(if blur {
-        WindowBackgroundAppearance::Blurred
+    window.set_background_appearance(WindowBackgroundAppearance::Transparent);
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LinuxWindowShapeRadii {
+    pub top_left: u32,
+    pub top_right: u32,
+    pub bottom_right: u32,
+    pub bottom_left: u32,
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn sync_linux_x11_window_shape(
+    window: &mut Window,
+    width_px: u32,
+    height_px: u32,
+    radii: LinuxWindowShapeRadii,
+) -> bool {
+    let Some(window_id) = linux_x11_window_id(window) else {
+        return false;
+    };
+    let Some(rectangles) = linux_window_shape_rectangles(width_px, height_px, radii) else {
+        return false;
+    };
+
+    if let Err(err) = apply_linux_x11_shape(window_id, &rectangles) {
+        log::debug!("failed to apply Linux X11 window shape: {err}");
+        return false;
+    }
+
+    true
+}
+
+#[cfg(target_os = "linux")]
+fn linux_x11_window_id(window: &Window) -> Option<u32> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    let handle = HasWindowHandle::window_handle(window).ok()?;
+    match handle.as_raw() {
+        RawWindowHandle::Xlib(handle) => u32::try_from(handle.window).ok().filter(|id| *id != 0),
+        RawWindowHandle::Xcb(handle) => Some(handle.window.get()),
+        _ => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_window_shape_rectangles(
+    width_px: u32,
+    height_px: u32,
+    radii: LinuxWindowShapeRadii,
+) -> Option<Vec<x11rb::protocol::xproto::Rectangle>> {
+    use x11rb::protocol::xproto::Rectangle;
+
+    let width = u16::try_from(width_px).ok()?;
+    let height = u16::try_from(height_px).ok()?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+
+    let full_rect = || {
+        vec![Rectangle {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        }]
+    };
+
+    let max_dimension = i16::MAX as u16;
+    if width > max_dimension || height > max_dimension {
+        return Some(full_rect());
+    }
+
+    let max_radius = u32::from(width / 2).min(u32::from(height / 2));
+    let radii = LinuxWindowShapeRadii {
+        top_left: radii.top_left.min(max_radius),
+        top_right: radii.top_right.min(max_radius),
+        bottom_right: radii.bottom_right.min(max_radius),
+        bottom_left: radii.bottom_left.min(max_radius),
+    };
+    if radii == LinuxWindowShapeRadii::default() {
+        return Some(full_rect());
+    }
+
+    let mut rows: Vec<(u16, u16, u16)> = Vec::with_capacity(usize::from(height));
+    for y in 0..height {
+        let y_u32 = u32::from(y);
+        let left_inset =
+            corner_row_inset(y_u32, u32::from(height), radii.top_left, radii.bottom_left)
+                .min(width / 2);
+        let right_inset = corner_row_inset(
+            y_u32,
+            u32::from(height),
+            radii.top_right,
+            radii.bottom_right,
+        )
+        .min(width / 2);
+        let row_width = width.saturating_sub(left_inset.saturating_add(right_inset));
+        if row_width > 0 {
+            rows.push((y, left_inset, row_width));
+        }
+    }
+
+    let mut rectangles: Vec<Rectangle> = Vec::with_capacity(rows.len());
+    for (y, inset, row_width) in rows {
+        if let Some(last) = rectangles.last_mut() {
+            let same_x = last.x == inset as i16;
+            let same_width = last.width == row_width;
+            let contiguous = last.y as u16 + last.height == y;
+            if same_x && same_width && contiguous {
+                last.height = last.height.saturating_add(1);
+                continue;
+            }
+        }
+        rectangles.push(Rectangle {
+            x: inset as i16,
+            y: y as i16,
+            width: row_width,
+            height: 1,
+        });
+    }
+
+    Some(rectangles)
+}
+
+#[cfg(target_os = "linux")]
+fn corner_row_inset(y: u32, height: u32, top_radius: u32, bottom_radius: u32) -> u16 {
+    if top_radius > 0 && y < top_radius {
+        let radius = top_radius as f32;
+        rounded_corner_inset(radius, radius - y as f32 - 0.5)
+    } else if bottom_radius > 0 && y >= height.saturating_sub(bottom_radius) {
+        let radius = bottom_radius as f32;
+        rounded_corner_inset(radius, y as f32 - (height - bottom_radius) as f32 + 0.5)
     } else {
-        WindowBackgroundAppearance::Transparent
-    });
+        0
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn rounded_corner_inset(radius: f32, distance_from_center: f32) -> u16 {
+    let inside = (radius * radius - distance_from_center * distance_from_center).max(0.0);
+    (radius - inside.sqrt()).ceil().max(0.0) as u16
+}
+
+#[cfg(target_os = "linux")]
+fn apply_linux_x11_shape(
+    window_id: u32,
+    rectangles: &[x11rb::protocol::xproto::Rectangle],
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::cell::RefCell;
+
+    use x11rb::connection::Connection;
+    use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
+    use x11rb::protocol::xproto::ClipOrdering;
+    use x11rb::rust_connection::RustConnection;
+
+    thread_local! {
+        static X11_SHAPE_CONNECTION: RefCell<Option<RustConnection>> = const { RefCell::new(None) };
+    }
+
+    X11_SHAPE_CONNECTION.with(|connection| {
+        let mut connection = connection.borrow_mut();
+        if connection.is_none() {
+            let (new_connection, _) = x11rb::connect(None)?;
+            *connection = Some(new_connection);
+        }
+
+        let conn = connection.as_ref().expect("shape connection initialized");
+        conn.shape_rectangles(
+            SO::SET,
+            SK::BOUNDING,
+            ClipOrdering::UNSORTED,
+            window_id,
+            0,
+            0,
+            rectangles,
+        )?;
+        conn.shape_rectangles(
+            SO::SET,
+            SK::CLIP,
+            ClipOrdering::UNSORTED,
+            window_id,
+            0,
+            0,
+            rectangles,
+        )?;
+        conn.flush()?;
+        Ok(())
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -389,11 +566,14 @@ fn set_windows_backdrop(window: &mut Window, blur: bool) -> Option<()> {
 
 fn default_window_options(config: &con_core::Config, cx: &mut App) -> WindowOptions {
     let transparent = supports_transparent_main_window();
+    let window_decorations = default_window_decorations();
+    let window_background = default_window_background(config, transparent);
+
     WindowOptions {
         window_bounds: Some(default_workspace_window_bounds(cx)),
         titlebar: default_titlebar_options(transparent),
-        window_decorations: default_window_decorations(),
-        window_background: default_window_background(config, transparent),
+        window_decorations,
+        window_background,
         // macOS: disable NSWindow's native `isMovable` drag so that
         // GPUI elements (tabs, sidebar) can start their own drags
         // without the window also moving. The top_bar renders an
@@ -445,7 +625,7 @@ fn default_window_background(
     config: &con_core::Config,
     transparent: bool,
 ) -> WindowBackgroundAppearance {
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let _ = config;
 
     if !transparent {
@@ -464,7 +644,16 @@ fn default_window_background(
         }
     }
 
-    WindowBackgroundAppearance::Transparent
+    #[cfg(target_os = "linux")]
+    {
+        let _ = config;
+        WindowBackgroundAppearance::Transparent
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        WindowBackgroundAppearance::Transparent
+    }
 }
 
 fn default_workspace_window_bounds(cx: &mut App) -> WindowBounds {
@@ -529,18 +718,13 @@ fn default_titlebar_options(transparent: bool) -> Option<TitlebarOptions> {
 }
 
 fn default_window_decorations() -> Option<WindowDecorations> {
-    // Linux now ships a client-side titlebar drawn in
-    // `workspace::ConWorkspace::draw_top_bar` (the same top bar Windows uses),
-    // so the GPUI app shell paints its own brand chrome instead of
-    // stacking the xfwm4 / mutter / kwin frame on top of it. The
-    // gpui_linux X11 backend gracefully falls back to server-side
-    // decorations when no compositor is present, so this is safe on
-    // headless / minimal sessions too. macOS continues to use the
-    // default (system traffic-light cluster over an in-app top bar
-    // with `leading_pad = 78px`).
     #[cfg(target_os = "linux")]
     {
-        Some(WindowDecorations::Client)
+        if linux_uses_client_side_decorations() {
+            Some(WindowDecorations::Client)
+        } else {
+            Some(WindowDecorations::Server)
+        }
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -563,43 +747,28 @@ pub(crate) fn open_con_window(
                 .new(|cx| ConWorkspace::from_session(config.clone(), restored_session, window, cx));
             #[cfg(target_os = "windows")]
             let mica_applied = apply_windows_backdrop(window, config.appearance.terminal_blur);
-            #[cfg(not(target_os = "windows"))]
-            let mica_applied = false;
 
             #[cfg(target_os = "linux")]
             set_linux_window_blur(window, config.appearance.terminal_blur);
             cx.new(|cx| {
-                // On Windows we want the DWM-provided backdrop (Mica)
-                // to shine through wherever the app isn't painting —
-                // most importantly, the terminal area when the child
-                // pane HWND is hidden behind a modal. That requires a
-                // transparent Root. If Mica isn't available (Win10,
-                // RDP, older Win11), fall back to an opaque theme fill
-                // so the window doesn't look "see-through to desktop".
-                //
-                // On macOS 12 and older we still need the window itself
-                // to be opaque, but the GPUI root above the embedded
-                // Ghostty NSView must stay transparent. Making both the
-                // window and the root opaque fixed the desktop leak but
-                // painted the fallback theme background over the terminal
-                // surface, leaving Monterey users with a blank beige pane.
-                let background = if cfg!(target_os = "windows") {
-                    if mica_applied {
-                        cx.theme().transparent
-                    } else {
-                        cx.theme().background
-                    }
-                } else if cfg!(target_os = "macos") {
-                    // The window background policy decides whether the
-                    // desktop can bleed through. On macOS the root
-                    // itself must remain transparent so the embedded
-                    // Ghostty NSView below GPUI stays visible, even on
-                    // Monterey where the top-level window falls back to
-                    // opaque.
+                #[cfg(target_os = "windows")]
+                let background = if mica_applied {
                     cx.theme().transparent
                 } else {
                     cx.theme().background
                 };
+                #[cfg(target_os = "macos")]
+                let background = cx.theme().transparent;
+                #[cfg(target_os = "linux")]
+                let background = {
+                    if matches!(window.window_decorations(), Decorations::Client { .. }) {
+                        cx.theme().transparent
+                    } else {
+                        cx.theme().background
+                    }
+                };
+                #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+                let background = cx.theme().background;
                 gpui_component::Root::new(view, window, cx).bg(background)
             })
         }) {
@@ -1705,6 +1874,96 @@ mod tests {
 
     fn default_specs() -> Vec<BindingSpec> {
         binding_specs(&KeybindingConfig::default())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_window_shape_uses_compact_rounded_rectangles() {
+        let rectangles = super::linux_window_shape_rectangles(
+            120,
+            80,
+            super::LinuxWindowShapeRadii {
+                top_left: 14,
+                top_right: 14,
+                bottom_right: 14,
+                bottom_left: 14,
+            },
+        )
+        .unwrap();
+
+        assert!(rectangles.len() > 1);
+        assert!(rectangles.first().unwrap().x > 0);
+        assert!(rectangles.first().unwrap().width < 120);
+        assert_eq!(rectangles.first().unwrap().x, rectangles.last().unwrap().x);
+        assert_eq!(
+            rectangles.first().unwrap().width,
+            rectangles.last().unwrap().width
+        );
+        assert!(
+            rectangles
+                .iter()
+                .any(|rect| rect.x == 0 && rect.width == 120)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_window_shape_can_reset_to_full_rectangle() {
+        let rectangles =
+            super::linux_window_shape_rectangles(120, 80, super::LinuxWindowShapeRadii::default())
+                .unwrap();
+
+        assert_eq!(rectangles.len(), 1);
+        assert_eq!(rectangles[0].x, 0);
+        assert_eq!(rectangles[0].y, 0);
+        assert_eq!(rectangles[0].width, 120);
+        assert_eq!(rectangles[0].height, 80);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_window_shape_supports_independent_corners() {
+        let rectangles = super::linux_window_shape_rectangles(
+            120,
+            80,
+            super::LinuxWindowShapeRadii {
+                top_left: 14,
+                top_right: 0,
+                bottom_right: 14,
+                bottom_left: 0,
+            },
+        )
+        .unwrap();
+
+        assert!(rectangles.first().unwrap().x > 0);
+        assert_eq!(
+            rectangles.first().unwrap().width,
+            120 - rectangles.first().unwrap().x as u16
+        );
+        assert!(rectangles.last().unwrap().x == 0);
+        assert!(rectangles.last().unwrap().width < 120);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_window_shape_large_dimensions_fall_back_to_full_rectangle() {
+        let rectangles = super::linux_window_shape_rectangles(
+            120,
+            i16::MAX as u32 + 1,
+            super::LinuxWindowShapeRadii {
+                top_left: 14,
+                top_right: 14,
+                bottom_right: 14,
+                bottom_left: 14,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(rectangles.len(), 1);
+        assert_eq!(rectangles[0].x, 0);
+        assert_eq!(rectangles[0].y, 0);
+        assert_eq!(rectangles[0].width, 120);
+        assert_eq!(rectangles[0].height, i16::MAX as u16 + 1);
     }
 
     fn specs_for_action<A: 'static>(specs: &[BindingSpec]) -> Vec<&BindingSpec> {
