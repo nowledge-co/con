@@ -4,7 +4,9 @@ mod top_bar;
 use super::*;
 
 #[cfg(target_os = "linux")]
-const LINUX_WINDOW_CORNER_RADIUS: Pixels = px(18.0);
+const LINUX_WINDOW_CORNER_RADIUS: Pixels = px(10.0);
+#[cfg(target_os = "linux")]
+const LINUX_WINDOW_SHADOW_SIZE: Pixels = px(10.0);
 
 impl ConWorkspace {
     fn has_active_resize_drag(&self) -> bool {
@@ -1582,11 +1584,13 @@ impl Render for ConWorkspace {
             let decorations = window.window_decorations();
             let is_maximized = window.is_maximized();
             let is_fullscreen = window.is_fullscreen();
+            let tiling = match decorations {
+                Decorations::Client { tiling } => tiling,
+                Decorations::Server => Tiling::default(),
+            };
             let mut x11_shape_round = false;
 
-            if let Decorations::Client { tiling } = decorations
-                && !is_maximized
-                && !is_fullscreen
+            if matches!(decorations, Decorations::Client { .. }) && !is_maximized && !is_fullscreen
             {
                 x11_shape_round = !(tiling.top || tiling.left || tiling.right || tiling.bottom);
                 if !(tiling.top || tiling.left) {
@@ -1602,6 +1606,12 @@ impl Render for ConWorkspace {
                     workspace_frame = workspace_frame.rounded_br(LINUX_WINDOW_CORNER_RADIUS);
                 }
                 workspace_frame = workspace_frame.overflow_hidden();
+            }
+
+            if matches!(decorations, Decorations::Client { .. }) {
+                window.set_client_inset(LINUX_WINDOW_SHADOW_SIZE);
+            } else {
+                window.set_client_inset(px(0.0));
             }
 
             let scale = window.scale_factor().max(f32::EPSILON);
@@ -1624,11 +1634,59 @@ impl Render for ConWorkspace {
                 self.linux_window_shape_signature = Some(shape_signature);
             }
 
-            root = div()
-                .relative()
-                .size_full()
-                .bg(transparent_black())
-                .child(workspace_frame);
+            if matches!(decorations, Decorations::Client { .. }) && !is_maximized && !is_fullscreen
+            {
+                let border =
+                    cx.theme()
+                        .foreground
+                        .opacity(if cx.theme().is_dark() { 0.18 } else { 0.10 });
+                let backdrop = div()
+                    .relative()
+                    .size_full()
+                    .bg(transparent_black())
+                    .when(!tiling.top, |div| div.pt(LINUX_WINDOW_SHADOW_SIZE))
+                    .when(!tiling.bottom, |div| div.pb(LINUX_WINDOW_SHADOW_SIZE))
+                    .when(!tiling.left, |div| div.pl(LINUX_WINDOW_SHADOW_SIZE))
+                    .when(!tiling.right, |div| div.pr(LINUX_WINDOW_SHADOW_SIZE));
+                let mut body = div()
+                    .size_full()
+                    .border_color(border)
+                    .shadow(vec![gpui::BoxShadow {
+                        color: gpui::black().opacity(0.28),
+                        blur_radius: LINUX_WINDOW_SHADOW_SIZE / 2.,
+                        spread_radius: px(0.0),
+                        offset: point(px(0.0), px(0.0)),
+                    }])
+                    .child(workspace_frame);
+                if !(tiling.top || tiling.left) {
+                    body = body
+                        .rounded_tl(LINUX_WINDOW_CORNER_RADIUS)
+                        .border_l(px(1.0));
+                }
+                if !(tiling.top || tiling.right) {
+                    body = body
+                        .rounded_tr(LINUX_WINDOW_CORNER_RADIUS)
+                        .border_r(px(1.0));
+                }
+                if !(tiling.bottom || tiling.left) {
+                    body = body
+                        .rounded_bl(LINUX_WINDOW_CORNER_RADIUS)
+                        .border_b(px(1.0));
+                }
+                if !(tiling.bottom || tiling.right) {
+                    body = body.rounded_br(LINUX_WINDOW_CORNER_RADIUS);
+                }
+                if !tiling.top {
+                    body = body.border_t(px(1.0));
+                }
+                root = backdrop.child(body);
+            } else {
+                root = div()
+                    .relative()
+                    .size_full()
+                    .bg(transparent_black())
+                    .child(workspace_frame);
+            }
         }
 
         root.into_any_element()
