@@ -155,7 +155,7 @@ pub(super) fn caption_buttons(
             );
         #[cfg(target_os = "linux")]
         if close {
-            el = el.rounded_tr(px(12.0));
+            el = el.rounded_tr(px(14.0)).overflow_hidden();
         }
 
         // Linux: GPUI's X11 hit-test doesn't fire `WindowControlArea`
