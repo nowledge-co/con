@@ -1664,6 +1664,8 @@ impl Render for ConWorkspace {
                             .bottom(LINUX_WINDOW_FRAME_PAD)
                             .left(LINUX_WINDOW_FRAME_PAD)
                             .right(LINUX_WINDOW_FRAME_PAD)
+                            .rounded(LINUX_WINDOW_CORNER_RADIUS)
+                            .overflow_hidden()
                             .child(workspace_frame),
                     );
             } else {
