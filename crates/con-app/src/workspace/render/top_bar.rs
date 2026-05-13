@@ -1092,7 +1092,7 @@ impl ConWorkspace {
         let new_tab_icon_color = theme
             .muted_foreground
             .opacity(0.45 + (0.08 * compact_titlebar_progress));
-        let mut new_tab_button = div()
+        let new_tab_button = div()
             .id("tab-new")
             .flex()
             .items_center()
@@ -1116,26 +1116,13 @@ impl ConWorkspace {
                     cx,
                 )
             });
-        #[cfg(target_os = "linux")]
-        {
-            new_tab_button = new_tab_button.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    cx.stop_propagation();
-                    this.new_tab(&NewTab, window, cx);
-                }),
-            );
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            new_tab_button = new_tab_button
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.new_tab(&NewTab, window, cx);
-                }));
-        }
+        let new_tab_button = new_tab_button
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.new_tab(&NewTab, window, cx);
+            }));
         tab_controls = tab_controls.child(
             new_tab_button.child(
                 svg()

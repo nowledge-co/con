@@ -1005,7 +1005,13 @@ impl Render for ConWorkspace {
                         .and_then(|guard| guard.clone())
                     {
                         let preview_size = tab_like_drag_preview_size();
-                        let leading_pad = if cfg!(target_os = "macos") { 78.0 } else { 8.0 };
+                        let leading_pad = if cfg!(target_os = "macos") {
+                            78.0
+                        } else if cfg!(target_os = "linux") {
+                            10.0
+                        } else {
+                            8.0
+                        };
                         let min_left = px(leading_pad);
                         let max_left =
                             (win.viewport_size().width - preview_size.width).max(min_left);
@@ -1279,16 +1285,16 @@ impl Render for ConWorkspace {
                     cx.stop_propagation();
                 }
             }))
-            .child(top_bar)
-            .when(show_compact_top_bar_separator, |root| {
-                root.child(
-                    div()
-                        .h(px(1.0))
-                        .flex_shrink_0()
-                        .bg(chrome_static_seam_color),
-                )
-            })
-            .child(main_area);
+            .child(top_bar);
+        if show_compact_top_bar_separator {
+            root = root.child(
+                div()
+                    .h(px(1.0))
+                    .flex_shrink_0()
+                    .bg(chrome_static_seam_color),
+            );
+        }
+        root = root.child(main_area);
 
         if let Some(preview) = self
             .tab_drag_preview
@@ -1297,7 +1303,13 @@ impl Render for ConWorkspace {
             .and_then(|guard| guard.clone())
         {
             let preview_size = tab_like_drag_preview_size();
-            let leading_pad = if cfg!(target_os = "macos") { 78.0 } else { 8.0 };
+            let leading_pad = if cfg!(target_os = "macos") {
+                78.0
+            } else if cfg!(target_os = "linux") {
+                10.0
+            } else {
+                8.0
+            };
             let min_left = px(leading_pad);
             let max_left = (window.viewport_size().width - preview_size.width).max(min_left);
             let left =
@@ -1582,24 +1594,31 @@ impl Render for ConWorkspace {
             let decorations = window.window_decorations();
             let is_maximized = window.is_maximized();
             let is_fullscreen = window.is_fullscreen();
-            let mut x11_shape_round = false;
+            let mut shape_radii = crate::LinuxWindowShapeRadii::default();
 
             if let Decorations::Client { tiling } = decorations
                 && !is_maximized
                 && !is_fullscreen
             {
-                x11_shape_round = !(tiling.top || tiling.left || tiling.right || tiling.bottom);
+                let radius_px = (LINUX_WINDOW_CORNER_RADIUS.as_f32()
+                    * window.scale_factor().max(f32::EPSILON))
+                .round()
+                .max(0.0) as u32;
                 if !(tiling.top || tiling.left) {
                     workspace_frame = workspace_frame.rounded_tl(LINUX_WINDOW_CORNER_RADIUS);
+                    shape_radii.top_left = radius_px;
                 }
                 if !(tiling.top || tiling.right) {
                     workspace_frame = workspace_frame.rounded_tr(LINUX_WINDOW_CORNER_RADIUS);
+                    shape_radii.top_right = radius_px;
                 }
                 if !(tiling.bottom || tiling.left) {
                     workspace_frame = workspace_frame.rounded_bl(LINUX_WINDOW_CORNER_RADIUS);
+                    shape_radii.bottom_left = radius_px;
                 }
                 if !(tiling.bottom || tiling.right) {
                     workspace_frame = workspace_frame.rounded_br(LINUX_WINDOW_CORNER_RADIUS);
+                    shape_radii.bottom_right = radius_px;
                 }
                 workspace_frame = workspace_frame.overflow_hidden();
             }
@@ -1610,21 +1629,9 @@ impl Render for ConWorkspace {
             let size = window.bounds().size;
             let width_px = (size.width.as_f32() * scale).round().max(1.0) as u32;
             let height_px = (size.height.as_f32() * scale).round().max(1.0) as u32;
-            let radius_px = if x11_shape_round {
-                (LINUX_WINDOW_CORNER_RADIUS.as_f32() * scale)
-                    .round()
-                    .max(0.0) as u32
-            } else {
-                0
-            };
-            let shape_signature = (width_px, height_px, radius_px, x11_shape_round);
+            let shape_signature = (width_px, height_px, shape_radii);
             if self.linux_window_shape_signature != Some(shape_signature) {
-                crate::sync_linux_x11_window_shape(
-                    window,
-                    width_px,
-                    height_px,
-                    x11_shape_round.then_some(radius_px),
-                );
+                crate::sync_linux_x11_window_shape(window, width_px, height_px, shape_radii);
                 self.linux_window_shape_signature = Some(shape_signature);
             }
 

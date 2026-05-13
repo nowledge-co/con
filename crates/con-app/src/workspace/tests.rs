@@ -1168,12 +1168,12 @@ fn top_bar_clickables_explicitly_consume_left_mouse_down() {
             .find(&marker)
             .unwrap_or_else(|| panic!("missing top bar control {control_id}"));
         let snippet = &source[start..source.len().min(start + 1200)];
-        let consumes_mouse_down = (snippet
-            .contains(".on_mouse_down(MouseButton::Left, |_, _, cx| {")
-            || snippet.contains(
-                ".on_mouse_down(\n                MouseButton::Left,\n                cx.listener(",
-            ))
-            && snippet.contains("cx.stop_propagation();");
+        let normalized = snippet.split_whitespace().collect::<String>();
+        let has_mouse_down_handler = normalized
+            .contains(".on_mouse_down(MouseButton::Left,|_,_,cx|{")
+            || normalized.contains(".on_mouse_down(MouseButton::Left,cx.listener(");
+        let consumes_mouse_down =
+            has_mouse_down_handler && normalized.contains("cx.stop_propagation();");
         assert!(
             consumes_mouse_down,
             "top bar control {control_id} must consume left mouse-down before parent drag"

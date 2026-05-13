@@ -289,16 +289,25 @@ pub fn set_linux_window_blur(window: &mut Window, _blur: bool) {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LinuxWindowShapeRadii {
+    pub top_left: u32,
+    pub top_right: u32,
+    pub bottom_right: u32,
+    pub bottom_left: u32,
+}
+
+#[cfg(target_os = "linux")]
 pub(crate) fn sync_linux_x11_window_shape(
     window: &mut Window,
     width_px: u32,
     height_px: u32,
-    radius_px: Option<u32>,
+    radii: LinuxWindowShapeRadii,
 ) {
     let Some(window_id) = linux_x11_window_id(window) else {
         return;
     };
-    let Some(rectangles) = linux_window_shape_rectangles(width_px, height_px, radius_px) else {
+    let Some(rectangles) = linux_window_shape_rectangles(width_px, height_px, radii) else {
         return;
     };
 
@@ -323,7 +332,7 @@ fn linux_x11_window_id(window: &Window) -> Option<u32> {
 fn linux_window_shape_rectangles(
     width_px: u32,
     height_px: u32,
-    radius_px: Option<u32>,
+    radii: LinuxWindowShapeRadii,
 ) -> Option<Vec<x11rb::protocol::xproto::Rectangle>> {
     use x11rb::protocol::xproto::Rectangle;
 
@@ -333,43 +342,47 @@ fn linux_window_shape_rectangles(
         return None;
     }
 
-    let Some(radius) = radius_px.filter(|radius| *radius > 0) else {
-        return Some(vec![Rectangle {
+    let full_rect = || {
+        vec![Rectangle {
             x: 0,
             y: 0,
             width,
             height,
-        }]);
+        }]
     };
 
-    let radius = radius.min(u32::from(width / 2)).min(u32::from(height / 2));
-    if radius == 0 {
-        return Some(vec![Rectangle {
-            x: 0,
-            y: 0,
-            width,
-            height,
-        }]);
+    let max_dimension = i16::MAX as u16;
+    if width > max_dimension || height > max_dimension {
+        return Some(full_rect());
     }
 
-    let radius_f = radius as f32;
+    let max_radius = u32::from(width / 2).min(u32::from(height / 2));
+    let radii = LinuxWindowShapeRadii {
+        top_left: radii.top_left.min(max_radius),
+        top_right: radii.top_right.min(max_radius),
+        bottom_right: radii.bottom_right.min(max_radius),
+        bottom_left: radii.bottom_left.min(max_radius),
+    };
+    if radii == LinuxWindowShapeRadii::default() {
+        return Some(full_rect());
+    }
+
     let mut rows: Vec<(u16, u16, u16)> = Vec::with_capacity(usize::from(height));
     for y in 0..height {
         let y_u32 = u32::from(y);
-        let inset = if y_u32 < radius {
-            rounded_corner_inset(radius_f, radius_f - y_u32 as f32 - 0.5)
-        } else if y_u32 >= u32::from(height) - radius {
-            rounded_corner_inset(
-                radius_f,
-                y_u32 as f32 - (u32::from(height) - radius) as f32 + 0.5,
-            )
-        } else {
-            0
-        };
-        let inset = inset.min(width / 2);
-        let row_width = width.saturating_sub(inset.saturating_mul(2));
+        let left_inset =
+            corner_row_inset(y_u32, u32::from(height), radii.top_left, radii.bottom_left)
+                .min(width / 2);
+        let right_inset = corner_row_inset(
+            y_u32,
+            u32::from(height),
+            radii.top_right,
+            radii.bottom_right,
+        )
+        .min(width / 2);
+        let row_width = width.saturating_sub(left_inset.saturating_add(right_inset));
         if row_width > 0 {
-            rows.push((y, inset, row_width));
+            rows.push((y, left_inset, row_width));
         }
     }
 
@@ -393,6 +406,19 @@ fn linux_window_shape_rectangles(
     }
 
     Some(rectangles)
+}
+
+#[cfg(target_os = "linux")]
+fn corner_row_inset(y: u32, height: u32, top_radius: u32, bottom_radius: u32) -> u16 {
+    if top_radius > 0 && y < top_radius {
+        let radius = top_radius as f32;
+        rounded_corner_inset(radius, radius - y as f32 - 0.5)
+    } else if bottom_radius > 0 && y >= height.saturating_sub(bottom_radius) {
+        let radius = bottom_radius as f32;
+        rounded_corner_inset(radius, y as f32 - (height - bottom_radius) as f32 + 0.5)
+    } else {
+        0
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1849,7 +1875,17 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_window_shape_uses_compact_rounded_rectangles() {
-        let rectangles = super::linux_window_shape_rectangles(120, 80, Some(14)).unwrap();
+        let rectangles = super::linux_window_shape_rectangles(
+            120,
+            80,
+            super::LinuxWindowShapeRadii {
+                top_left: 14,
+                top_right: 14,
+                bottom_right: 14,
+                bottom_left: 14,
+            },
+        )
+        .unwrap();
 
         assert!(rectangles.len() > 1);
         assert!(rectangles.first().unwrap().x > 0);
@@ -1869,13 +1905,61 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_window_shape_can_reset_to_full_rectangle() {
-        let rectangles = super::linux_window_shape_rectangles(120, 80, None).unwrap();
+        let rectangles =
+            super::linux_window_shape_rectangles(120, 80, super::LinuxWindowShapeRadii::default())
+                .unwrap();
 
         assert_eq!(rectangles.len(), 1);
         assert_eq!(rectangles[0].x, 0);
         assert_eq!(rectangles[0].y, 0);
         assert_eq!(rectangles[0].width, 120);
         assert_eq!(rectangles[0].height, 80);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_window_shape_supports_independent_corners() {
+        let rectangles = super::linux_window_shape_rectangles(
+            120,
+            80,
+            super::LinuxWindowShapeRadii {
+                top_left: 14,
+                top_right: 0,
+                bottom_right: 14,
+                bottom_left: 0,
+            },
+        )
+        .unwrap();
+
+        assert!(rectangles.first().unwrap().x > 0);
+        assert_eq!(
+            rectangles.first().unwrap().width,
+            120 - rectangles.first().unwrap().x as u16
+        );
+        assert!(rectangles.last().unwrap().x == 0);
+        assert!(rectangles.last().unwrap().width < 120);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_window_shape_large_dimensions_fall_back_to_full_rectangle() {
+        let rectangles = super::linux_window_shape_rectangles(
+            120,
+            i16::MAX as u32 + 1,
+            super::LinuxWindowShapeRadii {
+                top_left: 14,
+                top_right: 14,
+                bottom_right: 14,
+                bottom_left: 14,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(rectangles.len(), 1);
+        assert_eq!(rectangles[0].x, 0);
+        assert_eq!(rectangles[0].y, 0);
+        assert_eq!(rectangles[0].width, 120);
+        assert_eq!(rectangles[0].height, i16::MAX as u16 + 1);
     }
 
     fn specs_for_action<A: 'static>(specs: &[BindingSpec]) -> Vec<&BindingSpec> {

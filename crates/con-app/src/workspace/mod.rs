@@ -207,7 +207,7 @@ pub struct ConWorkspace {
     #[cfg(target_os = "macos")]
     top_chrome_release_cover_until: Option<Instant>,
     #[cfg(target_os = "linux")]
-    linux_window_shape_signature: Option<(u32, u32, u32, bool)>,
+    linux_window_shape_signature: Option<(u32, u32, crate::LinuxWindowShapeRadii)>,
     /// Pending create-pane requests that need a window context to process.
     pending_create_pane_requests: Vec<PendingCreatePane>,
     /// Pending window-aware control requests such as tab lifecycle mutations.
