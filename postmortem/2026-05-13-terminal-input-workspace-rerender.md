@@ -36,7 +36,7 @@ appeared to do nothing until the user clicked the terminal.
   does not notify the input bar again.
 - Moved skill discovery to a background request/result path. Rendering now only
   schedules a deduped scan; the filesystem work runs off the UI thread.
-- Kept skill-scan deduplication at the request level, but rebuild the registry
+- Kept skill-scan deduplication at the request level, but rebuilt the registry
   in the background whenever candidate roots change. This preserves the old
   behavior where skill edits are picked up after cwd/config changes without
   putting the rebuild back on the render path.

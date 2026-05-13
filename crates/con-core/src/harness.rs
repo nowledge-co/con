@@ -607,28 +607,6 @@ impl AgentHarness {
         None
     }
 
-    /// Scan for skills from configured filesystem paths.
-    /// Only rescans if the candidate roots changed since the last completed
-    /// request. This is synchronous and intended for tests or non-UI callers;
-    /// UI code should use `request_skill_scan` and `complete_skill_scan`.
-    /// Returns true if skills were (re)loaded.
-    pub fn scan_skills(&mut self, cwd: &str) -> bool {
-        let cwd_path = Path::new(cwd);
-        let candidates = SkillScanCandidateDirs {
-            global: self.skills_config.resolved_global_paths(),
-            project: self.skills_config.resolved_project_paths(cwd_path),
-        };
-        if self.last_skill_scan_candidates.as_ref() == Some(&candidates) {
-            return false;
-        }
-        let result = SkillScanJob {
-            cwd: cwd.to_string(),
-            candidates,
-        }
-        .scan();
-        self.apply_skill_scan_result(result)
-    }
-
     pub fn request_skill_scan(&mut self, cwd: &str) -> Option<SkillScanJob> {
         let cwd_path = Path::new(cwd);
         let candidates = SkillScanCandidateDirs {
@@ -640,10 +618,10 @@ impl AgentHarness {
             return None;
         }
 
-        self.latest_requested_skill_scan = Some(candidates.clone());
         if !self.in_flight_skill_scans.insert(candidates.clone()) {
             return None;
         }
+        self.latest_requested_skill_scan = Some(candidates.clone());
 
         Some(SkillScanJob {
             cwd: cwd.to_string(),
@@ -853,6 +831,37 @@ mod tests {
         assert!(harness.skill_names().is_empty());
 
         assert!(harness.complete_skill_scan(scan_b.scan()));
+        let names = harness.skill_names();
+        assert!(names.contains(&"global-skill".to_string()));
+        assert!(names.contains(&"b-skill".to_string()));
+        assert!(!names.contains(&"a-skill".to_string()));
+    }
+
+    #[test]
+    fn duplicate_in_flight_scan_does_not_replace_latest_request() {
+        let root = TempDir::new("skill-scan-duplicate-in-flight");
+        let global = root.path().join("global");
+        let cwd_a = root.path().join("a");
+        let cwd_b = root.path().join("b");
+        fs::create_dir_all(&cwd_a).unwrap();
+        fs::create_dir_all(&cwd_b).unwrap();
+        write_skill(&global, "global-skill");
+        write_skill(&cwd_a.join(".con/skills"), "a-skill");
+        write_skill(&cwd_b.join(".con/skills"), "b-skill");
+
+        let mut harness = harness_with_skill_paths(&global);
+
+        let scan_a = harness.request_skill_scan(cwd_a.to_str().unwrap()).unwrap();
+        let scan_b = harness.request_skill_scan(cwd_b.to_str().unwrap()).unwrap();
+        assert!(
+            harness
+                .request_skill_scan(cwd_a.to_str().unwrap())
+                .is_none()
+        );
+
+        assert!(harness.complete_skill_scan(scan_b.scan()));
+        assert!(!harness.complete_skill_scan(scan_a.scan()));
+
         let names = harness.skill_names();
         assert!(names.contains(&"global-skill".to_string()));
         assert!(names.contains(&"b-skill".to_string()));
