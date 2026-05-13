@@ -5066,6 +5066,20 @@ mod tests {
     }
 
     #[test]
+    fn humanize_unknown_model_truncates_at_eighteen_chars() {
+        // Unknown provider/family hits the fallback `truncate_str(model, 18)` branch.
+        let short = "kimi-k2-0905";
+        assert_eq!(humanize_model_name(short), short);
+
+        let long = "some-unknown-model-name-2026";
+        let result = humanize_model_name(long);
+        assert!(result.ends_with('…'), "expected ellipsis, got {result:?}");
+        // 18-char prefix + the ellipsis character.
+        assert_eq!(result.chars().count(), 19);
+        assert!(result.starts_with(&long[..18]));
+    }
+
+    #[test]
     fn multiline_drafts_disable_inline_history_navigation() {
         let text = "first line\nsecond line\nthird line";
 
