@@ -234,7 +234,7 @@ impl Render for ConWorkspace {
         // runs off the UI thread; rendering must stay non-blocking for terminal
         // input latency.
         if let Some(ref raw_cwd) = cwd {
-            self.request_skill_scan_for_cwd(raw_cwd.clone());
+            self.request_skill_scan_for_cwd(raw_cwd);
         }
         if self.file_tree_view.read(cx).root().is_none() {
             self.sync_file_tree_from_active_focus(cx);
@@ -264,8 +264,8 @@ impl Render for ConWorkspace {
             .collect();
         self.input_bar.update(cx, |bar, cx| {
             bar.set_panes(pane_infos, focused_pane_id, window, cx);
-            bar.set_cwd(display_cwd);
-            bar.set_skills(skill_entries);
+            bar.set_cwd(display_cwd, cx);
+            bar.set_skills(skill_entries, cx);
         });
         // Up/Down is command-bar recall, not shell suggestion ranking. Keep it
         // backed by the global submitted-input history across all modes.

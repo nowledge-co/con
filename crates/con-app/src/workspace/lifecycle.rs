@@ -775,7 +775,7 @@ impl ConWorkspace {
             .try_active_terminal()
             .and_then(|t| t.current_dir(cx))
         {
-            workspace.request_skill_scan_for_cwd(cwd);
+            workspace.request_skill_scan_for_cwd(&cwd);
         }
 
         workspace
@@ -1095,8 +1095,8 @@ impl ConWorkspace {
         self.sync_active_tab_native_view_visibility_after_layout(window, cx);
     }
 
-    pub(super) fn request_skill_scan_for_cwd(&mut self, cwd: String) {
-        let Some(job) = self.harness.request_skill_scan(&cwd) else {
+    pub(super) fn request_skill_scan_for_cwd(&mut self, cwd: &str) {
+        let Some(job) = self.harness.request_skill_scan(cwd) else {
             return;
         };
 

@@ -575,7 +575,7 @@ impl ConWorkspace {
                 .clone()
                 .or_else(|| self.try_active_terminal().and_then(|t| t.current_dir(cx)))
         {
-            self.request_skill_scan_for_cwd(cwd);
+            self.request_skill_scan_for_cwd(&cwd);
         }
         cx.notify();
     }

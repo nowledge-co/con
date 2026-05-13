@@ -192,6 +192,7 @@ struct SkillScanCandidateDirs {
     project: Vec<PathBuf>,
 }
 
+#[must_use = "skill scan jobs must be scanned or completed with failed_result to clear in-flight state"]
 pub struct SkillScanJob {
     cwd: String,
     candidates: SkillScanCandidateDirs,
@@ -215,8 +216,8 @@ impl SkillScanJob {
     }
 
     pub fn scan(self) -> SkillScanResult {
-        let global_dirs = existing_skill_dirs(self.candidates.global.clone());
-        let project_dirs = existing_skill_dirs(self.candidates.project.clone());
+        let global_dirs = existing_skill_dirs(&self.candidates.global);
+        let project_dirs = existing_skill_dirs(&self.candidates.project);
 
         let mut registry = SkillRegistry::new();
         let count = registry.scan(&global_dirs, &project_dirs);
@@ -720,8 +721,8 @@ impl AgentHarness {
     }
 }
 
-fn existing_skill_dirs(dirs: Vec<PathBuf>) -> Vec<PathBuf> {
-    dirs.into_iter().filter(|dir| dir.is_dir()).collect()
+fn existing_skill_dirs(dirs: &[PathBuf]) -> Vec<PathBuf> {
+    dirs.iter().filter(|dir| dir.is_dir()).cloned().collect()
 }
 
 #[cfg(test)]
@@ -729,18 +730,17 @@ mod tests {
     use super::*;
     use crate::config::{Config, SkillsConfig};
     use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     struct TempDir(PathBuf);
 
     impl TempDir {
         fn new(name: &str) -> Self {
-            let nanos = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
+            let id = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir()
-                .join(format!("con-harness-{name}-{}-{nanos}", std::process::id()));
+                .join(format!("con-harness-{name}-{}-{id}", std::process::id()));
             fs::create_dir_all(&path).unwrap();
             Self(path)
         }

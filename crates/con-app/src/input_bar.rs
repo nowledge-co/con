@@ -86,7 +86,7 @@ pub struct PaneInfo {
 }
 
 /// A skill available for slash-command completion.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SkillEntry {
     pub name: String,
     pub description: String,
@@ -471,11 +471,12 @@ impl InputBar {
         self.effective_target_ids()
     }
 
-    pub fn set_cwd(&mut self, cwd: String) {
+    pub fn set_cwd(&mut self, cwd: String, cx: &mut Context<Self>) {
         if self.cwd == cwd {
             return;
         }
         self.cwd = cwd;
+        cx.notify();
     }
 
     pub fn set_panes(
@@ -521,8 +522,12 @@ impl InputBar {
         cx.notify();
     }
 
-    pub fn set_skills(&mut self, skills: Vec<SkillEntry>) {
+    pub fn set_skills(&mut self, skills: Vec<SkillEntry>, cx: &mut Context<Self>) {
+        if self.skills == skills {
+            return;
+        }
         self.skills = skills;
+        cx.notify();
     }
 
     pub fn set_recent_commands(&mut self, commands: Vec<String>) {
