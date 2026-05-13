@@ -4,6 +4,38 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.76` - 2026-05-14
+
+### Changed
+
+**Sidebar**
+
+- Polished the Files/Search sidebar controls, file-tree hover treatment, and
+  dark-mode chrome affordances so sidebar tools stay readable without adding
+  extra visual weight. _(PR
+  [#215](https://github.com/nowledge-co/con-terminal/pull/215) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+### Fixed
+
+**Sidebar**
+
+- Fixed a sidebar hover performance regression by keeping file-tree hover state
+  on stable row elements and explicitly occluding sidebar surfaces from the
+  embedded terminal underneath. _(PR
+  [#215](https://github.com/nowledge-co/con-terminal/pull/215) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+**Settings**
+
+- Corrected the Settings unsaved-state colors in light and dark themes so the
+  warning status uses the semantic warning color instead of the foreground color
+  intended for text on warning backgrounds. _(PR
+  [#215](https://github.com/nowledge-co/con-terminal/pull/215) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+---
+
 ## `v0.1.0-beta.75` - 2026-05-13
 
 ### Fixed
