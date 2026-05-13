@@ -6,7 +6,7 @@ use crossbeam_channel::{Receiver, Sender};
 use parking_lot::Mutex;
 use std::collections::HashSet;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Runtime;
@@ -176,9 +176,71 @@ pub struct AgentHarness {
     config: con_agent::AgentConfig,
     skills_config: crate::config::SkillsConfig,
     skills: SkillRegistry,
-    /// Last cwd used for skill scanning, to avoid redundant rescans.
-    last_skills_cwd: Option<String>,
+    /// Last candidate skill roots requested. This preserves the old contract:
+    /// skill edits in the same cwd are picked up after a cwd/config change, not
+    /// by repeatedly polling the filesystem while rendering.
+    last_skill_scan_candidates: Option<SkillScanCandidateDirs>,
+    /// Last existing skill roots scanned. Background jobs compute this so the
+    /// UI thread never has to stat skill directories during render.
+    last_skill_scan_dirs: Option<SkillScanDirs>,
+    latest_requested_skill_scan: Option<SkillScanCandidateDirs>,
+    in_flight_skill_scans: HashSet<SkillScanCandidateDirs>,
     runtime: Arc<Runtime>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SkillScanCandidateDirs {
+    global: Vec<PathBuf>,
+    project: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SkillScanDirs {
+    global: Vec<PathBuf>,
+    project: Vec<PathBuf>,
+}
+
+pub struct SkillScanJob {
+    cwd: String,
+    candidates: SkillScanCandidateDirs,
+    previous_dirs: Option<SkillScanDirs>,
+}
+
+pub struct SkillScanResult {
+    cwd: String,
+    candidates: SkillScanCandidateDirs,
+    dirs: SkillScanDirs,
+    registry: Option<SkillRegistry>,
+    count: usize,
+}
+
+impl SkillScanJob {
+    pub fn scan(self) -> SkillScanResult {
+        let dirs = SkillScanDirs {
+            global: existing_skill_dirs(self.candidates.global.clone()),
+            project: existing_skill_dirs(self.candidates.project.clone()),
+        };
+
+        if self.previous_dirs.as_ref() == Some(&dirs) {
+            return SkillScanResult {
+                cwd: self.cwd,
+                candidates: self.candidates,
+                dirs,
+                registry: None,
+                count: 0,
+            };
+        }
+
+        let mut registry = SkillRegistry::new();
+        let count = registry.scan(&dirs.global, &dirs.project);
+        SkillScanResult {
+            cwd: self.cwd,
+            candidates: self.candidates,
+            dirs,
+            registry: Some(registry),
+            count,
+        }
+    }
 }
 
 impl AgentHarness {
@@ -194,7 +256,10 @@ impl AgentHarness {
             config: config.agent.clone(),
             skills_config: config.skills.clone(),
             skills: SkillRegistry::new(),
-            last_skills_cwd: None,
+            last_skill_scan_candidates: None,
+            last_skill_scan_dirs: None,
+            latest_requested_skill_scan: None,
+            in_flight_skill_scans: HashSet::new(),
             runtime,
         })
     }
@@ -557,18 +622,74 @@ impl AgentHarness {
     }
 
     /// Scan for skills from configured filesystem paths.
-    /// Only rescans if the cwd has changed since the last scan.
+    /// Only rescans if the candidate roots changed since the last completed
+    /// request. This is synchronous and intended for tests or non-UI callers;
+    /// UI code should use `request_skill_scan` and `complete_skill_scan`.
     /// Returns true if skills were (re)loaded.
     pub fn scan_skills(&mut self, cwd: &str) -> bool {
-        if self.last_skills_cwd.as_deref() == Some(cwd) {
+        let cwd_path = Path::new(cwd);
+        let candidates = SkillScanCandidateDirs {
+            global: self.skills_config.resolved_global_paths(),
+            project: self.skills_config.resolved_project_paths(cwd_path),
+        };
+        if self.last_skill_scan_candidates.as_ref() == Some(&candidates) {
             return false;
         }
-        self.last_skills_cwd = Some(cwd.to_string());
+        let result = SkillScanJob {
+            cwd: cwd.to_string(),
+            candidates,
+            previous_dirs: self.last_skill_scan_dirs.clone(),
+        }
+        .scan();
+        self.apply_skill_scan_result(result)
+    }
+
+    pub fn request_skill_scan(&mut self, cwd: &str) -> Option<SkillScanJob> {
         let cwd_path = Path::new(cwd);
-        let global_dirs = self.skills_config.resolved_global_paths();
-        let project_dirs = self.skills_config.resolved_project_paths(cwd_path);
-        let count = self.skills.scan(&global_dirs, &project_dirs);
-        log::info!("Skill scan for {}: {} skill(s) found", cwd, count);
+        let candidates = SkillScanCandidateDirs {
+            global: self.skills_config.resolved_global_paths(),
+            project: self.skills_config.resolved_project_paths(cwd_path),
+        };
+
+        if self.last_skill_scan_candidates.as_ref() == Some(&candidates) {
+            return None;
+        }
+
+        self.latest_requested_skill_scan = Some(candidates.clone());
+        if !self.in_flight_skill_scans.insert(candidates.clone()) {
+            return None;
+        }
+
+        Some(SkillScanJob {
+            cwd: cwd.to_string(),
+            candidates,
+            previous_dirs: self.last_skill_scan_dirs.clone(),
+        })
+    }
+
+    pub fn complete_skill_scan(&mut self, result: SkillScanResult) -> bool {
+        self.in_flight_skill_scans.remove(&result.candidates);
+        if self.latest_requested_skill_scan.as_ref() != Some(&result.candidates) {
+            return false;
+        }
+        self.latest_requested_skill_scan = None;
+        self.apply_skill_scan_result(result)
+    }
+
+    fn apply_skill_scan_result(&mut self, result: SkillScanResult) -> bool {
+        self.last_skill_scan_candidates = Some(result.candidates);
+        self.last_skill_scan_dirs = Some(result.dirs);
+
+        let Some(registry) = result.registry else {
+            return false;
+        };
+
+        self.skills = registry;
+        log::info!(
+            "Skill scan for {}: {} skill(s) found",
+            result.cwd,
+            result.count
+        );
         true
     }
 
@@ -576,7 +697,10 @@ impl AgentHarness {
     pub fn update_skills_config(&mut self, config: crate::config::SkillsConfig) {
         self.skills_config = config;
         // Force rescan on next cwd check
-        self.last_skills_cwd = None;
+        self.last_skill_scan_candidates = None;
+        self.last_skill_scan_dirs = None;
+        self.latest_requested_skill_scan = None;
+        self.in_flight_skill_scans.clear();
     }
 
     pub fn config(&self) -> &con_agent::AgentConfig {
@@ -606,6 +730,141 @@ impl AgentHarness {
 
     pub fn skill_summaries(&self) -> Vec<(String, String)> {
         self.skills.summaries()
+    }
+}
+
+fn existing_skill_dirs(dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    dirs.into_iter().filter(|dir| dir.is_dir()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Config, SkillsConfig};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir()
+                .join(format!("con-harness-{name}-{}-{nanos}", std::process::id()));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn write_skill(root: &Path, name: &str) {
+        let dir = root.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: Test skill\n---\n\nUse {name}."),
+        )
+        .unwrap();
+    }
+
+    fn harness_with_skill_paths(global: &Path) -> AgentHarness {
+        let mut config = Config::default();
+        config.skills = SkillsConfig {
+            project_paths: vec![".con/skills".into()],
+            global_paths: vec![global.display().to_string()],
+        };
+        AgentHarness::new(&config).unwrap()
+    }
+
+    #[test]
+    fn async_skill_scan_skips_registry_reload_when_existing_roots_do_not_change() {
+        let root = TempDir::new("skill-scan-same-roots");
+        let global = root.path().join("global");
+        let cwd_a = root.path().join("a");
+        let cwd_b = root.path().join("b");
+        fs::create_dir_all(&cwd_a).unwrap();
+        fs::create_dir_all(&cwd_b).unwrap();
+        write_skill(&global, "global-skill");
+
+        let mut harness = harness_with_skill_paths(&global);
+
+        let first = harness.request_skill_scan(cwd_a.to_str().unwrap()).unwrap();
+        let first_result = first.scan();
+        assert!(first_result.registry.is_some());
+        assert!(harness.complete_skill_scan(first_result));
+        assert_eq!(harness.skill_summaries().len(), 1);
+
+        let second = harness.request_skill_scan(cwd_b.to_str().unwrap()).unwrap();
+        let second_result = second.scan();
+        assert!(second_result.registry.is_none());
+        assert!(!harness.complete_skill_scan(second_result));
+        assert_eq!(harness.skill_summaries().len(), 1);
+    }
+
+    #[test]
+    fn async_skill_scan_reloads_when_project_skill_root_appears() {
+        let root = TempDir::new("skill-scan-project-root");
+        let global = root.path().join("global");
+        let cwd_a = root.path().join("a");
+        let cwd_b = root.path().join("b");
+        fs::create_dir_all(&cwd_a).unwrap();
+        fs::create_dir_all(&cwd_b).unwrap();
+        write_skill(&global, "global-skill");
+
+        let mut harness = harness_with_skill_paths(&global);
+        let first = harness.request_skill_scan(cwd_a.to_str().unwrap()).unwrap();
+        assert!(harness.complete_skill_scan(first.scan()));
+
+        let project_skills = cwd_b.join(".con/skills");
+        write_skill(&project_skills, "project-skill");
+
+        let second = harness.request_skill_scan(cwd_b.to_str().unwrap()).unwrap();
+        let second_result = second.scan();
+        assert!(second_result.registry.is_some());
+        assert!(harness.complete_skill_scan(second_result));
+
+        let names = harness.skill_names();
+        assert!(names.contains(&"global-skill".to_string()));
+        assert!(names.contains(&"project-skill".to_string()));
+    }
+
+    #[test]
+    fn async_skill_scan_ignores_stale_results() {
+        let root = TempDir::new("skill-scan-stale-result");
+        let global = root.path().join("global");
+        let cwd_a = root.path().join("a");
+        let cwd_b = root.path().join("b");
+        fs::create_dir_all(&cwd_a).unwrap();
+        fs::create_dir_all(&cwd_b).unwrap();
+        write_skill(&global, "global-skill");
+        write_skill(&cwd_a.join(".con/skills"), "a-skill");
+        write_skill(&cwd_b.join(".con/skills"), "b-skill");
+
+        let mut harness = harness_with_skill_paths(&global);
+
+        let scan_a = harness.request_skill_scan(cwd_a.to_str().unwrap()).unwrap();
+        let scan_b = harness.request_skill_scan(cwd_b.to_str().unwrap()).unwrap();
+
+        assert!(!harness.complete_skill_scan(scan_a.scan()));
+        assert!(harness.skill_names().is_empty());
+
+        assert!(harness.complete_skill_scan(scan_b.scan()));
+        let names = harness.skill_names();
+        assert!(names.contains(&"global-skill".to_string()));
+        assert!(names.contains(&"b-skill".to_string()));
+        assert!(!names.contains(&"a-skill".to_string()));
     }
 }
 

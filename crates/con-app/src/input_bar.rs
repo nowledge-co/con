@@ -72,7 +72,7 @@ impl InputMode {
 }
 
 /// Pane info for the pane selector
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PaneInfo {
     pub id: usize,
     /// Display name (title, or cwd basename, or "Pane N")
@@ -472,6 +472,9 @@ impl InputBar {
     }
 
     pub fn set_cwd(&mut self, cwd: String) {
+        if self.cwd == cwd {
+            return;
+        }
         self.cwd = cwd;
     }
 
@@ -482,6 +485,10 @@ impl InputBar {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.focused_pane_id == focused_id && self.panes == panes {
+            return;
+        }
+
         let was_multi_pane = self.panes.len() > 1;
         let previous_focused_id = self.focused_pane_id;
         self.panes = panes;

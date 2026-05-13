@@ -230,9 +230,11 @@ impl Render for ConWorkspace {
             .collect();
 
         let cwd = active_terminal.as_ref().and_then(|t| t.current_dir(cx));
-        // Scan skills when cwd changes (project-local + platform global skills path).
+        // Schedule skill discovery when cwd changes. The actual filesystem scan
+        // runs off the UI thread; rendering must stay non-blocking for terminal
+        // input latency.
         if let Some(ref raw_cwd) = cwd {
-            self.harness.scan_skills(raw_cwd);
+            self.request_skill_scan_for_cwd(raw_cwd.clone());
         }
         if self.file_tree_view.read(cx).root().is_none() {
             self.sync_file_tree_from_active_focus(cx);
