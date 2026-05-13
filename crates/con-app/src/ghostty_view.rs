@@ -1536,13 +1536,13 @@ impl InputHandler for GhosttyInputHandler {
         &mut self,
         _replacement_range: Option<Range<usize>>,
         text: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut App,
     ) {
         if text.is_empty() {
             return;
         }
-        let _ = self.view.update(cx, |view, _| {
+        let _ = self.view.update(cx, |view, cx| {
             let had_marked_text = view.ime_marked_text.take().is_some();
             if let Some(terminal) = &view.terminal {
                 if !had_marked_text && should_send_ime_insert_as_key_event(text) {
@@ -1552,7 +1552,9 @@ impl InputHandler for GhosttyInputHandler {
                 }
                 terminal.refresh();
             }
+            cx.notify();
         });
+        window.invalidate_character_coordinates();
     }
 
     fn replace_and_mark_text_in_range(
@@ -1560,10 +1562,10 @@ impl InputHandler for GhosttyInputHandler {
         _range_utf16: Option<Range<usize>>,
         new_text: &str,
         _new_selected_range: Option<Range<usize>>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut App,
     ) {
-        let _ = self.view.update(cx, |view, _| {
+        let _ = self.view.update(cx, |view, cx| {
             view.ime_marked_text = if new_text.is_empty() {
                 None
             } else {
@@ -1572,16 +1574,20 @@ impl InputHandler for GhosttyInputHandler {
             if let Some(terminal) = &view.terminal {
                 terminal.refresh();
             }
+            cx.notify();
         });
+        window.invalidate_character_coordinates();
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, cx: &mut App) {
-        let _ = self.view.update(cx, |view, _| {
+    fn unmark_text(&mut self, window: &mut Window, cx: &mut App) {
+        let _ = self.view.update(cx, |view, cx| {
             view.ime_marked_text = None;
             if let Some(terminal) = &view.terminal {
                 terminal.refresh();
             }
+            cx.notify();
         });
+        window.invalidate_character_coordinates();
     }
 
     fn bounds_for_range(
