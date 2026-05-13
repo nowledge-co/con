@@ -450,6 +450,13 @@ pub(super) fn rebase_active_tab_for_insert(active_tab: usize, insert_index: usiz
     }
 }
 
+pub(super) fn should_reveal_vertical_tab_rail_for_new_tab(
+    vertical_tabs_enabled: bool,
+    left_panel_open: bool,
+) -> bool {
+    vertical_tabs_enabled && !left_panel_open
+}
+
 #[cfg(test)]
 pub(super) struct NewTabSyncPolicy {
     pub(super) activates_new_tab: bool,

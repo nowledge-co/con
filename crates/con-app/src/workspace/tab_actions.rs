@@ -717,6 +717,7 @@ impl ConWorkspace {
             shell_history: HashMap::new(),
         };
         let insert_at = index + 1;
+        self.reveal_vertical_tab_rail_for_new_tab_if_needed(cx);
         self.tabs.insert(insert_at, new_tab);
         if self.active_tab >= insert_at {
             self.active_tab += 1;

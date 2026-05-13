@@ -98,6 +98,29 @@ impl ConWorkspace {
         cx.notify();
     }
 
+    pub(super) fn reveal_vertical_tab_rail_for_new_tab_if_needed(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) {
+        if !should_reveal_vertical_tab_rail_for_new_tab(
+            self.vertical_tabs_enabled(),
+            self.left_panel_open,
+        ) {
+            return;
+        }
+
+        self.left_panel_open = true;
+        self.sidebar_tools_open = false;
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.set_pinned(false, cx);
+        });
+        self.activity_bar.update(cx, |bar, cx| {
+            bar.left_panel_open = false;
+            cx.notify();
+        });
+        cx.notify();
+    }
+
     pub(super) fn collapse_sidebar(
         &mut self,
         _: &CollapseSidebar,
