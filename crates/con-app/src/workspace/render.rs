@@ -4,11 +4,7 @@ mod top_bar;
 use super::*;
 
 #[cfg(target_os = "linux")]
-const LINUX_WINDOW_CORNER_RADIUS: Pixels = px(20.0);
-#[cfg(target_os = "linux")]
-const LINUX_WINDOW_FRAME_PAD: Pixels = px(12.0);
-#[cfg(target_os = "linux")]
-const LINUX_WINDOW_OUTER_RADIUS: Pixels = px(32.0);
+const LINUX_WINDOW_CORNER_RADIUS: Pixels = px(18.0);
 
 impl ConWorkspace {
     fn has_active_resize_drag(&self) -> bool {
@@ -1613,7 +1609,7 @@ impl Render for ConWorkspace {
             let width_px = (size.width.as_f32() * scale).round().max(1.0) as u32;
             let height_px = (size.height.as_f32() * scale).round().max(1.0) as u32;
             let radius_px = if x11_shape_round {
-                LINUX_WINDOW_OUTER_RADIUS.as_f32().round().max(0.0) as u32
+                LINUX_WINDOW_CORNER_RADIUS.as_f32().round().max(0.0) as u32
             } else {
                 0
             };
@@ -1628,46 +1624,11 @@ impl Render for ConWorkspace {
                 self.linux_window_shape_signature = Some(shape_signature);
             }
 
-            if x11_shape_round {
-                let linux_theme = cx.theme();
-                let outline_opacity = if linux_theme.is_dark() { 0.18 } else { 0.10 };
-                let frame_color = linux_theme.title_bar.opacity(0.98);
-                let outline_color = linux_theme.foreground.opacity(outline_opacity);
-                let linux_x11 = std::env::var_os("DISPLAY").is_some()
-                    && std::env::var_os("WAYLAND_DISPLAY").is_none();
-                let mut frame = div().relative().size_full().bg(frame_color);
-                if !linux_x11 {
-                    frame = frame.rounded(LINUX_WINDOW_OUTER_RADIUS);
-                }
-                root = frame
-                    .child(
-                        div()
-                            .absolute()
-                            .top(LINUX_WINDOW_FRAME_PAD)
-                            .bottom(LINUX_WINDOW_FRAME_PAD)
-                            .left(LINUX_WINDOW_FRAME_PAD)
-                            .right(LINUX_WINDOW_FRAME_PAD)
-                            .rounded(LINUX_WINDOW_CORNER_RADIUS)
-                            .bg(outline_color),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .top(LINUX_WINDOW_FRAME_PAD)
-                            .bottom(LINUX_WINDOW_FRAME_PAD)
-                            .left(LINUX_WINDOW_FRAME_PAD)
-                            .right(LINUX_WINDOW_FRAME_PAD)
-                            .rounded(LINUX_WINDOW_CORNER_RADIUS)
-                            .overflow_hidden()
-                            .child(workspace_frame),
-                    );
-            } else {
-                root = div()
-                    .relative()
-                    .size_full()
-                    .bg(transparent_black())
-                    .child(workspace_frame);
-            }
+            root = div()
+                .relative()
+                .size_full()
+                .bg(transparent_black())
+                .child(workspace_frame);
         }
 
         root.into_any_element()
