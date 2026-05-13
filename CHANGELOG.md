@@ -4,7 +4,18 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.74` - Unreleased
+## `v0.1.0-beta.74` - 2026-05-13
+
+### Changed
+
+**Linux**
+
+- Polished the Linux integrated titlebar and terminal surface so one-tab and
+  multi-tab windows keep consistent titlebar controls, sidebar actions remain
+  reachable from the chrome, X11 rounded corners match tiled/free-corner states
+  more closely, and transparent terminal panes avoid double-tinted backgrounds.
+  _(PR [#203](https://github.com/nowledge-co/con-terminal/pull/203) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 ### Fixed
 
