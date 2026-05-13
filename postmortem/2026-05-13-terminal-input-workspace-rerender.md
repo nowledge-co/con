@@ -30,10 +30,10 @@ capable of blocking the same UI thread that needs to accept keystrokes.
   does not notify the input bar again.
 - Moved skill discovery to a background request/result path. Rendering now only
   schedules a deduped scan; the filesystem work runs off the UI thread.
-- Changed skill-scan caching to key by existing skill roots instead of raw cwd.
-  Moving between directories without project-local skill roots no longer reloads
-  the same global registry, while project-local roots still trigger a reload when
-  they appear.
+- Kept skill-scan deduplication at the request level, but rebuild the registry
+  in the background whenever candidate roots change. This preserves the old
+  behavior where skill edits are picked up after cwd/config changes without
+  putting the rebuild back on the render path.
 
 ## What we learned
 

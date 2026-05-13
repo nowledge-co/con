@@ -1098,6 +1098,7 @@ impl ConWorkspace {
             return;
         };
 
+        let failed_result = job.failed_result();
         let tx = self.skill_scan_tx.clone();
         self.harness.spawn_detached(async move {
             match tokio::task::spawn_blocking(move || job.scan()).await {
@@ -1106,6 +1107,7 @@ impl ConWorkspace {
                 }
                 Err(err) => {
                     log::warn!("Skill scan task failed: {}", err);
+                    let _ = tx.send(failed_result);
                 }
             }
         });
