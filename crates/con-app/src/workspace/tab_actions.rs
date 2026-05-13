@@ -58,6 +58,12 @@ impl ConWorkspace {
         }
 
         self.sync_file_tree_from_active_focus(cx);
+        let active_cwd = self
+            .try_active_terminal()
+            .and_then(|terminal| terminal.current_dir(cx));
+        if let Some(cwd) = active_cwd {
+            self.request_skill_scan_for_cwd(&cwd);
+        }
 
         self.sync_sidebar(cx);
         // Activating a tab is a strong signal the user cares about
