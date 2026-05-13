@@ -4,7 +4,17 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
-## `v0.1.0-beta.73` - Unreleased
+## `v0.1.0-beta.74` - Unreleased
+
+### Fixed
+
+**Sidebar**
+
+- In vertical tabs mode, creating or duplicating a tab while the left sidebar is
+  hidden now reveals the compact tab rail, keeping existing tabs visible without
+  opening the Files/Search drawer or the full session panel. _(PR
+  [#212](https://github.com/nowledge-co/con-terminal/pull/212) by
+  [@wey-gu](https://github.com/wey-gu))_
 
 ---
 
