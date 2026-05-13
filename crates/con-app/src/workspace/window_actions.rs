@@ -1,6 +1,60 @@
 use super::*;
 
 impl ConWorkspace {
+    pub(super) fn on_window_activation_changed(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !window.is_window_active() || self.is_modal_open(cx) {
+            return;
+        }
+
+        self.reassert_keyboard_focus_after_activation(window, cx);
+    }
+
+    fn reassert_keyboard_focus_after_activation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.input_bar_visible && self.input_bar.focus_handle(cx).is_focused(window) {
+            self.input_bar.focus_handle(cx).focus(window, cx);
+            return;
+        }
+
+        if self.agent_panel_open {
+            let inline_focused = self
+                .agent_panel
+                .read(cx)
+                .inline_input_is_focused(window, cx);
+            if inline_focused
+                && self
+                    .agent_panel
+                    .update(cx, |panel, cx| panel.focus_inline_input(window, cx))
+            {
+                return;
+            }
+        }
+
+        if self.editor_has_keyboard_focus(window, cx) {
+            self.focus_active_editor_or_workspace(window, cx);
+            return;
+        }
+
+        let active_pane_is_editor = self.has_active_tab() && {
+            let pane_tree = &self.tabs[self.active_tab].pane_tree;
+            pane_tree
+                .editor_view_for_pane(pane_tree.focused_pane_id())
+                .is_some()
+        };
+        if active_pane_is_editor {
+            self.focus_active_editor_or_workspace(window, cx);
+        } else {
+            self.focus_first_terminal(window, cx);
+        }
+    }
+
     pub(super) fn minimize(&mut self, _: &Minimize, window: &mut Window, _cx: &mut Context<Self>) {
         window.minimize_window();
     }

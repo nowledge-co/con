@@ -12,8 +12,10 @@ con is still pre-release, so entries may group related beta work while the produ
 
 - Improved terminal input responsiveness by keeping normal keypresses out of
   workspace focus-change handling, making input-bar pane metadata sync
-  idempotent, and moving skill discovery filesystem work off the render path.
-  _(PR [#208](https://github.com/nowledge-co/con-terminal/pull/208) by
+  idempotent, reasserting the active input target when returning to a Con
+  window from another app, and moving skill discovery filesystem work off the
+  render path. _(PR
+  [#208](https://github.com/nowledge-co/con-terminal/pull/208) by
   [@wey-gu](https://github.com/wey-gu))_
 
 ## `v0.1.0-beta.72` - 2026-05-12

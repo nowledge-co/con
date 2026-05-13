@@ -4,7 +4,8 @@
 
 Terminal typing could occasionally feel unresponsive even when the shell itself
 was not blocked. The issue was most visible in terminal-focused workflows with
-the surrounding workspace chrome enabled.
+the surrounding workspace chrome enabled, and when returning to Con from another
+application.
 
 ## Root cause
 
@@ -22,6 +23,11 @@ filesystem. Even with caching, cwd changes could synchronously stat or rescan
 skill roots from the workspace render path. That made terminal-adjacent chrome
 capable of blocking the same UI thread that needs to accept keystrokes.
 
+A separate focus-loss path could make the symptom look identical to input
+latency: after switching away from Con and back, the OS window could be active
+while no terminal/editor/input focus target had been reasserted. Typing then
+appeared to do nothing until the user clicked the terminal.
+
 ## Fix applied
 
 - Stopped terminal keypresses from emitting `GhosttyFocusChanged`; mouse/drop
@@ -34,6 +40,10 @@ capable of blocking the same UI thread that needs to accept keystrokes.
   in the background whenever candidate roots change. This preserves the old
   behavior where skill edits are picked up after cwd/config changes without
   putting the rebuild back on the render path.
+- Reassert the logical keyboard focus target when a Con window becomes active.
+  Existing input/editor focus is preserved when GPUI still knows it; otherwise
+  focus falls back to the active pane so an active terminal can accept input
+  immediately after app switching.
 
 ## What we learned
 
@@ -46,3 +56,7 @@ The render path should also be treated as latency-sensitive infrastructure.
 Filesystem discovery, parsing, and other potentially unbounded work must run
 through an async or background handoff, even when a cache makes the common case
 look cheap.
+
+Responsiveness bugs are not always compute bugs. The app must also maintain a
+clear keyboard-focus owner after OS-level activation changes; otherwise a
+healthy terminal can look frozen because key events have nowhere useful to go.

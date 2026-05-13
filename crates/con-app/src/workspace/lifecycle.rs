@@ -375,6 +375,8 @@ impl ConWorkspace {
             cx.notify();
         })
         .detach();
+        cx.observe_window_activation(window, Self::on_window_activation_changed)
+            .detach();
 
         // Activity bar: sync file/search drawer state back to workspace on click.
         let activity_bar_entity = cx.new(|_cx| ActivityBar::new());
