@@ -359,6 +359,7 @@ impl ConWorkspace {
     }
 
     pub(super) fn new_tab(&mut self, _: &NewTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.reveal_vertical_tab_rail_for_new_tab_if_needed(cx);
         let cwd = self
             .has_active_tab()
             .then(|| self.try_active_terminal().and_then(|t| t.current_dir(cx)))

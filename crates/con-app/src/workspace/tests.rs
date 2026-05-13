@@ -4,8 +4,8 @@ use super::{
     FileTreeFocusSource, WorkspaceCloseIntent, activation_focus_target_for_reassertion,
     active_pane_focus_target, editor_file_close_outcome, editor_line_boundary_for_key,
     file_tree_root_for_focus, focused_editor_pane_key_fallback_allowed,
-    resize_drag_should_continue, should_show_activity_bar, workspace_close_intent,
-    workspace_close_intent_for_close_tab,
+    resize_drag_should_continue, should_reveal_vertical_tab_rail_for_new_tab,
+    should_show_activity_bar, workspace_close_intent, workspace_close_intent_for_close_tab,
 };
 use super::{
     ConWorkspace, SPLIT_PREVIEW_SEAM_THICKNESS, SplitDirection, SplitPlacement,
@@ -1238,6 +1238,14 @@ fn new_tab_requires_immediate_ui_sync() {
     assert!(policy.notifies_ui);
     assert!(policy.syncs_native_visibility);
     assert!(policy.reuses_shared_tab_activation_flow);
+}
+
+#[test]
+fn new_tab_reveals_hidden_vertical_tab_rail_only() {
+    assert!(should_reveal_vertical_tab_rail_for_new_tab(true, false));
+    assert!(!should_reveal_vertical_tab_rail_for_new_tab(true, true));
+    assert!(!should_reveal_vertical_tab_rail_for_new_tab(false, false));
+    assert!(!should_reveal_vertical_tab_rail_for_new_tab(false, true));
 }
 
 #[test]

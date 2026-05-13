@@ -82,6 +82,14 @@ enum PanelMode {
     Pinned,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RailModeButtonAction {
+    ShowSessionsFromToolPanel,
+    RestorePinnedPanelFromRail,
+    ExpandCollapsedPanelFromOverride,
+    TogglePinned,
+}
+
 /// Per-tab transient state — the inline-rename input.
 struct RenameState {
     index: usize,
@@ -252,6 +260,10 @@ pub struct SessionSidebar {
     /// vertical tabs. The sidebar then becomes the single icon rail so
     /// tools and sessions share one left-navigation surface.
     tools_panel_open: bool,
+    /// Render-only compact rail override used when the workspace reveals
+    /// hidden vertical tabs after explicit tab creation. This must not mutate
+    /// `mode`: pinned/collapsed is a user preference persisted in sessions.
+    rail_only_override: bool,
     active_tool_slot: ActivitySlot,
     tab_accent_inactive_alpha: f32,
     tab_accent_inactive_hover_alpha: f32,
@@ -317,6 +329,10 @@ impl EventEmitter<SidebarShowSessions> for SessionSidebar {}
 
 impl SessionSidebar {
     pub fn new(_cx: &mut Context<Self>) -> Self {
+        Self::default_state()
+    }
+
+    fn default_state() -> Self {
         Self {
             mode: PanelMode::Collapsed,
             sessions: Vec::new(),
@@ -340,10 +356,16 @@ impl SessionSidebar {
             drag_preview: Rc::new(RefCell::new(None)),
             ui_opacity: 0.92,
             tools_panel_open: false,
+            rail_only_override: false,
             active_tool_slot: ActivitySlot::Files,
             tab_accent_inactive_alpha: crate::tab_colors::TAB_ACCENT_INACTIVE_ALPHA,
             tab_accent_inactive_hover_alpha: crate::tab_colors::TAB_ACCENT_INACTIVE_HOVER_ALPHA,
         }
+    }
+
+    #[cfg(test)]
+    fn new_for_test() -> Self {
+        Self::default_state()
     }
 
     pub fn set_ui_opacity(&mut self, opacity: f32, cx: &mut Context<Self>) {
@@ -373,6 +395,8 @@ impl SessionSidebar {
     }
 
     pub fn set_pinned(&mut self, pinned: bool, cx: &mut Context<Self>) {
+        let had_rail_only_override = self.rail_only_override;
+        self.rail_only_override = false;
         let new_mode = if pinned {
             PanelMode::Pinned
         } else {
@@ -384,6 +408,8 @@ impl SessionSidebar {
             self.hovered_rail = None;
             let target = if pinned { 1.0 } else { 0.0 };
             self.width_motion.set_target(target, PANEL_TWEEN);
+            cx.notify();
+        } else if had_rail_only_override {
             cx.notify();
         }
     }
@@ -397,7 +423,7 @@ impl SessionSidebar {
     }
 
     pub fn rendered_width(&self) -> f32 {
-        if self.tools_panel_open {
+        if self.renders_rail_only() {
             return RAIL_WIDTH;
         }
         match self.mode {
@@ -410,8 +436,33 @@ impl SessionSidebar {
         if self.tools_panel_open != open {
             self.tools_panel_open = open;
             self.hovered_rail = None;
+            if open {
+                self.rail_only_override = false;
+            }
         }
         self.active_tool_slot = active_slot;
+    }
+
+    pub fn show_rail_only_preserving_pinned(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.mode, PanelMode::Collapsed) {
+            self.hovered_rail = None;
+            return;
+        }
+        if self.rail_only_override {
+            return;
+        }
+        self.rail_only_override = true;
+        self.hovered_rail = None;
+        cx.notify();
+    }
+
+    pub fn clear_rail_only_override(&mut self, cx: &mut Context<Self>) {
+        if !self.rail_only_override {
+            return;
+        }
+        self.rail_only_override = false;
+        self.hovered_rail = None;
+        cx.notify();
     }
 
     pub fn set_panel_width(&mut self, width: f32, cx: &mut Context<Self>) {
@@ -540,6 +591,26 @@ impl SessionSidebar {
         Self::clamped_panel_width(self.panel_width, self.effective_panel_max_width)
     }
 
+    fn renders_rail_only(&self) -> bool {
+        self.tools_panel_open
+            || self.rail_only_override
+            || matches!(self.mode, PanelMode::Collapsed)
+    }
+
+    fn rail_mode_button_action(&self) -> RailModeButtonAction {
+        if self.tools_panel_open {
+            return RailModeButtonAction::ShowSessionsFromToolPanel;
+        }
+        if self.rail_only_override {
+            return if self.is_pinned() {
+                RailModeButtonAction::RestorePinnedPanelFromRail
+            } else {
+                RailModeButtonAction::ExpandCollapsedPanelFromOverride
+            };
+        }
+        RailModeButtonAction::TogglePinned
+    }
+
     pub fn toggle_pinned(&mut self, cx: &mut Context<Self>) {
         let now_pinned = !self.is_pinned();
         self.set_pinned(now_pinned, cx);
@@ -657,12 +728,13 @@ impl SessionSidebar {
         let theme = cx.theme();
         let rail_bg = sidebar_surface(theme, self.ui_opacity, 0.035);
         let session_count = self.sessions.len();
-        let mode_icon = if self.tools_panel_open || self.is_pinned() {
+        let mode_icon = if self.tools_panel_open || (self.is_pinned() && !self.rail_only_override) {
             "phosphor/caret-line-left.svg"
         } else {
             "phosphor/caret-line-right.svg"
         };
-        let mode_color = if self.tools_panel_open || self.is_pinned() {
+        let mode_color = if self.tools_panel_open || (self.is_pinned() && !self.rail_only_override)
+        {
             theme.foreground.opacity(0.74)
         } else {
             theme.muted_foreground.opacity(0.78)
@@ -828,11 +900,19 @@ impl SessionSidebar {
                 mode_icon,
                 mode_color,
                 theme,
-                cx.listener(|this, _, _, cx| {
-                    if this.tools_panel_open {
+                cx.listener(|this, _, _, cx| match this.rail_mode_button_action() {
+                    RailModeButtonAction::ShowSessionsFromToolPanel => {
                         this.set_pinned(false, cx);
                         cx.emit(SidebarShowSessions);
-                    } else {
+                    }
+                    RailModeButtonAction::RestorePinnedPanelFromRail => {
+                        this.clear_rail_only_override(cx);
+                    }
+                    RailModeButtonAction::ExpandCollapsedPanelFromOverride => {
+                        this.clear_rail_only_override(cx);
+                        this.set_pinned(true, cx);
+                    }
+                    RailModeButtonAction::TogglePinned => {
                         this.toggle_pinned(cx);
                     }
                 }),
@@ -1023,7 +1103,7 @@ impl SessionSidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !matches!(self.mode, PanelMode::Collapsed) {
+        if !self.renders_rail_only() {
             return None;
         }
         let i = self.hovered_rail?;
@@ -1720,7 +1800,7 @@ impl Render for SessionSidebar {
         // Drive the width-tween animation frame.
         let _progress = self.width_motion.value(window);
 
-        if self.tools_panel_open {
+        if self.tools_panel_open || self.rail_only_override {
             let mut rail = div()
                 .relative()
                 .h_full()
@@ -2198,7 +2278,8 @@ fn normalize_sidebar_rename_label(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        SidebarDragPreviewState, begin_rename_after_cancel_lifecycle, begin_rename_lifecycle,
+        PanelMode, RailModeButtonAction, SessionSidebar, SidebarDragPreviewState,
+        begin_rename_after_cancel_lifecycle, begin_rename_lifecycle,
         blur_should_commit_for_lifecycle, cancel_rename_lifecycle, normalize_sidebar_rename_label,
         vertical_drag_overlay_probe_position, vertical_slot_from_bounds,
     };
@@ -2274,6 +2355,37 @@ mod tests {
         assert_eq!(
             normalize_sidebar_rename_label("  hello  "),
             Some("hello".to_string())
+        );
+    }
+
+    #[test]
+    fn rail_mode_button_expands_on_first_click_from_collapsed_override() {
+        let mut sidebar = SessionSidebar {
+            mode: PanelMode::Collapsed,
+            rail_only_override: true,
+            ..SessionSidebar::new_for_test()
+        };
+
+        assert_eq!(
+            sidebar.rail_mode_button_action(),
+            RailModeButtonAction::ExpandCollapsedPanelFromOverride
+        );
+
+        sidebar.mode = PanelMode::Pinned;
+        assert_eq!(
+            sidebar.rail_mode_button_action(),
+            RailModeButtonAction::RestorePinnedPanelFromRail
+        );
+
+        sidebar.rail_only_override = false;
+        assert_eq!(
+            sidebar.rail_mode_button_action(),
+            RailModeButtonAction::TogglePinned
+        );
+        sidebar.tools_panel_open = true;
+        assert_eq!(
+            sidebar.rail_mode_button_action(),
+            RailModeButtonAction::ShowSessionsFromToolPanel
         );
     }
 
