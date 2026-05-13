@@ -47,8 +47,8 @@ fn conductor_zdotdir_update(
     }
 
     conductor_user_zdotdir
-        .or(conductor_original_zdotdir)
         .filter(|value| !value.is_empty())
+        .or_else(|| conductor_original_zdotdir.filter(|value| !value.is_empty()))
         .map(|value| {
             if value == current {
                 EnvUpdate::Remove
@@ -101,6 +101,15 @@ mod tests {
                 Some(OsStr::new("/tmp/integration")),
                 Some(OsStr::new("/tmp/integration")),
                 None,
+                Some(OsStr::new("/original"))
+            ),
+            EnvUpdate::Set("/original".into())
+        );
+        assert_eq!(
+            conductor_zdotdir_update(
+                Some(OsStr::new("/tmp/integration")),
+                Some(OsStr::new("/tmp/integration")),
+                Some(OsStr::new("")),
                 Some(OsStr::new("/original"))
             ),
             EnvUpdate::Set("/original".into())
