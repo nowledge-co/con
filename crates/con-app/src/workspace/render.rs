@@ -408,8 +408,13 @@ impl Render for ConWorkspace {
         } else {
             0.0
         };
+        #[cfg(target_os = "linux")]
+        let linux_x11_native_decorated =
+            std::env::var_os("DISPLAY").is_some() && std::env::var_os("WAYLAND_DISPLAY").is_none();
+        #[cfg(not(target_os = "linux"))]
+        let linux_x11_native_decorated = false;
         let vertical_tabs_enabled = self.vertical_tabs_enabled();
-        let show_left_panel = self.left_panel_open;
+        let show_left_panel = self.left_panel_open && !linux_x11_native_decorated;
         let show_vertical_tabs = show_left_panel && vertical_tabs_enabled;
         let show_sidebar_tools =
             show_left_panel && (!vertical_tabs_enabled || self.sidebar_tools_open);
