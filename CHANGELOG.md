@@ -4,6 +4,23 @@ All notable changes to con are documented here.
 
 con is still pre-release, so entries may group related beta work while the product shape is stabilizing.
 
+## `v0.1.0-beta.75` - Unreleased
+
+### Fixed
+
+**macOS**
+
+- Changed the default Next/Previous Surface shortcuts from
+  `Cmd+Option+]` / `Cmd+Option+[` to `Cmd+Control+]` / `Cmd+Control+[`
+  because macOS resolves Option+bracket to punctuation before Con can receive
+  it as a shortcut. Existing configs with exactly the old default values are
+  migrated on load. _(Issue
+  [#211](https://github.com/nowledge-co/con-terminal/issues/211), PR
+  [#214](https://github.com/nowledge-co/con-terminal/pull/214) by
+  [@wey-gu](https://github.com/wey-gu))_
+
+---
+
 ## `v0.1.0-beta.74` - 2026-05-13
 
 ### Changed

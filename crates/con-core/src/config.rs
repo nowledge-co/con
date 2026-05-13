@@ -378,7 +378,7 @@ fn default_new_surface_split_down() -> String {
 
 #[cfg(target_os = "macos")]
 fn default_next_surface() -> String {
-    "secondary-alt-]".into()
+    "secondary-ctrl-]".into()
 }
 #[cfg(not(target_os = "macos"))]
 fn default_next_surface() -> String {
@@ -387,7 +387,7 @@ fn default_next_surface() -> String {
 
 #[cfg(target_os = "macos")]
 fn default_previous_surface() -> String {
-    "secondary-alt-[".into()
+    "secondary-ctrl-[".into()
 }
 #[cfg(not(target_os = "macos"))]
 fn default_previous_surface() -> String {
@@ -470,6 +470,23 @@ pub struct KeybindingConflict {
 }
 
 impl KeybindingConfig {
+    pub fn normalize(&mut self) {
+        #[cfg(target_os = "macos")]
+        {
+            // Option+bracket resolves to a Unicode punctuation character on
+            // macOS before GPUI can treat it as a shortcut, so migrate only
+            // the exact former defaults to the current reachable defaults.
+            if canonical_keybinding(&self.next_surface) == canonical_keybinding("secondary-alt-]") {
+                self.next_surface = default_next_surface();
+            }
+            if canonical_keybinding(&self.previous_surface)
+                == canonical_keybinding("secondary-alt-[")
+            {
+                self.previous_surface = default_previous_surface();
+            }
+        }
+    }
+
     pub fn active_shortcuts(&self) -> Vec<(&'static str, &str)> {
         let mut shortcuts = vec![
             ("New Window", self.new_window.as_str()),
@@ -802,6 +819,7 @@ impl SkillsConfig {
 impl Config {
     pub fn normalize(&mut self) {
         self.appearance.normalize();
+        self.keybindings.normalize();
     }
 
     pub fn load() -> Result<Self> {
@@ -985,6 +1003,36 @@ restore_terminal_text = false
         let shortcuts = config.keybindings.active_shortcuts();
         assert!(shortcuts.contains(&("Focus Files", expected_focus)));
         assert!(shortcuts.contains(&("Search Files", "secondary-shift-f")));
+    }
+
+    #[test]
+    fn default_keybindings_include_reachable_surface_cycle_shortcuts() {
+        let config = Config::default();
+        let (expected_next, expected_previous) = if cfg!(target_os = "macos") {
+            ("secondary-ctrl-]", "secondary-ctrl-[")
+        } else {
+            ("alt-shift-]", "alt-shift-[")
+        };
+
+        assert_eq!(config.keybindings.next_surface, expected_next);
+        assert_eq!(config.keybindings.previous_surface, expected_previous);
+
+        let shortcuts = config.keybindings.active_shortcuts();
+        assert!(shortcuts.contains(&("Next Surface Tab", expected_next)));
+        assert!(shortcuts.contains(&("Previous Surface Tab", expected_previous)));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_normalize_migrates_broken_option_bracket_surface_defaults() {
+        let mut config = Config::default();
+        config.keybindings.next_surface = "secondary-alt-]".to_string();
+        config.keybindings.previous_surface = "secondary-alt-[".to_string();
+
+        config.normalize();
+
+        assert_eq!(config.keybindings.next_surface, "secondary-ctrl-]");
+        assert_eq!(config.keybindings.previous_surface, "secondary-ctrl-[");
     }
 
     #[test]

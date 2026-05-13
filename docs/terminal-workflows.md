@@ -116,8 +116,8 @@ subagents, or task-specific shells that should share one visible worker area.
 | New surface in focused pane | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>T</kbd> | <kbd>Alt</kbd> <kbd>⇧</kbd> <kbd>T</kbd> |
 | New surface pane right | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>D</kbd> | <kbd>Alt</kbd> <kbd>⇧</kbd> <kbd>→</kbd> |
 | New surface pane down | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>D</kbd> | <kbd>Alt</kbd> <kbd>⇧</kbd> <kbd>↓</kbd> |
-| Next surface | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>]</kbd> | <kbd>Alt</kbd> <kbd>⇧</kbd> <kbd>]</kbd> |
-| Previous surface | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>[</kbd> | <kbd>Alt</kbd> <kbd>⇧</kbd> <kbd>[</kbd> |
+| Next surface | <kbd>⌘</kbd> <kbd>⌃</kbd> <kbd>]</kbd> | <kbd>Alt</kbd> <kbd>⇧</kbd> <kbd>]</kbd> |
+| Previous surface | <kbd>⌘</kbd> <kbd>⌃</kbd> <kbd>[</kbd> | <kbd>Alt</kbd> <kbd>⇧</kbd> <kbd>[</kbd> |
 | Rename surface | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>R</kbd> | <kbd>Alt</kbd> <kbd>⇧</kbd> <kbd>R</kbd> |
 | Close surface | <kbd>⌘</kbd> <kbd>⌥</kbd> <kbd>⇧</kbd> <kbd>W</kbd> | <kbd>Alt</kbd> <kbd>⇧</kbd> <kbd>X</kbd> |
 
