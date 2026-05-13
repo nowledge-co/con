@@ -1005,13 +1005,7 @@ impl Render for ConWorkspace {
                         .and_then(|guard| guard.clone())
                     {
                         let preview_size = tab_like_drag_preview_size();
-                        let leading_pad = if cfg!(target_os = "macos") {
-                            78.0
-                        } else if cfg!(target_os = "linux") {
-                            10.0
-                        } else {
-                            8.0
-                        };
+                        let leading_pad = top_bar::top_bar_leading_pad(win);
                         let min_left = px(leading_pad);
                         let max_left =
                             (win.viewport_size().width - preview_size.width).max(min_left);
@@ -1303,13 +1297,7 @@ impl Render for ConWorkspace {
             .and_then(|guard| guard.clone())
         {
             let preview_size = tab_like_drag_preview_size();
-            let leading_pad = if cfg!(target_os = "macos") {
-                78.0
-            } else if cfg!(target_os = "linux") {
-                10.0
-            } else {
-                8.0
-            };
+            let leading_pad = top_bar::top_bar_leading_pad(window);
             let min_left = px(leading_pad);
             let max_left = (window.viewport_size().width - preview_size.width).max(min_left);
             let left =

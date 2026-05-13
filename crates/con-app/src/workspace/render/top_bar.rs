@@ -9,6 +9,48 @@ fn sanitize_tab_accent_alpha(alpha: f32) -> f32 {
     }
 }
 
+pub(super) fn top_bar_leading_pad(window: &Window) -> f32 {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window;
+        78.0
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if matches!(window.window_decorations(), Decorations::Client { .. }) {
+            10.0
+        } else {
+            8.0
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = window;
+        8.0
+    }
+}
+
+fn top_bar_trailing_pad(window: &Window) -> f32 {
+    #[cfg(target_os = "windows")]
+    {
+        let _ = window;
+        0.0
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if matches!(window.window_decorations(), Decorations::Client { .. }) {
+            8.0
+        } else {
+            6.0
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    {
+        let _ = window;
+        6.0
+    }
+}
+
 impl ConWorkspace {
     pub(super) fn render_top_bar(
         &mut self,
@@ -22,9 +64,6 @@ impl ConWorkspace {
         top_bar_surface_color: Hsla,
     ) -> impl IntoElement + use<> {
         let theme = cx.theme();
-        #[cfg(target_os = "linux")]
-        let linux_client_decorated =
-            matches!(window.window_decorations(), Decorations::Client { .. });
         // macOS: leave 78px for the system traffic-light cluster that
         // the OS paints over our content. Windows / Linux: start flush
         // at the left; the Min/Max/Close cluster gets appended at the
@@ -33,18 +72,8 @@ impl ConWorkspace {
         // (GPUI's hit-test walks buttons first so child clickables
         // still work) and still lets macOS react to
         // `titlebar_double_click`.
-        #[cfg(target_os = "macos")]
-        let leading_pad = 78.0;
-        #[cfg(target_os = "linux")]
-        let leading_pad = if linux_client_decorated { 10.0 } else { 8.0 };
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-        let leading_pad = 8.0;
-        #[cfg(target_os = "windows")]
-        let trailing_pad = 0.0;
-        #[cfg(target_os = "linux")]
-        let trailing_pad = if linux_client_decorated { 8.0 } else { 6.0 };
-        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-        let trailing_pad = 6.0;
+        let leading_pad = top_bar_leading_pad(window);
+        let trailing_pad = top_bar_trailing_pad(window);
         let mut top_bar = div()
             .id("tab-bar")
             .flex()

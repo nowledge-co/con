@@ -220,6 +220,14 @@ impl SettingsPanel {
         value.clamp(0.35, 1.0)
     }
 
+    fn terminal_blur_supported() -> bool {
+        !cfg!(target_os = "linux")
+    }
+
+    fn effective_terminal_blur(value: bool) -> bool {
+        value && Self::terminal_blur_supported()
+    }
+
     fn terminal_opacity_value(&self) -> f32 {
         Self::clamp_terminal_opacity(self.config.appearance.terminal_opacity)
     }
@@ -1092,10 +1100,8 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut config = config.clone();
-        #[cfg(target_os = "linux")]
-        {
-            config.appearance.terminal_blur = false;
-        }
+        config.appearance.terminal_blur =
+            Self::effective_terminal_blur(config.appearance.terminal_blur);
         let active_provider = Self::provider_for_saved_transport(&config, &config.agent.provider);
         config.agent.provider = active_provider;
         let agent = &config.agent;
@@ -1537,7 +1543,7 @@ impl SettingsPanel {
             font_size_input,
             ui_font_size_input,
             terminal_opacity_slider,
-            terminal_blur: config.appearance.terminal_blur,
+            terminal_blur: Self::effective_terminal_blur(config.appearance.terminal_blur),
             ui_opacity_slider,
             tab_accent_inactive_alpha_slider,
             tab_accent_inactive_hover_alpha_slider,
@@ -1694,15 +1700,8 @@ impl SettingsPanel {
                 cx,
             );
         });
-        self.terminal_blur = if cfg!(target_os = "linux") {
-            false
-        } else {
-            self.config.appearance.terminal_blur
-        };
-        #[cfg(target_os = "linux")]
-        {
-            self.config.appearance.terminal_blur = false;
-        }
+        self.terminal_blur = Self::effective_terminal_blur(self.config.appearance.terminal_blur);
+        self.config.appearance.terminal_blur = self.terminal_blur;
         self.ui_opacity_slider.update(cx, |slider, cx| {
             slider.set_value(
                 Self::clamp_ui_opacity(self.config.appearance.ui_opacity),
@@ -2341,7 +2340,8 @@ impl SettingsPanel {
         self.config.appearance.ui_font_size = Self::clamp_ui_font_size(parsed_ui_font_size);
         self.config.appearance.terminal_opacity =
             Self::clamp_terminal_opacity(self.terminal_opacity_slider.read(cx).value().end());
-        self.config.appearance.terminal_blur = self.terminal_blur;
+        self.config.appearance.terminal_blur = Self::effective_terminal_blur(self.terminal_blur);
+        self.terminal_blur = self.config.appearance.terminal_blur;
         self.config.appearance.ui_opacity =
             Self::clamp_ui_opacity(self.ui_opacity_slider.read(cx).value().end());
         self.config.appearance.tab_accent_inactive_alpha = Self::clamp_tab_accent_inactive_alpha(
@@ -3582,9 +3582,9 @@ impl SettingsPanel {
                                 "Blur the desktop behind transparent terminal surfaces."
                             },
                             {
-                                let terminal_blur_supported = !cfg!(target_os = "linux");
+                                let terminal_blur_supported = Self::terminal_blur_supported();
                                 let mut toggle = Switch::new("terminal-blur-toggle")
-                                    .checked(self.terminal_blur && terminal_blur_supported)
+                                    .checked(Self::effective_terminal_blur(self.terminal_blur))
                                     .small()
                                     .disabled(!terminal_blur_supported);
 
