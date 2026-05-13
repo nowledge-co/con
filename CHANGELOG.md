@@ -18,6 +18,15 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ### Fixed
 
+**Build**
+
+- Hardened Windows and Linux libghostty-vt builds against transient Zig package
+  fetch failures during both `zig build -h` probing and the actual VT build, so
+  release builds retry after prewarming Zig's package cache instead of
+  misreporting a package-fetch error as a missing libghostty-vt build knob.
+  _(PR [#215](https://github.com/nowledge-co/con-terminal/pull/215) by
+  [@wey-gu](https://github.com/wey-gu))_
+
 **Sidebar**
 
 - Fixed a sidebar hover performance regression by keeping file-tree hover state
