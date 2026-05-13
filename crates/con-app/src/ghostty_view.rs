@@ -1574,8 +1574,6 @@ impl InputHandler for GhosttyInputHandler {
                 Some(new_text.to_string())
             };
             if let Some(terminal) = &view.terminal {
-                let ime = terminal.ime_point();
-
                 terminal.refresh();
             }
             cx.notify();
@@ -1806,7 +1804,13 @@ impl Render for GhosttyView {
                     .app
                     .foreground_rgb()
                     .map(|rgb| {
-                        Rgba { r: rgb[0] as f32 / 255.0, g: rgb[1] as f32 / 255.0, b: rgb[2] as f32 / 255.0, a: 1.0 }.into()
+                        Rgba {
+                            r: rgb[0] as f32 / 255.0,
+                            g: rgb[1] as f32 / 255.0,
+                            b: rgb[2] as f32 / 255.0,
+                            a: 1.0,
+                        }
+                        .into()
                     })
                     .unwrap_or(cx.theme().foreground);
                 let bg = self
@@ -1814,13 +1818,25 @@ impl Render for GhosttyView {
                     .background_rgb()
                     .map(|rgb| {
                         // Force opaque so the overlay covers ghostty's real cursor.
-                        Rgba { r: rgb[0] as f32 / 255.0, g: rgb[1] as f32 / 255.0, b: rgb[2] as f32 / 255.0, a: 1.0 }.into()
+                        Rgba {
+                            r: rgb[0] as f32 / 255.0,
+                            g: rgb[1] as f32 / 255.0,
+                            b: rgb[2] as f32 / 255.0,
+                            a: 1.0,
+                        }
+                        .into()
                     })
                     .unwrap_or(cx.theme().background);
-                let left = px(ime.x as f32).min(bounds.size.width - px(1.0)).max(px(0.0));
+                let left = px(ime.x as f32)
+                    .min(bounds.size.width - px(1.0))
+                    .max(px(0.0));
                 // ime_point y is the bottom of the cursor cell (candidate anchor).
                 // Subtract cell height to align the overlay with the cursor row.
-                let cell_height = if ime.height > 0.0 { ime.height as f32 } else { f32::from(mono_font_size) };
+                let cell_height = if ime.height > 0.0 {
+                    ime.height as f32
+                } else {
+                    f32::from(mono_font_size)
+                };
                 let top = px(ime.y as f32 - cell_height)
                     .min(bounds.size.height - mono_font_size)
                     .max(px(0.0));
