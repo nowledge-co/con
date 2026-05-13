@@ -18,9 +18,11 @@ show.
 
 Linux keeps Con's client-side chrome. Wayland still uses the transparent GPUI
 surface and rounded workspace clip; X11 additionally applies a server-side
-SHAPE mask matching the rounded workspace, updating only when window
-size/maximize/tiling state changes. This keeps the modern in-app titlebar
-without adding a second native titlebar.
+SHAPE mask matching the outer rounded frame, updating only when window
+size/maximize/tiling state changes. The Linux wrapper also reserves a small
+transparent frame and paints an opacity-based halo/outline around the rounded
+workspace body, giving the main window visible depth without adding a second
+native titlebar.
 
 ## What we learned
 
