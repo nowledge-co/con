@@ -6,6 +6,10 @@ con is still pre-release, so entries may group related beta work while the produ
 
 ## `v0.1.0-beta.73` - Unreleased
 
+---
+
+## `v0.1.0-beta.73` - 2026-05-13
+
 ### Fixed
 
 **Terminal**
