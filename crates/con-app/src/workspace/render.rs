@@ -976,7 +976,7 @@ impl Render for ConWorkspace {
             top_bar_surface_color,
         );
         let show_compact_top_bar_separator =
-            cfg!(not(target_os = "macos")) && tab_strip_progress <= 0.01;
+            cfg!(not(target_os = "macos")) && top_bar_height > 0.5 && tab_strip_progress <= 0.01;
 
         let theme = cx.theme();
         let mut root = div()

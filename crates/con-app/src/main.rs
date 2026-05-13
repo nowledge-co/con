@@ -203,7 +203,7 @@ fn set_dock_icon() {}
 
 #[cfg(target_os = "linux")]
 fn linux_uses_client_side_decorations() -> bool {
-    true
+    std::env::var_os("WAYLAND_DISPLAY").is_some_and(|display| !display.is_empty())
 }
 
 #[cfg(target_os = "macos")]
@@ -236,9 +236,10 @@ fn supports_transparent_main_window() -> bool {
 
 #[cfg(target_os = "linux")]
 fn supports_transparent_main_window() -> bool {
-    // Linux uses client-side decorations so Con's top bar stays
-    // consistent with macOS/Windows. Wayland gets the rounded shape from
-    // the transparent GPUI surface; X11 gets an explicit SHAPE mask.
+    // Wayland has no universal server-side frame, so Con's client-side
+    // chrome owns the rounded transparent shape. X11 desktop
+    // environments like Xfce already provide the native rounded frame,
+    // titlebar buttons, and shadow; use that instead of custom masking.
     linux_uses_client_side_decorations()
 }
 
@@ -280,14 +281,17 @@ pub fn set_windows_backdrop_blur(window: &mut Window, blur: bool) {
 /// can toggle "background blur" in settings without restarting the
 /// window.
 ///
-/// Linux keeps the top-level surface transparent so Con's rounded
-/// workspace clip can define the visible shape. On X11 we additionally
-/// apply a cheap server-side SHAPE mask so the top-level window hit box
-/// and outer silhouette match the clip without adding native chrome.
+/// Linux uses a transparent top-level surface only for client-side
+/// decorated Wayland windows. X11 uses the compositor/window manager's
+/// native server-side frame, so keep the GPUI surface opaque there.
 #[cfg(target_os = "linux")]
 pub fn set_linux_window_blur(window: &mut Window, _blur: bool) {
     use gpui::WindowBackgroundAppearance;
-    window.set_background_appearance(WindowBackgroundAppearance::Transparent);
+    window.set_background_appearance(if linux_uses_client_side_decorations() {
+        WindowBackgroundAppearance::Transparent
+    } else {
+        WindowBackgroundAppearance::Opaque
+    });
 }
 
 #[cfg(target_os = "linux")]
@@ -677,7 +681,11 @@ fn default_titlebar_options(transparent: bool) -> Option<TitlebarOptions> {
 fn default_window_decorations() -> Option<WindowDecorations> {
     #[cfg(target_os = "linux")]
     {
-        Some(WindowDecorations::Client)
+        if linux_uses_client_side_decorations() {
+            Some(WindowDecorations::Client)
+        } else {
+            Some(WindowDecorations::Server)
+        }
     }
 
     #[cfg(not(target_os = "linux"))]
