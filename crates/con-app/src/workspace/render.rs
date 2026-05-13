@@ -1611,7 +1611,9 @@ impl Render for ConWorkspace {
             let width_px = (size.width.as_f32() * scale).round().max(1.0) as u32;
             let height_px = (size.height.as_f32() * scale).round().max(1.0) as u32;
             let radius_px = if x11_shape_round {
-                LINUX_WINDOW_CORNER_RADIUS.as_f32().round().max(0.0) as u32
+                (LINUX_WINDOW_CORNER_RADIUS.as_f32() * scale)
+                    .round()
+                    .max(0.0) as u32
             } else {
                 0
             };

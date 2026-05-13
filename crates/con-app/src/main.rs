@@ -406,31 +406,46 @@ fn apply_linux_x11_shape(
     window_id: u32,
     rectangles: &[x11rb::protocol::xproto::Rectangle],
 ) -> Result<(), Box<dyn std::error::Error>> {
+    use std::cell::RefCell;
+
     use x11rb::connection::Connection;
     use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
     use x11rb::protocol::xproto::ClipOrdering;
+    use x11rb::rust_connection::RustConnection;
 
-    let (conn, _) = x11rb::connect(None)?;
-    conn.shape_rectangles(
-        SO::SET,
-        SK::BOUNDING,
-        ClipOrdering::UNSORTED,
-        window_id,
-        0,
-        0,
-        rectangles,
-    )?;
-    conn.shape_rectangles(
-        SO::SET,
-        SK::CLIP,
-        ClipOrdering::UNSORTED,
-        window_id,
-        0,
-        0,
-        rectangles,
-    )?;
-    conn.flush()?;
-    Ok(())
+    thread_local! {
+        static X11_SHAPE_CONNECTION: RefCell<Option<RustConnection>> = const { RefCell::new(None) };
+    }
+
+    X11_SHAPE_CONNECTION.with(|connection| {
+        let mut connection = connection.borrow_mut();
+        if connection.is_none() {
+            let (new_connection, _) = x11rb::connect(None)?;
+            *connection = Some(new_connection);
+        }
+
+        let conn = connection.as_ref().expect("shape connection initialized");
+        conn.shape_rectangles(
+            SO::SET,
+            SK::BOUNDING,
+            ClipOrdering::UNSORTED,
+            window_id,
+            0,
+            0,
+            rectangles,
+        )?;
+        conn.shape_rectangles(
+            SO::SET,
+            SK::CLIP,
+            ClipOrdering::UNSORTED,
+            window_id,
+            0,
+            0,
+            rectangles,
+        )?;
+        conn.flush()?;
+        Ok(())
+    })
 }
 
 #[cfg(target_os = "macos")]
