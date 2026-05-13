@@ -18,40 +18,47 @@ impl ConWorkspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.input_bar_visible && self.input_bar.focus_handle(cx).is_focused(window) {
-            self.input_bar.focus_handle(cx).focus(window, cx);
-            return;
-        }
-
-        if self.agent_panel_open {
+        let input_bar_focused =
+            self.input_bar_visible && self.input_bar.focus_handle(cx).is_focused(window);
+        let agent_inline_refocused = if !input_bar_focused && self.agent_panel_open {
             let inline_focused = self
                 .agent_panel
                 .read(cx)
                 .inline_input_is_focused(window, cx);
-            if inline_focused
+            inline_focused
                 && self
                     .agent_panel
                     .update(cx, |panel, cx| panel.focus_inline_input(window, cx))
-            {
-                return;
-            }
-        }
+        } else {
+            false
+        };
 
-        if self.editor_has_keyboard_focus(window, cx) {
-            self.focus_active_editor_or_workspace(window, cx);
-            return;
-        }
-
-        let active_pane_is_editor = self.has_active_tab() && {
+        let check_editor_or_terminal = !input_bar_focused && !agent_inline_refocused;
+        let editor_has_keyboard_focus =
+            check_editor_or_terminal && self.editor_has_keyboard_focus(window, cx);
+        let active_pane_is_editor = check_editor_or_terminal && self.has_active_tab() && {
             let pane_tree = &self.tabs[self.active_tab].pane_tree;
             pane_tree
                 .editor_view_for_pane(pane_tree.focused_pane_id())
                 .is_some()
         };
-        if active_pane_is_editor {
-            self.focus_active_editor_or_workspace(window, cx);
-        } else {
-            self.focus_first_terminal(window, cx);
+
+        match activation_focus_target_for_reassertion(
+            input_bar_focused,
+            agent_inline_refocused,
+            editor_has_keyboard_focus,
+            active_pane_is_editor,
+        ) {
+            ActivationFocusTarget::InputBar => {
+                self.input_bar.focus_handle(cx).focus(window, cx);
+            }
+            ActivationFocusTarget::AgentInlineInput => {}
+            ActivationFocusTarget::ActiveEditor => {
+                self.focus_active_editor_or_workspace(window, cx);
+            }
+            ActivationFocusTarget::Terminal => {
+                self.focus_first_terminal(window, cx);
+            }
         }
     }
 

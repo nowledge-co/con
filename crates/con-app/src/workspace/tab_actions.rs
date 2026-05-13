@@ -566,10 +566,11 @@ impl ConWorkspace {
         self.request_tab_summaries(cx);
         // Keep file tree root in sync with the active focused pane.
         self.sync_file_tree_from_active_focus(cx);
-        if self.tabs[self.active_tab]
-            .pane_tree
-            .focused_terminal_entity_id()
-            == Some(entity_id)
+        let active_focused_terminal = self
+            .tabs
+            .get(self.active_tab)
+            .and_then(|tab| tab.pane_tree.focused_terminal_entity_id());
+        if active_focused_terminal == Some(entity_id)
             && let Some(cwd) = event
                 .0
                 .clone()

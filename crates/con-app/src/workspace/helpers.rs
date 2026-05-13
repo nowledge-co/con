@@ -51,6 +51,14 @@ pub(super) enum ActivePaneFocusTarget {
     Workspace,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ActivationFocusTarget {
+    InputBar,
+    AgentInlineInput,
+    ActiveEditor,
+    Terminal,
+}
+
 pub(super) fn active_pane_focus_target(
     has_focused_terminal: bool,
     has_focused_editor: bool,
@@ -61,6 +69,23 @@ pub(super) fn active_pane_focus_target(
         ActivePaneFocusTarget::Editor
     } else {
         ActivePaneFocusTarget::Workspace
+    }
+}
+
+pub(super) fn activation_focus_target_for_reassertion(
+    input_bar_focused: bool,
+    agent_inline_refocused: bool,
+    editor_has_keyboard_focus: bool,
+    active_pane_is_editor: bool,
+) -> ActivationFocusTarget {
+    if input_bar_focused {
+        ActivationFocusTarget::InputBar
+    } else if agent_inline_refocused {
+        ActivationFocusTarget::AgentInlineInput
+    } else if editor_has_keyboard_focus || active_pane_is_editor {
+        ActivationFocusTarget::ActiveEditor
+    } else {
+        ActivationFocusTarget::Terminal
     }
 }
 

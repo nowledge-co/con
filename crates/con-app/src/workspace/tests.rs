@@ -1,10 +1,11 @@
 use super::chrome::agent_panel_motion_target_for_agent_request;
 use super::{
-    ActivePaneFocusTarget, EditorFileCloseOutcome, EditorLineBoundary, FileTreeFocusSource,
-    WorkspaceCloseIntent, active_pane_focus_target, editor_file_close_outcome,
-    editor_line_boundary_for_key, file_tree_root_for_focus,
-    focused_editor_pane_key_fallback_allowed, resize_drag_should_continue,
-    should_show_activity_bar, workspace_close_intent, workspace_close_intent_for_close_tab,
+    ActivationFocusTarget, ActivePaneFocusTarget, EditorFileCloseOutcome, EditorLineBoundary,
+    FileTreeFocusSource, WorkspaceCloseIntent, activation_focus_target_for_reassertion,
+    active_pane_focus_target, editor_file_close_outcome, editor_line_boundary_for_key,
+    file_tree_root_for_focus, focused_editor_pane_key_fallback_allowed,
+    resize_drag_should_continue, should_show_activity_bar, workspace_close_intent,
+    workspace_close_intent_for_close_tab,
 };
 use super::{
     ConWorkspace, SPLIT_PREVIEW_SEAM_THICKNESS, SplitDirection, SplitPlacement,
@@ -145,6 +146,30 @@ fn editor_only_tabs_focus_editor_when_no_terminal_exists() {
     assert_eq!(
         active_pane_focus_target(false, false),
         ActivePaneFocusTarget::Workspace
+    );
+}
+
+#[test]
+fn window_activation_focus_prefers_input_bar_then_agent_then_editor_then_terminal() {
+    assert_eq!(
+        activation_focus_target_for_reassertion(true, true, true, true),
+        ActivationFocusTarget::InputBar
+    );
+    assert_eq!(
+        activation_focus_target_for_reassertion(false, true, true, true),
+        ActivationFocusTarget::AgentInlineInput
+    );
+    assert_eq!(
+        activation_focus_target_for_reassertion(false, false, true, false),
+        ActivationFocusTarget::ActiveEditor
+    );
+    assert_eq!(
+        activation_focus_target_for_reassertion(false, false, false, true),
+        ActivationFocusTarget::ActiveEditor
+    );
+    assert_eq!(
+        activation_focus_target_for_reassertion(false, false, false, false),
+        ActivationFocusTarget::Terminal
     );
 }
 
