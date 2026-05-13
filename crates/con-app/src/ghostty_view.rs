@@ -1967,7 +1967,6 @@ impl Render for GhosttyView {
                 // Force repaint — some ghostty key bindings (e.g. cmd-k clear screen)
                 // modify the terminal without emitting GHOSTTY_ACTION_RENDER.
                 cx.notify();
-                cx.emit(GhosttyFocusChanged);
             }))
             .child(
                 canvas(

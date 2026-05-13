@@ -83,6 +83,7 @@ impl ConWorkspace {
         let (control_request_tx, control_request_rx) = crossbeam_channel::unbounded();
         let (shell_suggestion_tx, shell_suggestion_rx) = crossbeam_channel::unbounded();
         let (tab_summary_tx, tab_summary_rx) = crossbeam_channel::unbounded();
+        let (skill_scan_tx, skill_scan_rx) = crossbeam_channel::unbounded();
         let control_socket = match con_core::spawn_control_socket_server(
             harness.runtime_handle(),
             control_request_tx,
@@ -288,9 +289,9 @@ impl ConWorkspace {
             panel.set_ui_opacity(effective_ui_opacity);
             panel.set_recent_inputs(initial_recent_inputs.clone());
         });
-        input_bar.update(cx, |bar, _cx| {
+        input_bar.update(cx, |bar, cx| {
             bar.set_ui_opacity(effective_ui_opacity);
-            bar.set_recent_commands(initial_recent_inputs);
+            bar.set_recent_commands(initial_recent_inputs, cx);
         });
         sidebar.update(cx, |s, cx| s.set_ui_opacity(effective_ui_opacity, cx));
         command_palette.update(cx, |palette, _cx| {
@@ -374,6 +375,8 @@ impl ConWorkspace {
             cx.notify();
         })
         .detach();
+        cx.observe_window_activation(window, Self::on_window_activation_changed)
+            .detach();
 
         // Activity bar: sync file/search drawer state back to workspace on click.
         let activity_bar_entity = cx.new(|_cx| ActivityBar::new());
@@ -579,6 +582,18 @@ impl ConWorkspace {
                         workspace.apply_tab_summary(generation, summary_epoch, summary, cx);
                     }
 
+                    while let Ok(result) = workspace.skill_scan_rx.try_recv() {
+                        got_event = true;
+                        let completion = workspace.harness.complete_skill_scan(result);
+                        let applied = completion.applied();
+                        if let Some(job) = completion.follow_up_job() {
+                            workspace.spawn_skill_scan_job(job);
+                        }
+                        if applied {
+                            cx.notify();
+                        }
+                    }
+
                     if workspace.pump_ghostty_views(cx) {
                         got_event = true;
                         // Output flowed — ask the AI summarizer to
@@ -652,7 +667,7 @@ impl ConWorkspace {
         let last_ghostty_wake_generation = ghostty_app.wake_generation();
         let next_tab_summary_id_init = tabs.len() as u64;
 
-        Self {
+        let mut workspace = Self {
             config: config.clone(),
             sidebar,
             tabs,
@@ -724,6 +739,8 @@ impl ConWorkspace {
             tab_summary_engine,
             tab_summary_rx,
             tab_summary_tx,
+            skill_scan_rx,
+            skill_scan_tx,
             tab_summary_generation: 0,
             next_tab_summary_id: next_tab_summary_id_init,
             next_control_agent_request_id: 1,
@@ -757,7 +774,16 @@ impl ConWorkspace {
             file_tree_view: file_tree_entity,
             search_view: search_view_entity,
             workspace_focus: cx.focus_handle(),
+        };
+
+        if let Some(cwd) = workspace
+            .try_active_terminal()
+            .and_then(|t| t.current_dir(cx))
+        {
+            workspace.request_skill_scan_for_cwd(&cwd);
         }
+
+        workspace
     }
 
     /// Create a new Ghostty terminal pane.
@@ -1072,6 +1098,30 @@ impl ConWorkspace {
             return;
         }
         self.sync_active_tab_native_view_visibility_after_layout(window, cx);
+    }
+
+    pub(super) fn request_skill_scan_for_cwd(&mut self, cwd: &str) {
+        let Some(job) = self.harness.request_skill_scan(cwd) else {
+            return;
+        };
+
+        self.spawn_skill_scan_job(job);
+    }
+
+    pub(super) fn spawn_skill_scan_job(&self, job: SkillScanJob) {
+        let failed_result = job.failed_result();
+        let tx = self.skill_scan_tx.clone();
+        self.harness.spawn_detached(async move {
+            match tokio::task::spawn_blocking(move || job.scan()).await {
+                Ok(result) => {
+                    let _ = tx.send(result);
+                }
+                Err(err) => {
+                    log::warn!("Skill scan task failed: {}", err);
+                    let _ = tx.send(failed_result);
+                }
+            }
+        });
     }
 
     pub(super) fn pump_ghostty_views(&mut self, cx: &mut Context<Self>) -> bool {

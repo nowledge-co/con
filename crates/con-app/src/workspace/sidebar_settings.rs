@@ -876,7 +876,7 @@ impl ConWorkspace {
         self.harness.update_skills_config(skills_config);
         if self.has_active_tab() {
             if let Some(cwd) = self.try_active_terminal().and_then(|t| t.current_dir(cx)) {
-                self.harness.scan_skills(&cwd);
+                self.request_skill_scan_for_cwd(&cwd);
             }
         }
 

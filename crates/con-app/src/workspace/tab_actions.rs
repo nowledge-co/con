@@ -58,6 +58,12 @@ impl ConWorkspace {
         }
 
         self.sync_file_tree_from_active_focus(cx);
+        let active_cwd = self
+            .try_active_terminal()
+            .and_then(|terminal| terminal.current_dir(cx));
+        if let Some(cwd) = active_cwd {
+            self.request_skill_scan_for_cwd(&cwd);
+        }
 
         self.sync_sidebar(cx);
         // Activating a tab is a strong signal the user cares about
@@ -566,6 +572,17 @@ impl ConWorkspace {
         self.request_tab_summaries(cx);
         // Keep file tree root in sync with the active focused pane.
         self.sync_file_tree_from_active_focus(cx);
+        let active_focused_terminal = self
+            .tabs
+            .get(self.active_tab)
+            .and_then(|tab| tab.pane_tree.focused_terminal_entity_id());
+        if active_focused_terminal == Some(entity_id) {
+            if let Some(cwd) = event.0.as_deref() {
+                self.request_skill_scan_for_cwd(cwd);
+            } else if let Some(cwd) = self.try_active_terminal().and_then(|t| t.current_dir(cx)) {
+                self.request_skill_scan_for_cwd(&cwd);
+            }
+        }
         cx.notify();
     }
 

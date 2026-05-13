@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 /// A skill is a named capability with a prompt template.
@@ -50,7 +50,7 @@ impl std::fmt::Display for SkillSource {
 /// Registry of available skills, populated by scanning the filesystem.
 #[derive(Debug, Clone, Default)]
 pub struct SkillRegistry {
-    skills: HashMap<String, Skill>,
+    skills: BTreeMap<String, Skill>,
 }
 
 impl SkillRegistry {
@@ -270,6 +270,36 @@ mod tests {
         let (fm, body) = parse_frontmatter(content).unwrap();
         assert_eq!(fm["name"], "empty");
         assert!(body.trim().is_empty());
+    }
+
+    #[test]
+    fn registry_names_and_summaries_are_sorted_by_name() {
+        let mut registry = SkillRegistry::new();
+        for name in ["zeta", "alpha", "middle"] {
+            registry.register(Skill {
+                name: name.to_string(),
+                description: format!("{name} description"),
+                prompt_template: format!("{name} prompt"),
+                source: SkillSource::Global(PathBuf::from("/tmp")),
+            });
+        }
+
+        assert_eq!(
+            registry.names(),
+            vec![
+                "alpha".to_string(),
+                "middle".to_string(),
+                "zeta".to_string()
+            ]
+        );
+        assert_eq!(
+            registry.summaries(),
+            vec![
+                ("alpha".to_string(), "alpha description".to_string()),
+                ("middle".to_string(), "middle description".to_string()),
+                ("zeta".to_string(), "zeta description".to_string())
+            ]
+        );
     }
 
     #[test]

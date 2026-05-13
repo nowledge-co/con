@@ -76,7 +76,7 @@ impl ConWorkspace {
 
         self.record_input_history(&content);
         let recent_inputs = self.recent_input_history(80);
-        input_bar.update(cx, |bar, _cx| bar.set_recent_commands(recent_inputs));
+        input_bar.update(cx, |bar, cx| bar.set_recent_commands(recent_inputs, cx));
 
         match mode {
             InputMode::Shell => {

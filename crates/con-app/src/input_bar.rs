@@ -72,7 +72,7 @@ impl InputMode {
 }
 
 /// Pane info for the pane selector
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PaneInfo {
     pub id: usize,
     /// Display name (title, or cwd basename, or "Pane N")
@@ -86,7 +86,7 @@ pub struct PaneInfo {
 }
 
 /// A skill available for slash-command completion.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SkillEntry {
     pub name: String,
     pub description: String,
@@ -471,8 +471,12 @@ impl InputBar {
         self.effective_target_ids()
     }
 
-    pub fn set_cwd(&mut self, cwd: String) {
+    pub fn set_cwd(&mut self, cwd: String, cx: &mut Context<Self>) {
+        if self.cwd == cwd {
+            return;
+        }
         self.cwd = cwd;
+        cx.notify();
     }
 
     pub fn set_panes(
@@ -482,6 +486,10 @@ impl InputBar {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.focused_pane_id == focused_id && self.panes == panes {
+            return;
+        }
+
         let was_multi_pane = self.panes.len() > 1;
         let previous_focused_id = self.focused_pane_id;
         self.panes = panes;
@@ -514,11 +522,15 @@ impl InputBar {
         cx.notify();
     }
 
-    pub fn set_skills(&mut self, skills: Vec<SkillEntry>) {
+    pub fn set_skills(&mut self, skills: Vec<SkillEntry>, cx: &mut Context<Self>) {
+        if self.skills == skills {
+            return;
+        }
         self.skills = skills;
+        cx.notify();
     }
 
-    pub fn set_recent_commands(&mut self, commands: Vec<String>) {
+    pub fn set_recent_commands(&mut self, commands: Vec<String>, cx: &mut Context<Self>) {
         let commands = commands
             .into_iter()
             .filter(|command| !command.contains('\n'))
@@ -530,6 +542,7 @@ impl InputBar {
         self.recent_commands = commands;
         self.history_nav_index = None;
         self.history_nav_draft = None;
+        cx.notify();
     }
 
     pub fn current_text(&self, cx: &App) -> String {

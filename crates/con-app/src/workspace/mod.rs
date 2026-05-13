@@ -92,7 +92,9 @@ use con_core::control::{
     AgentAskResult, ControlCommand, ControlError, ControlRequestEnvelope, ControlResult,
     SystemIdentifyResult, TabInfo,
 };
-use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind};
+use con_core::harness::{
+    AgentHarness, AgentSession, HarnessEvent, InputKind, SkillScanJob, SkillScanResult,
+};
 use con_core::session::{
     AgentModelOverrideState, AgentRoutingState, GlobalHistoryState, PaneLayoutState,
     PaneSplitDirection, Session, TabState,
@@ -228,6 +230,8 @@ pub struct ConWorkspace {
     tab_summary_engine: TabSummaryEngine,
     tab_summary_rx: crossbeam_channel::Receiver<(u64, u64, TabSummary)>,
     tab_summary_tx: crossbeam_channel::Sender<(u64, u64, TabSummary)>,
+    skill_scan_rx: crossbeam_channel::Receiver<SkillScanResult>,
+    skill_scan_tx: crossbeam_channel::Sender<SkillScanResult>,
     /// Bumped whenever summary-model settings change so late async
     /// responses from the old configuration are ignored.
     tab_summary_generation: u64,

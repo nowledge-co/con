@@ -230,10 +230,6 @@ impl Render for ConWorkspace {
             .collect();
 
         let cwd = active_terminal.as_ref().and_then(|t| t.current_dir(cx));
-        // Scan skills when cwd changes (project-local + platform global skills path).
-        if let Some(ref raw_cwd) = cwd {
-            self.harness.scan_skills(raw_cwd);
-        }
         if self.file_tree_view.read(cx).root().is_none() {
             self.sync_file_tree_from_active_focus(cx);
         }
@@ -262,14 +258,14 @@ impl Render for ConWorkspace {
             .collect();
         self.input_bar.update(cx, |bar, cx| {
             bar.set_panes(pane_infos, focused_pane_id, window, cx);
-            bar.set_cwd(display_cwd);
-            bar.set_skills(skill_entries);
+            bar.set_cwd(display_cwd, cx);
+            bar.set_skills(skill_entries.clone(), cx);
         });
         // Up/Down is command-bar recall, not shell suggestion ranking. Keep it
         // backed by the global submitted-input history across all modes.
         let recent_commands = self.recent_input_history(80);
         self.input_bar
-            .update(cx, |bar, _cx| bar.set_recent_commands(recent_commands));
+            .update(cx, |bar, cx| bar.set_recent_commands(recent_commands, cx));
 
         // Sync model name, inline input, and skills to agent panel
         let active_agent_config = self.active_tab_agent_config();
@@ -277,15 +273,6 @@ impl Render for ConWorkspace {
         let provider = active_agent_config.provider.clone();
         let available_models = self.provider_models_for_config(&active_agent_config);
         let show_inline = !self.input_bar_visible && self.agent_panel_open;
-        let panel_skills: Vec<crate::input_bar::SkillEntry> = self
-            .harness
-            .skill_summaries()
-            .into_iter()
-            .map(|(name, desc)| crate::input_bar::SkillEntry {
-                name,
-                description: desc,
-            })
-            .collect();
         self.agent_panel.update(cx, |panel, cx| {
             panel.set_session_provider_options(
                 AgentPanel::configured_session_providers(&active_agent_config),
@@ -296,7 +283,7 @@ impl Render for ConWorkspace {
             panel.set_model_name(model_name);
             panel.set_session_model_options(available_models, window, cx);
             panel.set_show_inline_input(show_inline);
-            panel.set_skills(panel_skills, cx);
+            panel.set_skills(skill_entries, cx);
             panel.set_recent_inputs(self.recent_input_history(80));
         });
 
