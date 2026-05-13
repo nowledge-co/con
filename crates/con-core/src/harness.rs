@@ -184,6 +184,7 @@ pub struct AgentHarness {
     latest_requested_skill_scan: Option<SkillScanRequest>,
     in_flight_skill_scans: HashSet<SkillScanRequest>,
     pending_skill_rescans: HashSet<SkillScanRequest>,
+    skill_scan_generation: u64,
     runtime: Arc<Runtime>,
 }
 
@@ -195,6 +196,7 @@ struct SkillScanCandidateDirs {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SkillScanRequest {
+    generation: u64,
     cwd: String,
     candidates: SkillScanCandidateDirs,
 }
@@ -265,6 +267,7 @@ impl AgentHarness {
             latest_requested_skill_scan: None,
             in_flight_skill_scans: HashSet::new(),
             pending_skill_rescans: HashSet::new(),
+            skill_scan_generation: 0,
             runtime,
         })
     }
@@ -634,6 +637,7 @@ impl AgentHarness {
         };
 
         let request = SkillScanRequest {
+            generation: self.skill_scan_generation,
             cwd: cwd.to_string(),
             candidates,
         };
@@ -717,6 +721,7 @@ impl AgentHarness {
         self.latest_requested_skill_scan = None;
         self.in_flight_skill_scans.clear();
         self.pending_skill_rescans.clear();
+        self.skill_scan_generation = self.skill_scan_generation.wrapping_add(1);
     }
 
     pub fn config(&self) -> &con_agent::AgentConfig {
@@ -975,6 +980,29 @@ mod tests {
         assert!(completion.follow_up_job().is_none());
 
         assert_eq!(harness.skill_names(), vec!["global-skill".to_string()]);
+    }
+
+    #[test]
+    fn config_update_makes_old_skill_scan_result_stale_without_disturbing_new_scan() {
+        let root = TempDir::new("skill-scan-config-generation");
+        let global = root.path().join("global");
+        let cwd = root.path().join("cwd");
+        fs::create_dir_all(&cwd).unwrap();
+        write_skill(&global, "global-skill");
+
+        let mut harness = harness_with_skill_paths(&global);
+
+        let old_scan = harness.request_skill_scan(cwd.to_str().unwrap()).unwrap();
+        harness.update_skills_config(harness.skills_config.clone());
+        write_skill(&global, "new-global-skill");
+        let new_scan = harness.request_skill_scan(cwd.to_str().unwrap()).unwrap();
+
+        assert!(!harness.complete_skill_scan(old_scan.scan()).applied());
+        assert!(harness.complete_skill_scan(new_scan.scan()).applied());
+
+        let names = harness.skill_names();
+        assert!(names.contains(&"global-skill".to_string()));
+        assert!(names.contains(&"new-global-skill".to_string()));
     }
 
     #[test]
