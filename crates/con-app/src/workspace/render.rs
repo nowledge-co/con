@@ -4,11 +4,11 @@ mod top_bar;
 use super::*;
 
 #[cfg(target_os = "linux")]
-const LINUX_WINDOW_CORNER_RADIUS: Pixels = px(22.0);
+const LINUX_WINDOW_CORNER_RADIUS: Pixels = px(20.0);
 #[cfg(target_os = "linux")]
-const LINUX_WINDOW_FRAME_PAD: Pixels = px(8.0);
+const LINUX_WINDOW_FRAME_PAD: Pixels = px(12.0);
 #[cfg(target_os = "linux")]
-const LINUX_WINDOW_OUTER_RADIUS: Pixels = px(30.0);
+const LINUX_WINDOW_OUTER_RADIUS: Pixels = px(32.0);
 
 impl ConWorkspace {
     fn has_active_resize_drag(&self) -> bool {
