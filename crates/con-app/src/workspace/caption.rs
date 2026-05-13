@@ -149,14 +149,14 @@ pub(super) fn caption_buttons(
 
         #[cfg(target_os = "linux")]
         if close {
-            el = el.relative().rounded_tr(px(14.0)).overflow_hidden().child(
+            el = el.relative().child(
                 div()
                     .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left_0()
-                    .right_0()
-                    .rounded_tr(px(14.0))
+                    .top(px(4.0))
+                    .bottom(px(4.0))
+                    .left(px(4.0))
+                    .right(px(4.0))
+                    .rounded(px(8.0))
                     .bg(close_red)
                     .opacity(0.0)
                     .group_hover(id, |s| s.opacity(1.0)),
