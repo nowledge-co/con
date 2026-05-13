@@ -4,11 +4,7 @@ mod top_bar;
 use super::*;
 
 #[cfg(target_os = "linux")]
-<<<<<<< HEAD
 const LINUX_WINDOW_CORNER_RADIUS: Pixels = px(14.0);
-=======
-const LINUX_WINDOW_CORNER_RADIUS: Pixels = px(18.0);
->>>>>>> parent of a397d82 (Adopt Zed-style Linux client decorations)
 
 impl ConWorkspace {
     fn has_active_resize_drag(&self) -> bool {
