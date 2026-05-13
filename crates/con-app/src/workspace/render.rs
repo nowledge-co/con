@@ -1631,8 +1631,13 @@ impl Render for ConWorkspace {
             let height_px = (size.height.as_f32() * scale).round().max(1.0) as u32;
             let shape_signature = (width_px, height_px, shape_radii);
             if self.linux_window_shape_signature != Some(shape_signature) {
-                crate::sync_linux_x11_window_shape(window, width_px, height_px, shape_radii);
-                self.linux_window_shape_signature = Some(shape_signature);
+                let linux_x11 = std::env::var_os("DISPLAY").is_some()
+                    && std::env::var_os("WAYLAND_DISPLAY").is_none();
+                if !linux_x11
+                    || crate::sync_linux_x11_window_shape(window, width_px, height_px, shape_radii)
+                {
+                    self.linux_window_shape_signature = Some(shape_signature);
+                }
             }
 
             root = div()

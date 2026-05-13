@@ -1092,6 +1092,10 @@ impl SettingsPanel {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut config = config.clone();
+        #[cfg(target_os = "linux")]
+        {
+            config.appearance.terminal_blur = false;
+        }
         let active_provider = Self::provider_for_saved_transport(&config, &config.agent.provider);
         config.agent.provider = active_provider;
         let agent = &config.agent;
@@ -1690,7 +1694,15 @@ impl SettingsPanel {
                 cx,
             );
         });
-        self.terminal_blur = self.config.appearance.terminal_blur;
+        self.terminal_blur = if cfg!(target_os = "linux") {
+            false
+        } else {
+            self.config.appearance.terminal_blur
+        };
+        #[cfg(target_os = "linux")]
+        {
+            self.config.appearance.terminal_blur = false;
+        }
         self.ui_opacity_slider.update(cx, |slider, cx| {
             slider.set_value(
                 Self::clamp_ui_opacity(self.config.appearance.ui_opacity),

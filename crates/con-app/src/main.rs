@@ -303,17 +303,20 @@ pub(crate) fn sync_linux_x11_window_shape(
     width_px: u32,
     height_px: u32,
     radii: LinuxWindowShapeRadii,
-) {
+) -> bool {
     let Some(window_id) = linux_x11_window_id(window) else {
-        return;
+        return false;
     };
     let Some(rectangles) = linux_window_shape_rectangles(width_px, height_px, radii) else {
-        return;
+        return false;
     };
 
     if let Err(err) = apply_linux_x11_shape(window_id, &rectangles) {
         log::debug!("failed to apply Linux X11 window shape: {err}");
+        return false;
     }
+
+    true
 }
 
 #[cfg(target_os = "linux")]
