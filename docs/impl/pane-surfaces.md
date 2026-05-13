@@ -123,8 +123,8 @@ Surface tabs support direct manipulation:
 Default surface shortcuts are configurable in Settings -> Keyboard Shortcuts:
 
 - macOS: Cmd-Option-T creates a surface in the focused pane; Cmd-Option-D /
-  Cmd-Option-Shift-D create surface splits; Cmd-Option-[ and Cmd-Option-]
-  cycle; Cmd-Option-R renames; Cmd-Option-Shift-W closes.
+  Cmd-Option-Shift-D create surface splits; Cmd-Control-[ and
+  Cmd-Control-] cycle; Cmd-Option-R renames; Cmd-Option-Shift-W closes.
 - Windows/Linux: Alt-Shift-T creates a surface in the focused pane;
   Alt-Shift-Right / Alt-Shift-Down create surface splits; Alt-Shift-[ and
   Alt-Shift-] cycle; Alt-Shift-R renames; Alt-Shift-X closes.

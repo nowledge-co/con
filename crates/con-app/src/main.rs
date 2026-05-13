@@ -2149,6 +2149,17 @@ mod tests {
     }
 
     #[test]
+    fn default_configurable_shortcuts_do_not_conflict_with_fixed_app_shortcuts() {
+        let kb = KeybindingConfig::default();
+        let conflicts = kb.shortcut_conflicts(&super::fixed_app_keybinding_shortcuts());
+
+        assert!(
+            conflicts.is_empty(),
+            "default shortcuts should not conflict with fixed app shortcuts: {conflicts:?}"
+        );
+    }
+
+    #[test]
     fn terminal_text_keys_are_not_bound_in_global_input_or_workspace_scopes() {
         let specs = default_specs();
 
