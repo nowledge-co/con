@@ -17,7 +17,7 @@ pub(super) fn top_bar_leading_pad(window: &Window) -> f32 {
     }
     #[cfg(target_os = "linux")]
     {
-        if matches!(window.window_decorations(), Decorations::Client { .. }) {
+        if linux_client_decorated(window) {
             10.0
         } else {
             8.0
@@ -30,6 +30,11 @@ pub(super) fn top_bar_leading_pad(window: &Window) -> f32 {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn linux_client_decorated(window: &Window) -> bool {
+    matches!(window.window_decorations(), Decorations::Client { .. })
+}
+
 fn top_bar_trailing_pad(window: &Window) -> f32 {
     #[cfg(target_os = "windows")]
     {
@@ -38,7 +43,7 @@ fn top_bar_trailing_pad(window: &Window) -> f32 {
     }
     #[cfg(target_os = "linux")]
     {
-        if matches!(window.window_decorations(), Decorations::Client { .. }) {
+        if linux_client_decorated(window) {
             8.0
         } else {
             6.0
@@ -1068,7 +1073,7 @@ impl ConWorkspace {
             // handler. GPUI Linux does not dispatch window-control
             // hit tests like Windows, so the draggable area must stay
             // clear of normal buttons.
-            if linux_client_decorated {
+            if linux_client_decorated(window) {
                 leading_chrome = leading_chrome
                     .window_control_area(WindowControlArea::Drag)
                     .on_mouse_down(MouseButton::Left, |_, window, _cx| {
@@ -1113,7 +1118,7 @@ impl ConWorkspace {
             .flex_shrink_0();
         #[cfg(target_os = "linux")]
         {
-            if linux_client_decorated {
+            if linux_client_decorated(window) {
                 tab_controls = tab_controls.mr(px(4.0));
             }
         }
@@ -1345,7 +1350,7 @@ impl ConWorkspace {
             #[cfg(target_os = "linux")]
             let workspace_handle = cx.weak_entity();
             #[cfg(target_os = "linux")]
-            if linux_client_decorated {
+            if linux_client_decorated(window) {
                 top_bar = top_bar.child(caption_buttons(
                     window,
                     theme,
