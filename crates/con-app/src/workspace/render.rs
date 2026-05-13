@@ -1659,9 +1659,11 @@ impl Render for ConWorkspace {
                     )
                     .child(
                         div()
-                            .relative()
-                            .size_full()
-                            .p(LINUX_WINDOW_FRAME_PAD)
+                            .absolute()
+                            .top(LINUX_WINDOW_FRAME_PAD)
+                            .bottom(LINUX_WINDOW_FRAME_PAD)
+                            .left(LINUX_WINDOW_FRAME_PAD)
+                            .right(LINUX_WINDOW_FRAME_PAD)
                             .child(workspace_frame),
                     );
             } else {
