@@ -18,6 +18,13 @@ con is still pre-release, so entries may group related beta work while the produ
   [#211](https://github.com/nowledge-co/con-terminal/issues/211), PR
   [#214](https://github.com/nowledge-co/con-terminal/pull/214) by
   [@wey-gu](https://github.com/wey-gu))_
+- Fixed macOS IME commits in Ghostty terminal panes so Chinese/Pinyin and
+  WeChat IME text repaints immediately, candidate windows stay anchored to the
+  current cursor bounds, and marked preedit text is rendered at the terminal
+  cursor. _(Issue
+  [#210](https://github.com/nowledge-co/con-terminal/issues/210), PR
+  [#213](https://github.com/nowledge-co/con-terminal/pull/213) by
+  [@sundy-li](https://github.com/sundy-li))_
 
 ---
 
