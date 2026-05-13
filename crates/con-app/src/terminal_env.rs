@@ -51,7 +51,7 @@ fn conductor_zdotdir_update(
         .or_else(|| conductor_original_zdotdir.filter(|value| !value.is_empty()))
         .map(|value| {
             if value == current {
-                EnvUpdate::Remove
+                EnvUpdate::Unchanged
             } else {
                 EnvUpdate::Set(value.to_os_string())
             }
@@ -122,6 +122,28 @@ mod tests {
                 None
             ),
             EnvUpdate::Remove
+        );
+    }
+
+    #[test]
+    fn leaves_matching_conductor_fallback_unchanged() {
+        assert_eq!(
+            conductor_zdotdir_update(
+                Some(OsStr::new("/tmp/integration")),
+                Some(OsStr::new("/tmp/integration")),
+                Some(OsStr::new("/tmp/integration")),
+                Some(OsStr::new("/original"))
+            ),
+            EnvUpdate::Unchanged
+        );
+        assert_eq!(
+            conductor_zdotdir_update(
+                Some(OsStr::new("/tmp/integration")),
+                Some(OsStr::new("/tmp/integration")),
+                None,
+                Some(OsStr::new("/tmp/integration"))
+            ),
+            EnvUpdate::Unchanged
         );
     }
 }
