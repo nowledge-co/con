@@ -265,7 +265,7 @@ impl Render for ConWorkspace {
         // backed by the global submitted-input history across all modes.
         let recent_commands = self.recent_input_history(80);
         self.input_bar
-            .update(cx, |bar, _cx| bar.set_recent_commands(recent_commands));
+            .update(cx, |bar, cx| bar.set_recent_commands(recent_commands, cx));
 
         // Sync model name, inline input, and skills to agent panel
         let active_agent_config = self.active_tab_agent_config();

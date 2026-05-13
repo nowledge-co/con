@@ -530,7 +530,7 @@ impl InputBar {
         cx.notify();
     }
 
-    pub fn set_recent_commands(&mut self, commands: Vec<String>) {
+    pub fn set_recent_commands(&mut self, commands: Vec<String>, cx: &mut Context<Self>) {
         let commands = commands
             .into_iter()
             .filter(|command| !command.contains('\n'))
@@ -542,6 +542,7 @@ impl InputBar {
         self.recent_commands = commands;
         self.history_nav_index = None;
         self.history_nav_draft = None;
+        cx.notify();
     }
 
     pub fn current_text(&self, cx: &App) -> String {

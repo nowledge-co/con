@@ -289,9 +289,9 @@ impl ConWorkspace {
             panel.set_ui_opacity(effective_ui_opacity);
             panel.set_recent_inputs(initial_recent_inputs.clone());
         });
-        input_bar.update(cx, |bar, _cx| {
+        input_bar.update(cx, |bar, cx| {
             bar.set_ui_opacity(effective_ui_opacity);
-            bar.set_recent_commands(initial_recent_inputs);
+            bar.set_recent_commands(initial_recent_inputs, cx);
         });
         sidebar.update(cx, |s, cx| s.set_ui_opacity(effective_ui_opacity, cx));
         command_palette.update(cx, |palette, _cx| {
