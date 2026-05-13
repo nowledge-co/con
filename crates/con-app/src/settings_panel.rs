@@ -5439,8 +5439,12 @@ impl Render for SettingsPanel {
         let save_button_tint = theme.foreground.opacity(if has_unsaved_changes {
             if theme.is_dark() { 0.88 } else { 0.82 }
         } else {
-            0.48
+            if theme.is_dark() { 0.62 } else { 0.52 }
         });
+        let config_button_tone =
+            theme
+                .foreground
+                .opacity(if theme.is_dark() { 0.66 } else { 0.54 });
         let save_button_style = ButtonCustomVariant::new(cx)
             .color(save_button_tint.opacity(if has_unsaved_changes { 0.11 } else { 0.04 }))
             .foreground(save_button_tint)
@@ -5556,13 +5560,17 @@ impl Render for SettingsPanel {
                                             (
                                                 "phosphor/warning.svg",
                                                 "Unsaved",
-                                                theme.foreground.opacity(0.54),
+                                                theme
+                                                    .warning
+                                                    .opacity(if theme.is_dark() { 0.96 } else { 0.92 }),
                                             )
                                         } else {
                                             (
                                                 "phosphor/check-circle-fill.svg",
                                                 "Saved",
-                                                theme.muted_foreground.opacity(0.46),
+                                                theme
+                                                    .foreground
+                                                    .opacity(if theme.is_dark() { 0.52 } else { 0.42 }),
                                             )
                                         };
                                         div()
@@ -5571,6 +5579,18 @@ impl Render for SettingsPanel {
                                             .gap(px(5.0))
                                             .min_w(px(64.0))
                                             .justify_end()
+                                            .px(px(7.0))
+                                            .h(px(24.0))
+                                            .rounded(px(6.0))
+                                            .bg(if has_unsaved_changes {
+                                                theme.warning.opacity(if theme.is_dark() {
+                                                    0.095
+                                                } else {
+                                                    0.070
+                                                })
+                                            } else {
+                                                theme.transparent
+                                            })
                                             .child(
                                                 svg()
                                                     .path(icon)
@@ -5600,9 +5620,7 @@ impl Render for SettingsPanel {
                                                 svg()
                                                     .path("phosphor/file-text.svg")
                                                     .size(px(15.0 * header_density))
-                                                    .text_color(
-                                                        theme.muted_foreground.opacity(0.68),
-                                                    ),
+                                                    .text_color(config_button_tone),
                                             )
                                             .on_click(|_, _, cx| {
                                                 let path = Config::config_path();
@@ -5669,7 +5687,11 @@ impl Render for SettingsPanel {
                             .gap(px(12.0))
                             .min_h(px(42.0))
                             .px(px(20.0))
-                            .bg(theme.foreground.opacity(0.048))
+                            .bg(theme.warning.opacity(if theme.is_dark() {
+                                0.075
+                            } else {
+                                0.055
+                            }))
                             .child(
                                 div()
                                     .flex()
@@ -5680,14 +5702,22 @@ impl Render for SettingsPanel {
                                         svg()
                                             .path("phosphor/warning.svg")
                                             .size(px(14.0))
-                                            .text_color(theme.foreground.opacity(0.64)),
+                                            .text_color(theme.warning.opacity(if theme.is_dark() {
+                                                0.96
+                                            } else {
+                                                0.90
+                                            })),
                                     )
                                     .child(
                                         div()
                                             .text_size(px(12.0))
                                             .line_height(px(16.0))
                                             .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.foreground.opacity(0.72))
+                                            .text_color(theme.foreground.opacity(if theme.is_dark() {
+                                                0.84
+                                            } else {
+                                                0.76
+                                            }))
                                             .whitespace_nowrap()
                                             .child("Save changes before closing?"),
                                     ),

@@ -6,16 +6,16 @@
 //! Visual rules
 //! ---
 //! - Fixed height: 32 px while the left sidebar is visible.
-//! - Active slot: accent-colored icon.
-//! - Inactive slots: muted_foreground icon.
-//! - No text labels — icons only.
+//! - Active slot: quiet filled tab with foreground icon + label.
+//! - Inactive slots: muted foreground; hover stays subtle to avoid a jumpy bubble.
 //! - Surface separation via bg opacity, no borders.
 
 use gpui::{
-    Context, EventEmitter, IntoElement, ParentElement, Render, Styled, Window, div, prelude::*, px,
+    Context, EventEmitter, FontWeight, IntoElement, ParentElement, Render, Styled, Window, div,
+    prelude::*, px, svg,
 };
 use gpui_component::{
-    ActiveTheme, Icon, Selectable, Sizable as _,
+    ActiveTheme, Icon, Sizable as _,
     button::{Button, ButtonVariants as _},
 };
 
@@ -103,16 +103,14 @@ impl Render for ActivityBar {
             .flex_row()
             .items_center()
             .justify_between()
-            .px(px(10.0))
+            .pl(px(8.0))
+            .pr(px(8.0))
             .flex_shrink_0()
             .child(
                 div()
                     .flex()
                     .items_center()
                     .gap(px(3.0))
-                    .p(px(1.0))
-                    .rounded(px(6.0))
-                    .bg(theme.foreground.opacity(0.038))
                     .child(activity_slot_button(
                         "activity-files",
                         "phosphor/folder.svg",
@@ -138,9 +136,13 @@ impl Render for ActivityBar {
                 Button::new("activity-close")
                     .icon(Icon::default().path("phosphor/x.svg"))
                     .ghost()
-                    .text_color(theme.muted_foreground)
+                    .text_color(theme.muted_foreground.opacity(if theme.is_dark() {
+                        0.82
+                    } else {
+                        0.70
+                    }))
                     .rounded(px(5.0))
-                    .with_size(px(22.0))
+                    .with_size(px(20.0))
                     .cursor_pointer()
                     .on_click(cx.listener(|this, _: &gpui::ClickEvent, _window, cx| {
                         this.close_panel(cx);
@@ -156,23 +158,57 @@ fn activity_slot_button<F>(
     active: bool,
     theme: &gpui_component::Theme,
     handler: F,
-) -> impl IntoElement
+) -> impl IntoElement + use<F>
 where
     F: Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
 {
     let icon_color = if active {
-        theme.primary
+        theme.foreground
     } else {
-        theme.muted_foreground
+        theme
+            .muted_foreground
+            .opacity(if theme.is_dark() { 0.82 } else { 0.72 })
     };
-    Button::new(id)
-        .icon(Icon::default().path(icon))
-        .ghost()
-        .selected(active)
-        .text_color(icon_color)
+    let label_color = if active {
+        theme.foreground
+    } else {
+        theme
+            .muted_foreground
+            .opacity(if theme.is_dark() { 0.78 } else { 0.66 })
+    };
+    let active_bg = theme
+        .foreground
+        .opacity(if theme.is_dark() { 0.105 } else { 0.052 });
+    let hover_bg = theme
+        .foreground
+        .opacity(if theme.is_dark() { 0.060 } else { 0.034 });
+
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .justify_center()
+        .h(px(24.0))
+        .px(px(6.0))
+        .gap(px(4.5))
         .rounded(px(5.0))
-        .with_size(px(24.0))
-        .tooltip(tooltip)
+        .bg(if active { active_bg } else { theme.transparent })
+        .text_color(label_color)
+        .hover(move |s| s.bg(if active { active_bg } else { hover_bg }))
         .cursor_pointer()
+        .occlude()
         .on_click(handler)
+        .child(svg().path(icon).size(px(12.5)).text_color(icon_color))
+        .child(
+            div()
+                .text_size(px(11.0))
+                .line_height(px(14.0))
+                .font_weight(if active {
+                    FontWeight::MEDIUM
+                } else {
+                    FontWeight::NORMAL
+                })
+                .text_color(label_color)
+                .child(tooltip),
+        )
 }

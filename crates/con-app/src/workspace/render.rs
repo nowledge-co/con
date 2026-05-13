@@ -785,6 +785,7 @@ impl Render for ConWorkspace {
                 .flex_row()
                 .flex_shrink_0()
                 .overflow_hidden()
+                .occlude()
                 .bg(elevated_panel_surface_color);
             if show_vertical_tabs {
                 left_sidebar = left_sidebar.child(
@@ -806,7 +807,8 @@ impl Render for ConWorkspace {
                     .flex()
                     .flex_col()
                     .flex_shrink_0()
-                    .overflow_hidden();
+                    .overflow_hidden()
+                    .occlude();
                 if !vertical_tabs_enabled {
                     sidebar_panel = sidebar_panel.child(self.activity_bar.clone());
                 }
