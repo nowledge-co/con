@@ -85,6 +85,10 @@ impl ConWorkspace {
         self.left_panel_open = !self.left_panel_open;
         if !self.vertical_tabs_enabled() {
             self.sidebar_tools_open = self.left_panel_open;
+        } else if !self.left_panel_open {
+            self.sidebar.update(cx, |sidebar, cx| {
+                sidebar.clear_rail_only_override(cx);
+            });
         }
         self.activity_bar.update(cx, |bar, cx| {
             bar.left_panel_open = if self.vertical_tabs_enabled() {
@@ -112,7 +116,7 @@ impl ConWorkspace {
         self.left_panel_open = true;
         self.sidebar_tools_open = false;
         self.sidebar.update(cx, |sidebar, cx| {
-            sidebar.set_pinned(false, cx);
+            sidebar.show_rail_only_preserving_pinned(cx);
         });
         self.activity_bar.update(cx, |bar, cx| {
             bar.left_panel_open = false;
@@ -131,6 +135,9 @@ impl ConWorkspace {
             return;
         }
         self.left_panel_open = false;
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.clear_rail_only_override(cx);
+        });
         self.activity_bar.update(cx, |bar, cx| {
             bar.left_panel_open = false;
             cx.notify();
