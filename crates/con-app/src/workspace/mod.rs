@@ -92,7 +92,9 @@ use con_core::control::{
     AgentAskResult, ControlCommand, ControlError, ControlRequestEnvelope, ControlResult,
     SystemIdentifyResult, TabInfo,
 };
-use con_core::harness::{AgentHarness, AgentSession, HarnessEvent, InputKind, SkillScanResult};
+use con_core::harness::{
+    AgentHarness, AgentSession, HarnessEvent, InputKind, SkillScanJob, SkillScanResult,
+};
 use con_core::session::{
     AgentModelOverrideState, AgentRoutingState, GlobalHistoryState, PaneLayoutState,
     PaneSplitDirection, Session, TabState,

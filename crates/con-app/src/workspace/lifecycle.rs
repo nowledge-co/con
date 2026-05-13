@@ -584,7 +584,12 @@ impl ConWorkspace {
 
                     while let Ok(result) = workspace.skill_scan_rx.try_recv() {
                         got_event = true;
-                        if workspace.harness.complete_skill_scan(result) {
+                        let completion = workspace.harness.complete_skill_scan(result);
+                        let applied = completion.applied();
+                        if let Some(job) = completion.follow_up_job() {
+                            workspace.spawn_skill_scan_job(job);
+                        }
+                        if applied {
                             cx.notify();
                         }
                     }
@@ -1100,6 +1105,10 @@ impl ConWorkspace {
             return;
         };
 
+        self.spawn_skill_scan_job(job);
+    }
+
+    pub(super) fn spawn_skill_scan_job(&self, job: SkillScanJob) {
         let failed_result = job.failed_result();
         let tx = self.skill_scan_tx.clone();
         self.harness.spawn_detached(async move {

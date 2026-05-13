@@ -183,6 +183,7 @@ pub struct AgentHarness {
     last_skill_scan_request: Option<SkillScanRequest>,
     latest_requested_skill_scan: Option<SkillScanRequest>,
     in_flight_skill_scans: HashSet<SkillScanRequest>,
+    pending_skill_rescans: HashSet<SkillScanRequest>,
     runtime: Arc<Runtime>,
 }
 
@@ -207,6 +208,21 @@ pub struct SkillScanResult {
     request: SkillScanRequest,
     registry: Option<SkillRegistry>,
     count: usize,
+}
+
+pub struct SkillScanCompletion {
+    applied: bool,
+    follow_up: Option<SkillScanJob>,
+}
+
+impl SkillScanCompletion {
+    pub fn applied(&self) -> bool {
+        self.applied
+    }
+
+    pub fn follow_up_job(self) -> Option<SkillScanJob> {
+        self.follow_up
+    }
 }
 
 impl SkillScanJob {
@@ -248,6 +264,7 @@ impl AgentHarness {
             last_skill_scan_request: None,
             latest_requested_skill_scan: None,
             in_flight_skill_scans: HashSet::new(),
+            pending_skill_rescans: HashSet::new(),
             runtime,
         })
     }
@@ -626,6 +643,7 @@ impl AgentHarness {
         }
 
         if !self.in_flight_skill_scans.insert(request.clone()) {
+            self.pending_skill_rescans.insert(request.clone());
             self.latest_requested_skill_scan = Some(request);
             return None;
         }
@@ -634,11 +652,26 @@ impl AgentHarness {
         Some(SkillScanJob { request })
     }
 
-    pub fn complete_skill_scan(&mut self, result: SkillScanResult) -> bool {
+    pub fn complete_skill_scan(&mut self, result: SkillScanResult) -> SkillScanCompletion {
         self.in_flight_skill_scans.remove(&result.request);
+        let should_rescan = self.pending_skill_rescans.remove(&result.request);
         if self.latest_requested_skill_scan.as_ref() != Some(&result.request) {
-            return false;
+            return SkillScanCompletion {
+                applied: false,
+                follow_up: None,
+            };
         }
+
+        if should_rescan {
+            let request = result.request;
+            self.in_flight_skill_scans.insert(request.clone());
+            self.latest_requested_skill_scan = Some(request.clone());
+            return SkillScanCompletion {
+                applied: false,
+                follow_up: Some(SkillScanJob { request }),
+            };
+        }
+
         self.latest_requested_skill_scan = None;
 
         if result.registry.is_none() {
@@ -646,10 +679,16 @@ impl AgentHarness {
                 "Skill scan for {} failed before completion",
                 result.request.cwd
             );
-            return false;
+            return SkillScanCompletion {
+                applied: false,
+                follow_up: None,
+            };
         }
 
-        self.apply_skill_scan_result(result)
+        SkillScanCompletion {
+            applied: self.apply_skill_scan_result(result),
+            follow_up: None,
+        }
     }
 
     fn apply_skill_scan_result(&mut self, result: SkillScanResult) -> bool {
@@ -675,6 +714,7 @@ impl AgentHarness {
         self.last_skill_scan_request = None;
         self.latest_requested_skill_scan = None;
         self.in_flight_skill_scans.clear();
+        self.pending_skill_rescans.clear();
     }
 
     pub fn config(&self) -> &con_agent::AgentConfig {
@@ -785,7 +825,7 @@ mod tests {
         let first = harness.request_skill_scan(cwd_a.to_str().unwrap()).unwrap();
         let first_result = first.scan();
         assert!(first_result.registry.is_some());
-        assert!(harness.complete_skill_scan(first_result));
+        assert!(harness.complete_skill_scan(first_result).applied());
         assert_eq!(harness.skill_summaries().len(), 1);
 
         write_skill(&global, "new-global-skill");
@@ -793,7 +833,7 @@ mod tests {
         let second = harness.request_skill_scan(cwd_b.to_str().unwrap()).unwrap();
         let second_result = second.scan();
         assert!(second_result.registry.is_some());
-        assert!(harness.complete_skill_scan(second_result));
+        assert!(harness.complete_skill_scan(second_result).applied());
 
         let names = harness.skill_names();
         assert!(names.contains(&"global-skill".to_string()));
@@ -812,12 +852,12 @@ mod tests {
 
         let mut harness = harness_with_global_skill_paths_only(&global);
         let first = harness.request_skill_scan(cwd_a.to_str().unwrap()).unwrap();
-        assert!(harness.complete_skill_scan(first.scan()));
+        assert!(harness.complete_skill_scan(first.scan()).applied());
 
         write_skill(&global, "new-global-skill");
 
         let second = harness.request_skill_scan(cwd_b.to_str().unwrap()).unwrap();
-        assert!(harness.complete_skill_scan(second.scan()));
+        assert!(harness.complete_skill_scan(second.scan()).applied());
 
         let names = harness.skill_names();
         assert!(names.contains(&"global-skill".to_string()));
@@ -836,7 +876,7 @@ mod tests {
 
         let mut harness = harness_with_skill_paths(&global);
         let first = harness.request_skill_scan(cwd_a.to_str().unwrap()).unwrap();
-        assert!(harness.complete_skill_scan(first.scan()));
+        assert!(harness.complete_skill_scan(first.scan()).applied());
 
         let project_skills = cwd_b.join(".con/skills");
         write_skill(&project_skills, "project-skill");
@@ -844,7 +884,7 @@ mod tests {
         let second = harness.request_skill_scan(cwd_b.to_str().unwrap()).unwrap();
         let second_result = second.scan();
         assert!(second_result.registry.is_some());
-        assert!(harness.complete_skill_scan(second_result));
+        assert!(harness.complete_skill_scan(second_result).applied());
 
         let names = harness.skill_names();
         assert!(names.contains(&"global-skill".to_string()));
@@ -868,10 +908,10 @@ mod tests {
         let scan_a = harness.request_skill_scan(cwd_a.to_str().unwrap()).unwrap();
         let scan_b = harness.request_skill_scan(cwd_b.to_str().unwrap()).unwrap();
 
-        assert!(!harness.complete_skill_scan(scan_a.scan()));
+        assert!(!harness.complete_skill_scan(scan_a.scan()).applied());
         assert!(harness.skill_names().is_empty());
 
-        assert!(harness.complete_skill_scan(scan_b.scan()));
+        assert!(harness.complete_skill_scan(scan_b.scan()).applied());
         let names = harness.skill_names();
         assert!(names.contains(&"global-skill".to_string()));
         assert!(names.contains(&"b-skill".to_string()));
@@ -894,18 +934,24 @@ mod tests {
 
         let scan_a = harness.request_skill_scan(cwd_a.to_str().unwrap()).unwrap();
         let scan_b = harness.request_skill_scan(cwd_b.to_str().unwrap()).unwrap();
+        let stale_a_result = scan_a.scan();
         assert!(
             harness
                 .request_skill_scan(cwd_a.to_str().unwrap())
                 .is_none()
         );
+        write_skill(&cwd_a.join(".con/skills"), "new-a-skill");
 
-        assert!(!harness.complete_skill_scan(scan_b.scan()));
-        assert!(harness.complete_skill_scan(scan_a.scan()));
+        assert!(!harness.complete_skill_scan(scan_b.scan()).applied());
+        let completion = harness.complete_skill_scan(stale_a_result);
+        assert!(!completion.applied());
+        let follow_up = completion.follow_up_job().unwrap();
+        assert!(harness.complete_skill_scan(follow_up.scan()).applied());
 
         let names = harness.skill_names();
         assert!(names.contains(&"global-skill".to_string()));
         assert!(names.contains(&"a-skill".to_string()));
+        assert!(names.contains(&"new-a-skill".to_string()));
         assert!(!names.contains(&"b-skill".to_string()));
     }
 
@@ -920,10 +966,10 @@ mod tests {
         let mut harness = harness_with_skill_paths(&global);
 
         let scan = harness.request_skill_scan(cwd.to_str().unwrap()).unwrap();
-        assert!(!harness.complete_skill_scan(scan.failed_result()));
+        assert!(!harness.complete_skill_scan(scan.failed_result()).applied());
 
         let retry = harness.request_skill_scan(cwd.to_str().unwrap()).unwrap();
-        assert!(harness.complete_skill_scan(retry.scan()));
+        assert!(harness.complete_skill_scan(retry.scan()).applied());
         assert_eq!(harness.skill_names(), vec!["global-skill".to_string()]);
     }
 }

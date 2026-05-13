@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 /// A skill is a named capability with a prompt template.
@@ -50,7 +50,7 @@ impl std::fmt::Display for SkillSource {
 /// Registry of available skills, populated by scanning the filesystem.
 #[derive(Debug, Clone, Default)]
 pub struct SkillRegistry {
-    skills: HashMap<String, Skill>,
+    skills: BTreeMap<String, Skill>,
 }
 
 impl SkillRegistry {
@@ -139,20 +139,15 @@ impl SkillRegistry {
     }
 
     pub fn names(&self) -> Vec<String> {
-        let mut names: Vec<_> = self.skills.keys().cloned().collect();
-        names.sort();
-        names
+        self.skills.keys().cloned().collect()
     }
 
     /// Return (name, description) pairs for all registered skills.
     pub fn summaries(&self) -> Vec<(String, String)> {
-        let mut summaries: Vec<_> = self
-            .skills
+        self.skills
             .values()
             .map(|s| (s.name.clone(), s.description.clone()))
-            .collect();
-        summaries.sort_by(|a, b| a.0.cmp(&b.0));
-        summaries
+            .collect()
     }
 
     pub fn is_empty(&self) -> bool {
