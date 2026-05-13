@@ -1630,23 +1630,14 @@ impl Render for ConWorkspace {
 
             if x11_shape_round {
                 let linux_theme = cx.theme();
-                let shadow_opacity = if linux_theme.is_dark() { 0.30 } else { 0.18 };
                 let outline_opacity = if linux_theme.is_dark() { 0.18 } else { 0.10 };
+                let frame_color = linux_theme.title_bar.opacity(0.98);
                 let outline_color = linux_theme.foreground.opacity(outline_opacity);
                 root = div()
                     .relative()
                     .size_full()
-                    .bg(transparent_black())
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(2.0))
-                            .bottom(px(0.0))
-                            .left(px(2.0))
-                            .right(px(2.0))
-                            .rounded(LINUX_WINDOW_OUTER_RADIUS)
-                            .bg(gpui::black().opacity(shadow_opacity)),
-                    )
+                    .rounded(LINUX_WINDOW_OUTER_RADIUS)
+                    .bg(frame_color)
                     .child(
                         div()
                             .absolute()
