@@ -1548,7 +1548,9 @@ impl InputHandler for GhosttyInputHandler {
                 if !had_marked_text && should_send_ime_insert_as_key_event(text) {
                     send_ime_insert_as_key_events(terminal, text);
                 } else {
-                    terminal.send_text(text);
+                    // Use key event path (not ghostty_surface_text) to avoid
+                    // bracketed-paste wrapping and post-paste selection highlight.
+                    terminal.send_text_as_key_event(text);
                 }
                 terminal.refresh();
             }
@@ -1572,6 +1574,8 @@ impl InputHandler for GhosttyInputHandler {
                 Some(new_text.to_string())
             };
             if let Some(terminal) = &view.terminal {
+                let ime = terminal.ime_point();
+
                 terminal.refresh();
             }
             cx.notify();
@@ -1784,8 +1788,58 @@ impl Render for GhosttyView {
         let context_focus = focus.clone();
         let menu_focus = focus.clone();
         let ui_font = cx.theme().font_family.clone();
+        let mono_font = cx.theme().mono_font_family.clone();
+        let mono_font_size = cx.theme().mono_font_size;
         let entity = cx.entity().downgrade();
         let show_layout_fallback = self.show_layout_fallback();
+
+        // Preedit overlay: render IME composition text at the cursor position.
+        let preedit_overlay: Option<gpui::AnyElement> = self
+            .ime_marked_text
+            .as_deref()
+            .filter(|t| !t.is_empty())
+            .and_then(|preedit_text| {
+                let terminal = self.terminal.as_ref()?;
+                let bounds = self.last_bounds?;
+                let ime = terminal.ime_point();
+                let fg = self
+                    .app
+                    .foreground_rgb()
+                    .map(|rgb| {
+                        Rgba { r: rgb[0] as f32 / 255.0, g: rgb[1] as f32 / 255.0, b: rgb[2] as f32 / 255.0, a: 1.0 }.into()
+                    })
+                    .unwrap_or(cx.theme().foreground);
+                let bg = self
+                    .app
+                    .background_rgb()
+                    .map(|rgb| {
+                        // Force opaque so the overlay covers ghostty's real cursor.
+                        Rgba { r: rgb[0] as f32 / 255.0, g: rgb[1] as f32 / 255.0, b: rgb[2] as f32 / 255.0, a: 1.0 }.into()
+                    })
+                    .unwrap_or(cx.theme().background);
+                let left = px(ime.x as f32).min(bounds.size.width - px(1.0)).max(px(0.0));
+                // ime_point y is the bottom of the cursor cell (candidate anchor).
+                // Subtract cell height to align the overlay with the cursor row.
+                let cell_height = if ime.height > 0.0 { ime.height as f32 } else { f32::from(mono_font_size) };
+                let top = px(ime.y as f32 - cell_height)
+                    .min(bounds.size.height - mono_font_size)
+                    .max(px(0.0));
+                let text = preedit_text.to_string();
+                Some(
+                    div()
+                        .absolute()
+                        .left(left)
+                        .top(top)
+                        .bg(bg)
+                        .text_color(fg)
+                        .font_family(mono_font.clone())
+                        .text_size(mono_font_size)
+                        .underline()
+                        .child(text)
+                        .into_any_element(),
+                )
+            });
+
         let layout_fallback_bg = self
             .app
             .background_rgb()
@@ -2000,6 +2054,7 @@ impl Render for GhosttyView {
                 )
                 .size_full(),
             )
+            .children(preedit_overlay)
             .context_menu(move |menu, window, cx| {
                 crate::terminal_context_menu::terminal_context_menu(
                     menu.action_context(menu_focus.clone()),

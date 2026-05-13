@@ -551,6 +551,15 @@ impl GhosttyApp {
             .map(|colors| colors.background)
     }
 
+    /// Current configured terminal foreground color.
+    pub fn foreground_rgb(&self) -> Option<[u8; 3]> {
+        self.appearance
+            .lock()
+            .colors
+            .as_ref()
+            .map(|colors| colors.foreground)
+    }
+
     /// Current configured terminal background opacity. This lets the macOS
     /// embedding layer keep short-lived AppKit backing mattes visually aligned
     /// with Ghostty's own transparent terminal background.
